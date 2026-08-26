@@ -1,6 +1,6 @@
 {
   "name": "lampas-launcher",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "Deterministic, Standalone Modpack Launcher for Lampas SMP",
   "private": true,
   "main": "dist/main.js",
@@ -43,12 +43,14 @@
     ],
     "win": {
       "icon": "assets/lampas.png",
+      "artifactName": "LampasLauncher-${version}-Windows.${ext}",
       "target": [
         "nsis",
         "portable"
       ]
     },
     "nsis": {
+      "artifactName": "LampasLauncher-Setup-${version}.${ext}",
       "oneClick": true,
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
@@ -56,6 +58,7 @@
     },
     "linux": {
       "icon": "assets/lampas.png",
+      "artifactName": "LampasLauncher-${version}-Linux.${ext}",
       "target": [
         "AppImage",
         "tar.gz"

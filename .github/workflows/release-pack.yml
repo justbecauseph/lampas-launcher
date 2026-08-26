@@ -17,9 +17,14 @@ on:
           - dev
 
 jobs:
-  release:
-    name: Build Windows Launcher Installer
-    runs-on: windows-latest
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            script: package:win
 
     steps:
       - name: Checkout repository
@@ -28,18 +33,37 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: latest
 
-      - name: Build Windows Installer (.exe)
-        working-directory: ./launcher
-        run: |
-          bun install --frozen-lockfile
-          bun run package:win
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Launcher
+        run: bun run ${{ matrix.script }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: launcher-${{ matrix.os }}
+          path: |
+            release/*.exe
+          if-no-files-found: warn
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: release-artifacts
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            launcher/release/*.exe
+            release-artifacts/*.exe
           generate_release_notes: true

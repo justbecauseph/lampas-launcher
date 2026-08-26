@@ -3,6 +3,8 @@
 > **The zero-braincells, 1-click way to play Lampas SMP.**  
 > No Prism, no CurseForge, no *"hey why is my mod version different than the server"* pain. Just click **PLAY** and jump straight in! 🚀
 
+[![Download Latest Release](https://img.shields.io/github/v/release/justbecauseph/lampas-launcher?label=Download%20Latest%20Release&style=for-the-badge&color=2ea44f)](https://github.com/justbecauseph/lampas-launcher/releases/latest)
+
 ---
 
 ## 🎮 What is this?
@@ -35,8 +37,9 @@ graph LR
 ```
 
 1. **Download the latest release**:
-   * **Windows**: Download `Lampas Launcher Setup.exe` (Installer) or the standalone `.exe`.
-   * **Linux**: Download the `.AppImage` (make it executable and run).
+   * Grab the installer from [**GitHub Releases (Latest)**](https://github.com/justbecauseph/lampas-launcher/releases/latest).
+   * **Windows**: Download `LampasLauncher-Setup-<version>.exe` (Installer) or `LampasLauncher-<version>-Windows.exe` (Portable).
+   * **Linux**: Download `LampasLauncher-<version>-Linux.AppImage` (make executable & run) or `.tar.gz`.
 2. **Log in**:
    * Click **Login with Lampas Portal**.
    * Your browser will open. Authorize your account, link your Minecraft username, and boom — you're logged in!
