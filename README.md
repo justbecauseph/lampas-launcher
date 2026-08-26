@@ -101,5 +101,10 @@ bun run package:linux  # Linux AppImage & tar.gz
 
 ## 📄 License
 
-MIT License. Mod binaries and game assets belong to their respective creators.  
-*Minecraft is a trademark of Mojang Synergies AB. Lampas is not affiliated with or endorsed by Mojang or Microsoft.*
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+* **Source Code:** Licensed under [Apache-2.0](LICENSE).
+* **Branding & Assets:** Lampas logos, art assets, and server branding are proprietary and reserved by Lampas SMP / Lampas Tech Team.
+* **Game Assets & Mods:** Mod binaries, Minecraft runtime components, and game assets belong to their respective creators.
+
+*NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.*
