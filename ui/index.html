@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lampas Launcher</title>
+  <link rel="icon" type="image/png" href="assets/lampas.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="flex flex-col h-full select-none">
+  <!-- Custom Titlebar -->
+  <header class="titlebar flex items-center justify-between px-4">
+    <div class="flex items-center gap-2 app-drag">
+      <img src="assets/lampas.png" alt="Lampas" class="logo-icon">
+      <span class="font-extrabold tracking-tight text-xs text-white">
+        LAMPAS <span class="text-cyan-400">LAUNCHER</span>
+      </span>
+      <span class="badge">Fabric 26.2</span>
+      <span id="titlebar-channel-badge" class="badge text-cyan-400">STABLE</span>
+      <div id="titlebar-game-status" class="badge flex items-center gap-1.5 text-slate-400">
+        <span id="titlebar-status-dot" class="status-dot status-dot-idle"></span>
+        <span id="titlebar-status-text" class="font-mono text-[10px] font-bold">IDLE</span>
+      </div>
+    </div>
+
+    <!-- Window Controls -->
+    <div class="flex items-center no-drag">
+      <button id="btn-minimize" class="win-btn" title="Minimize">─</button>
+      <button id="btn-maximize" class="win-btn" title="Maximize">□</button>
+      <button id="btn-close" class="win-btn win-btn-close" title="Close">✕</button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <div class="flex flex-1 min-h-0 overflow-hidden">
+    <!-- Left Navigation & User Sidebar -->
+    <aside class="sidebar flex flex-col justify-between p-4">
+      <div class="space-y-6">
+        <!-- Navigation Tabs -->
+        <nav class="space-y-1.5">
+          <button id="nav-play" class="nav-item active">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>Play</span>
+          </button>
+
+          <button id="nav-mods" class="nav-item">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            <span>Client Mods</span>
+          </button>
+
+          <button id="nav-console" class="nav-item">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span>Console & Logs</span>
+          </button>
+
+          <button id="nav-settings" class="nav-item">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span>Settings</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- User Profile Card -->
+      <div id="user-section" class="border-t border-slate-900 pt-4">
+        <!-- Logged in state -->
+        <div id="user-card" class="hidden flex items-center justify-between bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div id="user-avatar" class="avatar">P</div>
+            <div class="flex flex-col min-w-0">
+              <span id="user-name" class="font-bold text-xs text-white truncate">Player</span>
+              <span id="user-role" class="text-[10px] text-cyan-400 font-mono font-semibold">Verified</span>
+            </div>
+          </div>
+          <button id="btn-logout" class="icon-btn text-slate-400 hover:text-rose-400" title="Log Out">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Logged out state: Portal Login -->
+        <button id="btn-login" class="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-3 rounded-2xl text-xs shadow-md cursor-pointer transition-all">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+          </svg>
+          <span>Log In with Portal</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Viewport -->
+    <main class="main-viewport">
+      <!-- TAB 1: PLAY SCREEN -->
+      <section id="tab-play" class="tab-content justify-between space-y-6">
+        <!-- Hero Server Banner -->
+        <div class="hero-banner rounded-3xl p-6 relative overflow-hidden border border-slate-800">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-2">
+                <span class="status-indicator"></span>
+                <span id="server-status-text" class="text-xs font-bold text-emerald-400 font-mono">Lampas SMP Online</span>
+              </div>
+              <h1 class="text-3xl font-black text-white tracking-tight">Lampas 2</h1>
+              <p class="text-xs text-slate-400 mt-1">
+                Deterministic Modpack Pipeline • Fabric 26.2 • OpenJDK 25
+              </p>
+            </div>
+
+            <!-- Channel Selector -->
+            <div class="bg-slate-950/80 border border-slate-800 p-1 rounded-2xl flex items-center gap-1">
+              <button class="channel-btn active" data-channel="stable">Stable</button>
+              <button class="channel-btn" data-channel="beta">Beta</button>
+              <button class="channel-btn" data-channel="dev">Dev</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live server presence (informational; never blocks Play) -->
+        <section id="server-presence" class="server-presence" aria-live="polite" aria-label="Lampas server status">
+          <div class="server-presence-heading">
+            <div class="flex items-center gap-2 min-w-0">
+              <span id="server-presence-dot" class="presence-dot presence-dot-unknown" aria-hidden="true"></span>
+              <span id="server-presence-state" class="presence-state">STATUS UNAVAILABLE</span>
+            </div>
+            <span id="server-presence-count" class="presence-count">— players</span>
+          </div>
+          <p id="server-presence-detail" class="server-presence-detail">Unable to verify server status right now. You can still launch.</p>
+          <div id="server-presence-players" class="presence-players" aria-label="Players currently online"></div>
+        </section>
+
+        <!-- Quick Spec Cards -->
+        <div class="grid grid-cols-3 gap-4">
+          <div class="p-4 rounded-2xl border border-slate-800/80 bg-slate-900/40 flex flex-col justify-between">
+            <span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Engine</span>
+            <div class="flex items-baseline gap-2 mt-2">
+              <span class="text-sm font-bold text-white">Fabric Loader</span>
+              <span class="text-xs font-mono text-cyan-400">0.19.3</span>
+            </div>
+          </div>
+          <div class="p-4 rounded-2xl border border-slate-800/80 bg-slate-900/40 flex flex-col justify-between">
+            <span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Game Version</span>
+            <div class="flex items-baseline gap-2 mt-2">
+              <span class="text-sm font-bold text-white">Minecraft</span>
+              <span class="text-xs font-mono text-indigo-400">26.2</span>
+            </div>
+          </div>
+          <div class="p-4 rounded-2xl border border-slate-800/80 bg-slate-900/40 flex flex-col justify-between">
+            <span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Integrity</span>
+            <div class="flex items-baseline gap-2 mt-2">
+              <span class="text-sm font-bold text-white">SHA-256</span>
+              <span class="text-xs font-mono text-emerald-400">Verified</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action & Launch Bar -->
+        <div class="space-y-4 pt-2">
+          <!-- Progress Bar (hidden by default) -->
+          <div id="progress-container" class="hidden space-y-2">
+            <div class="flex items-center justify-between text-xs font-mono">
+              <span id="progress-msg" class="text-cyan-400 font-medium truncate max-w-[80%]">Synchronizing pack...</span>
+              <span id="progress-percent" class="text-slate-400 font-bold">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Bottom Controls Bar -->
+          <div class="flex items-center justify-between gap-4 border-t border-slate-900 pt-5 pb-4">
+            <!-- Memory & Settings Quick View -->
+            <div class="flex items-center gap-6">
+              <div class="flex flex-col">
+                <span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Memory Allocation</span>
+                <span id="ram-display" class="text-xs font-bold font-mono text-white">4 GB RAM</span>
+              </div>
+              <div class="flex flex-col">
+                <span class="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Game Directory</span>
+                <div class="flex items-center gap-2">
+                  <span id="gamedir-display" class="text-xs font-mono text-slate-300 truncate max-w-[220px]">.minecraft-lampas</span>
+                  <button id="btn-open-gamedir" class="icon-btn text-slate-400 hover:text-cyan-400" title="Open Game Directory in File Explorer">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Launch & Kill Controls -->
+            <div class="flex items-center gap-3">
+              <button id="btn-stop" class="btn-stop hidden" title="Force Terminate Game">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span>STOP GAME</span>
+              </button>
+
+              <div class="flex flex-col items-center">
+                <button id="btn-play" class="btn-play shadow-lg cursor-pointer">
+                  <span id="btn-play-spinner" class="spinner hidden mr-2"></span>
+                  <span id="btn-play-text">PLAY</span>
+                </button>
+                <div id="play-target-container" class="hidden flex items-center gap-1 text-[10px] text-slate-400 font-mono mt-1">
+                  <span>Connecting to:</span>
+                  <span id="play-target-server" class="text-cyan-400 font-semibold"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: MODPACK INFO -->
+      <section id="tab-mods" class="tab-content hidden flex-col flex-1 min-h-0 space-y-4">
+        <div class="flex items-center justify-between flex-shrink-0">
+          <div>
+            <h2 class="text-xl font-extrabold text-white tracking-tight">Client Loadout</h2>
+            <p class="text-xs text-slate-400 mt-1">Tune optional client mods and keep your own additions across pack syncs.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="btn-add-mods" class="btn-primary" title="Add one or more local client mod JARs">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+              <span>Add local mods</span>
+            </button>
+            <button id="btn-repair-pack" class="btn-secondary text-cyan-400 hover:border-cyan-500/50" title="Force check and repair all files, assets, and libraries">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span>Repair Pack</span>
+            </button>
+            <button id="btn-verify-pack" class="btn-secondary">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span>Verify Integrity</span>
+            </button>
+            <button id="btn-mods-open-dir" class="btn-secondary">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              <span>Open Pack Folder</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 flex flex-col flex-1 min-h-0 space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-800/80 pb-3 flex-shrink-0">
+            <div>
+              <h3 class="font-bold text-white text-sm">Lampas 2 Official Modpack</h3>
+              <p id="mods-pack-version" class="text-[11px] text-slate-400 mt-0.5">Version 2.0.0 (Release Channel: Stable)</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="mods-channel-badge" class="badge text-cyan-400">STABLE</span>
+              <span class="badge text-emerald-400">Production Ready</span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3 text-center flex-shrink-0">
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div id="managed-mod-count" class="text-xl font-black text-cyan-400 font-mono">—</div>
+              <span class="text-[11px] text-slate-400 font-medium">Managed Mods</span>
+            </div>
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div id="optional-mod-count" class="text-xl font-black text-indigo-400 font-mono">—</div>
+              <span class="text-[11px] text-slate-400 font-medium">Optional Client Mods</span>
+            </div>
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <div id="local-mod-count" class="text-xl font-black text-emerald-400 font-mono">0</div>
+              <span class="text-[11px] text-slate-400 font-medium">Local Additions</span>
+            </div>
+          </div>
+
+          <div class="rounded-xl bg-slate-950/60 border border-slate-800/80 p-3 space-y-1.5 flex-shrink-0">
+            <h4 class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Pipeline Specifications</h4>
+            <div class="grid grid-cols-2 gap-2 text-[11px] font-mono">
+              <div class="flex justify-between border-b border-slate-900 pb-1">
+                <span class="text-slate-500">Minecraft Base:</span>
+                <span class="text-slate-200">26.2</span>
+              </div>
+              <div class="flex justify-between border-b border-slate-900 pb-1">
+                <span class="text-slate-500">Fabric Loader:</span>
+                <span class="text-slate-200">0.19.3</span>
+              </div>
+              <div class="flex justify-between border-b border-slate-900 pb-1">
+                <span class="text-slate-500">Java Runtime:</span>
+                <span class="text-slate-200">OpenJDK 25 (Temurin)</span>
+              </div>
+              <div class="flex justify-between border-b border-slate-900 pb-1">
+                <span class="text-slate-500">State Tracking:</span>
+                <span class="text-slate-200">installation.json</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Interactive Mod Explorer & Catalog -->
+          <div class="flex-1 min-h-0 flex flex-col space-y-3 pt-1">
+            <div class="flex items-center justify-between flex-shrink-0">
+              <h4 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <span>Installed Mods & Features</span>
+                <span id="mods-filtered-count" class="badge text-cyan-400">0</span>
+              </h4>
+              <div class="w-64">
+                <input
+                  id="mods-search-input"
+                  type="text"
+                  placeholder="Search mods, categories..."
+                  class="w-full bg-slate-950/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <!-- Filter Pills -->
+            <div class="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs flex-shrink-0">
+              <button class="mod-filter-pill active" data-filter="all">All</button>
+              <button class="mod-filter-pill" data-filter="shader">Shaders</button>
+              <button class="mod-filter-pill" data-filter="client">Client-Only</button>
+              <button class="mod-filter-pill" data-filter="disabled">Disabled</button>
+              <button class="mod-filter-pill" data-filter="custom">My Mods</button>
+              <button class="mod-filter-pill" data-filter="server">Server-Only</button>
+              <button class="mod-filter-pill" data-filter="both">Dual-Sided</button>
+              <button class="mod-filter-pill" data-filter="optimization">Optimization</button>
+              <button class="mod-filter-pill" data-filter="worldgen">World Gen</button>
+              <button class="mod-filter-pill" data-filter="decoration">Decoration</button>
+              <button class="mod-filter-pill" data-filter="adventure">Adventure</button>
+              <button class="mod-filter-pill" data-filter="utility">Utility</button>
+            </div>
+
+            <div id="mod-drop-zone" class="mod-drop-zone flex items-center justify-between flex-shrink-0">
+              <div class="flex items-center gap-3">
+                <div class="drop-mark">JAR</div>
+                <div>
+                  <div class="text-xs font-bold text-slate-200">Drop client mod JARs here</div>
+                  <div class="text-[10px] text-slate-500">Local additions stay yours and are never removed by synchronization.</div>
+                </div>
+              </div>
+              <span class="badge">LOCAL OVERRIDES</span>
+            </div>
+
+            <!-- Mod List Grid: flex-1 fills remaining height cleanly! -->
+            <div id="mods-grid" class="grid grid-cols-2 gap-3 flex-1 min-h-0 overflow-y-auto pr-1 pb-4">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: CONSOLE & LOGS -->
+      <section id="tab-console" class="tab-content hidden flex-col flex-1 min-h-0 space-y-4">
+        <div class="flex items-center justify-between flex-shrink-0">
+          <div class="flex items-center gap-3">
+            <h2 class="text-xl font-extrabold text-white tracking-tight">Live Game Console</h2>
+            <div id="console-game-status" class="badge flex items-center gap-1.5 text-slate-400">
+              <span id="console-status-dot" class="status-dot status-dot-idle"></span>
+              <span id="console-status-text" class="font-mono text-[11px] font-bold">IDLE</span>
+            </div>
+            <span id="console-count" class="badge">0 lines</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button id="btn-console-stop" class="btn-danger-sm hidden" title="Force Terminate Game">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              <span>Stop Game</span>
+            </button>
+            <label class="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+              <input id="console-autoscroll" type="checkbox" checked class="accent-cyan-500 cursor-pointer">
+              <span>Auto-scroll</span>
+            </label>
+            <button id="btn-open-log-file" class="btn-secondary" title="Open persistent launcher log file on disk">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span>Log File</span>
+            </button>
+            <button id="btn-copy-logs" class="btn-secondary" title="Copy console output to clipboard">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              <span>Copy</span>
+            </button>
+            <button id="btn-clear-logs" class="btn-secondary" title="Clear console output">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              <span>Clear</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="console-output" class="console-box flex-1 min-h-0">
+          <div class="console-line text-slate-500 italic">[System] Console ready. Logs will stream in real-time when launching.</div>
+        </div>
+      </section>
+
+      <!-- TAB 4: SETTINGS -->
+      <section id="tab-settings" class="tab-content hidden flex-col flex-1 min-h-0 space-y-4">
+        <div class="flex-shrink-0">
+          <h2 class="text-xl font-extrabold text-white tracking-tight">Launcher Settings</h2>
+          <p class="text-xs text-slate-400 mt-1">Configure performance, Java launch behavior, and pipeline access.</p>
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-y-auto space-y-5 pr-1 pb-6">
+          <!-- Game & Performance Settings -->
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5">
+            <h3 class="text-sm font-bold text-white border-b border-slate-800 pb-3">Performance & Directory</h3>
+            
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <label for="ram-slider" class="text-xs font-bold text-slate-300">RAM Allocation</label>
+                <span id="setting-ram-val" class="badge text-cyan-400">4 GB</span>
+              </div>
+              <input id="ram-slider" type="range" min="2" max="16" step="1" value="4" class="w-full">
+              <div class="range-labels text-xs font-mono text-slate-500" aria-hidden="true">
+                <span style="--range-position: 0%">2 GB</span>
+                <span style="--range-position: 14.2857%">4 GB</span>
+                <span style="--range-position: 42.8571%">8 GB</span>
+                <span style="--range-position: 71.4286%">12 GB</span>
+                <span style="--range-position: 100%">16 GB</span>
+              </div>
+            </div>
+
+            <div class="space-y-2 pt-2 border-t border-slate-800/80">
+              <label for="setting-gamedir-input" class="text-xs font-bold text-slate-300">Game Installation Directory</label>
+              <div class="flex items-center gap-2">
+                <input id="setting-gamedir-input" type="text" readonly class="input-field cursor-not-allowed opacity-80 text-slate-400">
+                <button id="btn-settings-open-dir" class="btn-secondary whitespace-nowrap" type="button">
+                  <span>Open Folder</span>
+                </button>
+                <button id="btn-settings-move-dir" class="btn-secondary whitespace-nowrap text-cyan-400 hover:border-cyan-500/50" type="button">
+                  <span>Move Installation…</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="space-y-2 pt-2 border-t border-slate-800/80">
+              <div class="flex items-center justify-between">
+                <label for="setting-java-args" class="text-xs font-bold text-slate-300">Custom Java arguments</label>
+                <span class="badge">ADVANCED</span>
+              </div>
+              <textarea id="setting-java-args" rows="3" spellcheck="false" class="input-field java-args-field" placeholder="-Dexample=value -XX:+UseStringDeduplication"></textarea>
+              <p class="text-[11px] text-slate-500">Passed to Java after the launcher's memory and GC defaults. Use quotes around values containing spaces.</p>
+            </div>
+          </div>
+
+          <!-- Auth & Pipeline Settings -->
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5">
+            <h3 class="text-sm font-bold text-white border-b border-slate-800 pb-3">Network & Authentication</h3>
+
+            <div class="space-y-2">
+              <label for="setting-portal" class="text-xs font-bold text-slate-300">Portal API Endpoint</label>
+              <input id="setting-portal" type="text" placeholder="https://dev.lampas.town" class="input-field">
+              <p class="text-[11px] text-slate-500">The remote portal URL for channel pointer queries and OAuth authentication.</p>
+            </div>
+          </div>
+
+          <!-- Maintenance & Diagnostics -->
+          <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-bold text-white">Maintenance & File Repair</h3>
+                <p class="text-[11px] text-slate-400 mt-0.5">Force verification of all SHA-256 hashes, Minecraft libraries, 5,000+ asset objects, and Java 25 runtime.</p>
+              </div>
+              <button id="btn-repair-settings" class="btn-secondary text-cyan-400 hover:border-cyan-500/50 flex items-center gap-2 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span>Repair Game Files</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="flex justify-end pt-2 pb-6">
+            <button id="btn-save-settings" class="btn-primary">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              <span>Save Settings</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal: First-Run Directory Setup -->
+  <div id="modal-initial-dir" class="modal-backdrop hidden">
+    <div class="modal-dialog p-6 space-y-5">
+      <div class="space-y-1">
+        <div class="flex items-center gap-2">
+          <img src="assets/lampas.png" alt="Lampas" class="logo-icon w-5 h-5">
+          <span class="badge text-cyan-400">INITIAL SETUP</span>
+        </div>
+        <h3 class="text-lg font-extrabold text-white tracking-tight mt-2">Choose Minecraft Installation Location</h3>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Lampas will store Minecraft, mods, saves, resource packs and its runtime here.
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <label for="initial-gamedir-input" class="text-xs font-bold text-slate-300">Target Folder</label>
+        <div class="flex items-center gap-2">
+          <input id="initial-gamedir-input" type="text" class="input-field text-slate-200 text-xs select-text font-mono flex-1">
+          <button id="btn-initial-browse" class="btn-secondary whitespace-nowrap" type="button">
+            <span>Browse…</span>
+          </button>
+        </div>
+        <p id="initial-dir-error" class="hidden text-[11px] text-rose-400"></p>
+      </div>
+
+      <div class="flex items-center justify-end gap-3 pt-2 border-t border-slate-800/80">
+        <button id="btn-initial-confirm" class="btn-play py-2.5 px-6 min-w-0 text-xs" type="button">
+          <span>Use This Location</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Move Installation -->
+  <div id="modal-move-dir" class="modal-backdrop hidden">
+    <div class="modal-dialog p-6 space-y-5">
+      <!-- Confirmation View -->
+      <div id="move-modal-confirm-view" class="space-y-4">
+        <div class="space-y-1">
+          <h3 class="text-lg font-extrabold text-white tracking-tight">Move Minecraft Installation?</h3>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            This moves Minecraft, mods, worlds, screenshots, resource packs and launcher-managed runtime files.
+          </p>
+        </div>
+
+        <div class="space-y-3 bg-slate-950/80 p-4 rounded-xl border border-slate-800 text-xs font-mono">
+          <div class="space-y-1">
+            <span class="text-[10px] text-slate-500 uppercase font-bold tracking-wider">From:</span>
+            <div id="move-source-path" class="text-slate-300 truncate select-text"></div>
+          </div>
+          <div class="space-y-1 pt-2 border-t border-slate-900">
+            <span class="text-[10px] text-cyan-500 uppercase font-bold tracking-wider">To:</span>
+            <div id="move-target-path" class="text-cyan-400 font-bold truncate select-text"></div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3 pt-2 border-t border-slate-800/80">
+          <button id="btn-cancel-move" class="btn-secondary" type="button">Cancel</button>
+          <button id="btn-confirm-move" class="btn-play py-2.5 px-6 min-w-0 text-xs" type="button">
+            <span>Move Installation</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Progress View -->
+      <div id="move-modal-progress-view" class="hidden space-y-4">
+        <div class="space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="spinner"></span>
+            <h3 class="text-lg font-extrabold text-white tracking-tight">Moving Minecraft Installation...</h3>
+          </div>
+          <p id="move-progress-phase" class="text-xs text-cyan-400 font-mono">Preparing relocation...</p>
+        </div>
+
+        <div class="space-y-2">
+          <div class="flex items-center justify-between text-xs font-mono">
+            <span id="move-progress-details" class="text-slate-400 truncate">0 / 0 files (0 MB / 0 MB)</span>
+            <span id="move-progress-percent" class="text-cyan-400 font-bold">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="move-progress-fill" class="progress-fill" style="width: 0%"></div>
+          </div>
+          <p id="move-progress-file" class="text-[10px] text-slate-500 font-mono truncate min-h-[14px]"></p>
+        </div>
+
+        <div class="rounded-xl bg-amber-950/30 border border-amber-900/50 p-3 text-[11px] text-amber-300">
+          Please keep the launcher open until relocation and verification complete.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container"></div>
+
+  <script src="server-status-view.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+name: Release Modpack & Launcher
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Target release channel"
+        required: true
+        default: "stable"
+        type: choice
+        options:
+          - stable
+          - beta
+          - dev
+
+jobs:
+  release:
+    name: Build Windows Launcher Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Build Windows Installer (.exe)
+        working-directory: ./launcher
+        run: |
+          bun install --frozen-lockfile
+          bun run package:win
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            launcher/release/*.exe
+          generate_release_notes: true
