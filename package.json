@@ -13,10 +13,10 @@
   "scripts": {
     "dev": "concurrently \"tsc -w\" \"electron .\"",
     "build": "tsc",
-    "package:dir": "tsc && electron-builder --dir",
-    "package:win": "tsc && electron-builder --win",
-    "package:linux": "tsc && electron-builder --linux",
-    "package:all": "tsc && electron-builder -mwl",
+    "package:dir": "tsc && electron-builder --dir --publish never",
+    "package:win": "tsc && electron-builder --win --publish never",
+    "package:linux": "tsc && electron-builder --linux --publish never",
+    "package:all": "tsc && electron-builder -mwl --publish never",
     "start": "electron ."
   },
   "dependencies": {
@@ -33,6 +33,7 @@
   "build": {
     "appId": "town.lampas.launcher",
     "productName": "Lampas Launcher",
+    "publish": null,
     "directories": {
       "output": "release"
     },
