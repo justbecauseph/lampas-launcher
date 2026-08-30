@@ -28,6 +28,8 @@ jobs:
         include:
           - os: windows-latest
             script: package:win
+          - os: ubuntu-latest
+            script: package:linux
 
     steps:
       - name: Checkout repository

@@ -259,54 +259,6 @@
         </div>
 
         <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 flex flex-col flex-1 min-h-0 space-y-4">
-          <div class="flex items-center justify-between border-b border-slate-800/80 pb-3 flex-shrink-0">
-            <div>
-              <h3 class="font-bold text-white text-sm">Lampas 2 Official Modpack</h3>
-              <p id="mods-pack-version" class="text-[11px] text-slate-400 mt-0.5">Version 2.0.0 (Release Channel: Stable)</p>
-            </div>
-            <div class="flex items-center gap-2">
-              <span id="mods-channel-badge" class="badge text-cyan-400">STABLE</span>
-              <span class="badge text-emerald-400">Production Ready</span>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-3 gap-3 text-center flex-shrink-0">
-            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div id="managed-mod-count" class="text-xl font-black text-cyan-400 font-mono">—</div>
-              <span class="text-[11px] text-slate-400 font-medium">Managed Mods</span>
-            </div>
-            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div id="optional-mod-count" class="text-xl font-black text-indigo-400 font-mono">—</div>
-              <span class="text-[11px] text-slate-400 font-medium">Optional Client Mods</span>
-            </div>
-            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <div id="local-mod-count" class="text-xl font-black text-emerald-400 font-mono">0</div>
-              <span class="text-[11px] text-slate-400 font-medium">Local Additions</span>
-            </div>
-          </div>
-
-          <div class="rounded-xl bg-slate-950/60 border border-slate-800/80 p-3 space-y-1.5 flex-shrink-0">
-            <h4 class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Pipeline Specifications</h4>
-            <div class="grid grid-cols-2 gap-2 text-[11px] font-mono">
-              <div class="flex justify-between border-b border-slate-900 pb-1">
-                <span class="text-slate-500">Minecraft Base:</span>
-                <span class="text-slate-200">26.2</span>
-              </div>
-              <div class="flex justify-between border-b border-slate-900 pb-1">
-                <span class="text-slate-500">Fabric Loader:</span>
-                <span class="text-slate-200">0.19.3</span>
-              </div>
-              <div class="flex justify-between border-b border-slate-900 pb-1">
-                <span class="text-slate-500">Java Runtime:</span>
-                <span class="text-slate-200">OpenJDK 25 (Temurin)</span>
-              </div>
-              <div class="flex justify-between border-b border-slate-900 pb-1">
-                <span class="text-slate-500">State Tracking:</span>
-                <span class="text-slate-200">installation.json</span>
-              </div>
-            </div>
-          </div>
-
           <!-- Interactive Mod Explorer & Catalog -->
           <div class="flex-1 min-h-0 flex flex-col space-y-3 pt-1">
             <div class="flex items-center justify-between flex-shrink-0">
@@ -327,17 +279,18 @@
             <!-- Filter Pills -->
             <div class="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs flex-shrink-0">
               <button class="mod-filter-pill active" data-filter="all">All</button>
+              <button class="mod-filter-pill" data-filter="custom">My Mods</button>
               <button class="mod-filter-pill" data-filter="shader">Shaders</button>
               <button class="mod-filter-pill" data-filter="client">Client-Only</button>
               <button class="mod-filter-pill" data-filter="disabled">Disabled</button>
-              <button class="mod-filter-pill" data-filter="custom">My Mods</button>
-              <button class="mod-filter-pill" data-filter="server">Server-Only</button>
-              <button class="mod-filter-pill" data-filter="both">Dual-Sided</button>
+              |
               <button class="mod-filter-pill" data-filter="optimization">Optimization</button>
               <button class="mod-filter-pill" data-filter="worldgen">World Gen</button>
               <button class="mod-filter-pill" data-filter="decoration">Decoration</button>
               <button class="mod-filter-pill" data-filter="adventure">Adventure</button>
               <button class="mod-filter-pill" data-filter="utility">Utility</button>
+              |
+              <button class="mod-filter-pill" data-filter="both">Required</button>
             </div>
 
             <div id="mod-drop-zone" class="mod-drop-zone flex items-center justify-between flex-shrink-0">
@@ -464,7 +417,7 @@
             <div class="space-y-2">
               <label for="setting-portal" class="text-xs font-bold text-slate-300">Portal API Endpoint</label>
               <input id="setting-portal" type="text" placeholder="https://dev.lampas.town" class="input-field">
-              <p class="text-[11px] text-slate-500">The remote portal URL for channel pointer queries and OAuth authentication.</p>
+              <p class="text-[11px] text-slate-500">The remote portal URL for API queries and authentication.</p>
             </div>
           </div>
 
@@ -473,7 +426,7 @@
             <div class="flex items-center justify-between">
               <div>
                 <h3 class="text-sm font-bold text-white">Maintenance & File Repair</h3>
-                <p class="text-[11px] text-slate-400 mt-0.5">Force verification of all SHA-256 hashes, Minecraft libraries, 5,000+ asset objects, and Java 25 runtime.</p>
+                <p class="text-[11px] text-slate-400 mt-0.5">Force verification of all asset objects, and Java 25 runtime.</p>
               </div>
               <button id="btn-repair-settings" class="btn-secondary text-cyan-400 hover:border-cyan-500/50 flex items-center gap-2 whitespace-nowrap">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

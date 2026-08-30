@@ -1094,7 +1094,7 @@ function renderMods() {
           ? '<span class="text-[9px] font-bold text-cyan-400 bg-cyan-950/80 border border-cyan-800/60 px-1.5 py-0.5 rounded-md">CLIENT ONLY</span>'
           : mod.side === "server"
           ? '<span class="text-[9px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 rounded-md">SERVER ONLY</span>'
-          : '<span class="text-[9px] font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded-md">DUAL-SIDED</span>';
+          : '<span class="text-[9px] font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded-md">REQUIRED</span>';
 
       const fallbackText = escapeHtml((mod.name || mod.id || "M")[0].toUpperCase());
       const modName = escapeHtml(mod.name || mod.filename || "Unknown mod");
