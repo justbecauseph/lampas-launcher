@@ -4,6 +4,7 @@ import { yamlAdapter } from "./adapters/yaml";
 import { propertiesAdapter } from "./adapters/properties";
 import { iniAdapter } from "./adapters/ini";
 import { textAdapter } from "./adapters/text";
+import { tomlAdapter } from "./adapters/toml";
 
 export class AdapterRegistry {
   private static adapters = new Map<string, ConfigPatchAdapter>([
@@ -13,6 +14,7 @@ export class AdapterRegistry {
     ["properties", propertiesAdapter],
     ["ini", iniAdapter],
     ["text", textAdapter],
+    ["toml", tomlAdapter],
   ]);
 
   static register(name: string, adapter: ConfigPatchAdapter): void {
@@ -48,5 +50,6 @@ export class AdapterRegistry {
     this.adapters.set("properties", propertiesAdapter);
     this.adapters.set("ini", iniAdapter);
     this.adapters.set("text", textAdapter);
+    this.adapters.set("toml", tomlAdapter);
   }
 }
