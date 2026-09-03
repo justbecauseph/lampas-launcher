@@ -1,7 +1,11 @@
 import type { ConfigPatchAdapter } from "./types";
+import { jsonAdapter } from "./adapters/json";
 
 export class AdapterRegistry {
-  private static adapters = new Map<string, ConfigPatchAdapter>();
+  private static adapters = new Map<string, ConfigPatchAdapter>([
+    ["json", jsonAdapter],
+    ["jsonc", jsonAdapter],
+  ]);
 
   static register(name: string, adapter: ConfigPatchAdapter): void {
     this.adapters.set(name, adapter);
@@ -26,5 +30,11 @@ export class AdapterRegistry {
 
   static clear(): void {
     this.adapters.clear();
+  }
+
+  static resetDefaults(): void {
+    this.adapters.clear();
+    this.adapters.set("json", jsonAdapter);
+    this.adapters.set("jsonc", jsonAdapter);
   }
 }
