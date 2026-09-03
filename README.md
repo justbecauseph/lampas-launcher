@@ -71,6 +71,13 @@ Head over to the [Lampas Portal](https://dev.lampas.town) dashboard, link your M
 ### 💾 "Will updating delete my worlds, screenshots, or keybinds?"
 **Nope!** Your `saves/`, `screenshots/`, `logs/`, `servers.dat`, and custom `options.txt` settings are strictly protected and will never be overwritten or deleted.
 
+### 🧩 "How does config file ownership work?"
+Lampas uses a 3-tier ownership model for mod configurations:
+- **`MANAGED`**: Lampas owns the whole file. Required files are synchronized and verified; obsolete files are deleted.
+- **`PRESERVE`**: You or the mod own the file. Lampas only seeds initial files if missing.
+- **`CONFIG PATCH / enforce`**: You own the config file; Lampas only enforces declared properties (e.g. turning off Hypixel-only chat tabs in `config/chatting.json`). Your personal settings, volume sliders, formatting, and comments stay intact!
+- **`CONFIG PATCH / once`**: Lampas seeds recommended values once, then relinquishes ownership to you.
+
 ---
 
 ## 🤓 For Nerds & Developers
