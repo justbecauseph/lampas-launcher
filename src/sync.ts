@@ -5,8 +5,24 @@ import { MinecraftBootstrap } from "./minecraft-bootstrap";
 import { JavaRuntimeManager } from "./java-runtime";
 import { copyAtomic, copyVerified, downloadVerified, fetchJsonWithRetry, hashFile, HttpResponseError } from "./file-transfer";
 import { reconcileRequiredResourcePacks } from "./resource-packs";
+import { app } from "electron";
+import { reconcileConfigPatches } from "./config-patches";
 import { LauncherLogger } from "./logger";
-import type { InstallationState, RequiredResourcePack, SyncProgress } from "./types";
+import type { ConfigPatch, InstallationState, RequiredResourcePack, SyncProgress } from "./types";
+
+export const MAX_SUPPORTED_PROTOCOL = 3;
+
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
 
 const PROTECTED_PREFIXES = [
   "saves/",
@@ -122,6 +138,27 @@ export class LauncherSync {
         }
       } else {
         throw new Error(`Portal unavailable (${portalErr.message}) and no local manifest found.`);
+      }
+    }
+
+    // Validate protocol capability
+    const requiredProtocol = manifest.protocol ?? releaseData.protocol;
+    if (typeof requiredProtocol === "number" && requiredProtocol > MAX_SUPPORTED_PROTOCOL) {
+      throw new Error(
+        `Unsupported modpack protocol: release requires protocol ${requiredProtocol}, but this launcher only supports up to protocol ${MAX_SUPPORTED_PROTOCOL}. Please update Lampas Launcher.`
+      );
+    }
+
+    // Validate minimum launcher version
+    if (releaseData?.minimumLauncherVersion) {
+      let currentLauncherVersion = "1.1.0";
+      try {
+        currentLauncherVersion = app.getVersion();
+      } catch {}
+      if (compareVersions(currentLauncherVersion, releaseData.minimumLauncherVersion) < 0) {
+        throw new Error(
+          `Launcher update required: release requires launcher version ${releaseData.minimumLauncherVersion} or newer (current: ${currentLauncherVersion}). Please update Lampas Launcher.`
+        );
       }
     }
 
@@ -389,7 +426,29 @@ export class LauncherSync {
       }
     }
 
-    // 9. Write release descriptor and installation state only after successful mutations
+    // 9. Reconcile config patches
+    let updatedAppliedPatches = prevState.appliedConfigPatches || {};
+    const configPatches: ConfigPatch[] = manifest.configPatches || [];
+    if (configPatches.length > 0) {
+      onProgress({
+        status: "staging",
+        message: "Applying modpack configuration patches...",
+        filesCompleted: totalFiles,
+        totalFiles,
+        percent: 98,
+        bytesDownloaded,
+        totalBytes,
+      });
+
+      const patchResult = await reconcileConfigPatches({
+        gameDir,
+        patches: configPatches,
+        prevState,
+      });
+      updatedAppliedPatches = patchResult.appliedState;
+    }
+
+    // 10. Write release descriptor and installation state only after successful mutations
     const releaseFilePath = path.join(stateDir, "release.json");
     try {
       fs.writeFileSync(releaseFilePath, JSON.stringify(releaseData, null, 2), "utf-8");
@@ -400,6 +459,7 @@ export class LauncherSync {
       version: targetVersion,
       installedAt: new Date().toISOString(),
       managedResourcePacks: updatedManagedPacks,
+      appliedConfigPatches: updatedAppliedPatches,
       files: {} as Record<string, any>,
     };
 
