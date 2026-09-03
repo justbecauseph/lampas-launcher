@@ -1,10 +1,18 @@
 import type { ConfigPatchAdapter } from "./types";
 import { jsonAdapter } from "./adapters/json";
+import { yamlAdapter } from "./adapters/yaml";
+import { propertiesAdapter } from "./adapters/properties";
+import { iniAdapter } from "./adapters/ini";
+import { textAdapter } from "./adapters/text";
 
 export class AdapterRegistry {
   private static adapters = new Map<string, ConfigPatchAdapter>([
     ["json", jsonAdapter],
     ["jsonc", jsonAdapter],
+    ["yaml", yamlAdapter],
+    ["properties", propertiesAdapter],
+    ["ini", iniAdapter],
+    ["text", textAdapter],
   ]);
 
   static register(name: string, adapter: ConfigPatchAdapter): void {
@@ -36,5 +44,9 @@ export class AdapterRegistry {
     this.adapters.clear();
     this.adapters.set("json", jsonAdapter);
     this.adapters.set("jsonc", jsonAdapter);
+    this.adapters.set("yaml", yamlAdapter);
+    this.adapters.set("properties", propertiesAdapter);
+    this.adapters.set("ini", iniAdapter);
+    this.adapters.set("text", textAdapter);
   }
 }
