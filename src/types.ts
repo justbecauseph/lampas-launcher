@@ -144,11 +144,48 @@ export interface ReleaseDescriptor {
   launch?: ReleaseLaunchConfig;
 }
 
+export type ConfigPatchMode = "enforce" | "once";
+
+export type MissingFilePolicy = "defer" | "create";
+
+export type ConfigOperation =
+  | {
+      op: "set";
+      path: Array<string | number>;
+      value: any;
+    }
+  | {
+      op: "remove";
+      path: Array<string | number>;
+    }
+  | {
+      op: "replaceLiteral";
+      search: string;
+      replacement: string;
+      expectedMatches: number;
+    };
+
+export interface ConfigPatch {
+  id: string;
+  revision: number;
+  path: string;
+  adapter: string;
+  mode: ConfigPatchMode;
+  missingFile: MissingFilePolicy;
+  operations: ConfigOperation[];
+}
+
+export interface AppliedConfigPatchState {
+  revision: number;
+  appliedAt: string;
+}
+
 export interface InstallationState {
   pack: string;
   version: string;
   installedAt: string;
   managedResourcePacks?: string[];
+  appliedConfigPatches?: Record<string, AppliedConfigPatchState>;
   files: Record<
     string,
     {
