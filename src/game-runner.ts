@@ -7,6 +7,7 @@ import { LauncherAuth } from "./auth";
 import { MinecraftBootstrap } from "./minecraft-bootstrap";
 import { JavaRuntimeManager } from "./java-runtime";
 import { isValidServerAddress, verifyRequiredResourcePacks } from "./resource-packs";
+import { validateRuntimeDefinition } from "./runtime-definition";
 import type { GameLogEntry, ReleaseDescriptor, UserProfile } from "./types";
 
 function generateOfflineUuid(username: string): string {
@@ -87,6 +88,14 @@ export class GameRunner {
       }
     }
 
+    if (!release) {
+      throw new Error(
+        "No installed Lampas release found. Please synchronize or repair your modpack installation first."
+      );
+    }
+
+    const runtime = validateRuntimeDefinition(release);
+
     // Verify required resource packs before bootstrapping
     if (release?.launch?.requiredResourcePacks && release.launch.requiredResourcePacks.length > 0) {
       log("INFO", `Verifying ${release.launch.requiredResourcePacks.length} required Lampas resource pack(s)...`);
@@ -109,8 +118,7 @@ export class GameRunner {
     // 2. Bootstrap Mojang & Fabric Libraries & Assets
     const { classpath, mainClass, assetIndex } = await MinecraftBootstrap.prepareGameEnvironment(
       gameDir,
-      "26.2",
-      "0.19.3",
+      runtime,
       (msg) => log("INFO", msg)
     );
 
@@ -138,7 +146,7 @@ export class GameRunner {
       "--username",
       username,
       "--version",
-      "26.2",
+      runtime.minecraft,
       "--gameDir",
       gameDir,
       "--assetsDir",

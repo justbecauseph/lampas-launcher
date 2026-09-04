@@ -560,8 +560,7 @@ export class LauncherSync {
 
     await MinecraftBootstrap.prepareGameEnvironment(
       gameDir,
-      "26.2",
-      "0.19.3",
+      syncResult.runtime,
       (msg) => {
         log("INFO", msg);
         onProgress({

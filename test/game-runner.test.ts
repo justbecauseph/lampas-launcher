@@ -11,6 +11,7 @@ const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
 
 let spawnedCalls: Array<{ javaExe: string; jvmArgs: string[] }> = [];
+let bootstrapCalls: Array<{ gameDir: string; runtime: any }> = [];
 
 mock.module("electron", () => ({
   app: { getPath: () => userDataDir },
@@ -60,11 +61,14 @@ mock.module("../src/java-runtime", () => ({
 
 mock.module("../src/minecraft-bootstrap", () => ({
   MinecraftBootstrap: {
-    prepareGameEnvironment: async () => ({
-      classpath: ["C:\\Game\\libraries\\fabric.jar"],
-      mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
-      assetIndex: "26.2",
-    }),
+    prepareGameEnvironment: async (targetDir: string, runtime: any) => {
+      bootstrapCalls.push({ gameDir: targetDir, runtime });
+      return {
+        classpath: ["C:\\Game\\libraries\\fabric.jar"],
+        mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        assetIndex: "26.2",
+      };
+    },
   },
 }));
 
@@ -94,6 +98,7 @@ beforeEach(() => {
   };
   GameRunner.resetForTesting();
   ConfigManager.resetForTesting();
+  bootstrapCalls = [];
   ConfigManager.set({
     gameDir,
     token: "mock-token",
@@ -339,5 +344,72 @@ describe("GameRunner launch flow & Quick Play", () => {
         () => {}
       )
     ).rejects.toThrow("No bound Minecraft account found in your profile");
+  });
+
+  test("propagates exact release runtime (0.99.123-test) to MinecraftBootstrap and JVM args (PLAN.md Section 44)", async () => {
+    spawnedCalls = [];
+    bootstrapCalls = [];
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.99.123-test" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+      launch: {},
+    };
+
+    const launched = await GameRunner.launchGame(
+      dummyUser,
+      () => {},
+      () => {},
+      release
+    );
+
+    expect(launched).toBe(true);
+    expect(bootstrapCalls.length).toBe(1);
+    expect(bootstrapCalls[0].runtime).toEqual({
+      minecraft: "26.2",
+      loader: {
+        type: "fabric",
+        version: "0.99.123-test",
+      },
+    });
+
+    // Verify JVM arguments received --version 26.2
+    expect(spawnedCalls.length).toBe(1);
+    const { jvmArgs } = spawnedCalls[0];
+    const versionIndex = jvmArgs.indexOf("--version");
+    expect(versionIndex).not.toBe(-1);
+    expect(jvmArgs[versionIndex + 1]).toBe("26.2");
+  });
+
+  test("rejects launch when release specifies unsupported loader type", async () => {
+    const invalidRelease: any = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "neoforge", version: "20.4.0" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+      launch: {},
+    };
+
+    await expect(
+      GameRunner.launchGame(
+        dummyUser,
+        () => {},
+        () => {},
+        invalidRelease
+      )
+    ).rejects.toThrow("unsupported loader type 'neoforge'");
   });
 });

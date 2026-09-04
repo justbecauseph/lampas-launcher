@@ -2,9 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { unzipSync } from "fflate";
 import { downloadVerified, hashFile } from "./file-transfer";
+import { FabricMetaResolver, type FabricMetaResolverOptions } from "./fabric-meta";
+import { validateRuntimeDefinition } from "./runtime-definition";
+import type { MinecraftRuntimeDefinition } from "./types";
 import versionMeta262 from "./version-meta-26.2.json";
 
-interface MavenCoordinate {
+export interface MavenCoordinate {
   name: string;
   url?: string;
   sha1?: string;
@@ -20,7 +23,12 @@ interface MavenCoordinate {
   };
 }
 
-function parseMavenCoordinate(name: string): { group: string; artifact: string; version: string; classifier?: string } {
+export function parseMavenCoordinate(name: string): {
+  group: string;
+  artifact: string;
+  version: string;
+  classifier?: string;
+} {
   const parts = name.split(":");
   const group = parts[0];
   const artifact = parts[1];
@@ -29,7 +37,12 @@ function parseMavenCoordinate(name: string): { group: string; artifact: string; 
   return { group, artifact, version, classifier };
 }
 
-function mavenToPath(coord: { group: string; artifact: string; version: string; classifier?: string }): string {
+export function mavenToPath(coord: {
+  group: string;
+  artifact: string;
+  version: string;
+  classifier?: string;
+}): string {
   const groupPath = coord.group.replace(/\./g, "/");
   const fileSuffix = coord.classifier ? `-${coord.classifier}` : "";
   return `${groupPath}/${coord.artifact}/${coord.version}/${coord.artifact}-${coord.version}${fileSuffix}.jar`;
@@ -38,7 +51,8 @@ function mavenToPath(coord: { group: string; artifact: string; version: string; 
 function isLibraryAllowed(lib: MavenCoordinate): boolean {
   if (!lib.rules || lib.rules.length === 0) return true;
 
-  const currentOs = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "osx" : "linux";
+  const currentOs =
+    process.platform === "win32" ? "windows" : process.platform === "darwin" ? "osx" : "linux";
   let allowed = false;
 
   for (const rule of lib.rules) {
@@ -56,16 +70,9 @@ function isLibraryAllowed(lib: MavenCoordinate): boolean {
   return allowed;
 }
 
-const FABRIC_LOADER_LIBRARIES = [
-  { name: "org.ow2.asm:asm:9.10.1", url: "https://maven.fabricmc.net/" },
-  { name: "org.ow2.asm:asm-analysis:9.10.1", url: "https://maven.fabricmc.net/" },
-  { name: "org.ow2.asm:asm-commons:9.10.1", url: "https://maven.fabricmc.net/" },
-  { name: "org.ow2.asm:asm-tree:9.10.1", url: "https://maven.fabricmc.net/" },
-  { name: "org.ow2.asm:asm-util:9.10.1", url: "https://maven.fabricmc.net/" },
-  { name: "net.fabricmc:sponge-mixin:0.17.3+mixin.0.8.7", url: "https://maven.fabricmc.net/" },
-  { name: "net.fabricmc:fabric-loader:0.19.3", url: "https://maven.fabricmc.net/" },
-  { name: "net.fabricmc:intermediary:26.2", url: "https://maven.fabricmc.net/" },
-];
+export interface PrepareGameEnvironmentOptions {
+  fabricMetaOptions?: FabricMetaResolverOptions;
+}
 
 export class MinecraftBootstrap {
   private static async ensureFile(
@@ -78,7 +85,11 @@ export class MinecraftBootstrap {
     if (fs.existsSync(destPath)) {
       const stat = fs.statSync(destPath);
       if (!expectedSize || stat.size === expectedSize) {
-        if (verificationMode === "fast" || !expectedSha1 || await hashFile(destPath, "sha1") === expectedSha1) {
+        if (
+          verificationMode === "fast" ||
+          !expectedSha1 ||
+          (await hashFile(destPath, "sha1")) === expectedSha1
+        ) {
           return false;
         }
       }
@@ -115,34 +126,64 @@ export class MinecraftBootstrap {
 
   static async prepareGameEnvironment(
     gameDir: string,
-    mcVersion = "26.2",
-    fabricVersion = "0.19.3",
+    runtimeInput: MinecraftRuntimeDefinition,
     onLog: (msg: string) => void,
-    verificationMode: "fast" | "full" = "fast"
+    verificationMode: "fast" | "full" = "fast",
+    options?: PrepareGameEnvironmentOptions
   ): Promise<{ classpath: string[]; mainClass: string; assetIndex: string }> {
+    const runtime = validateRuntimeDefinition(runtimeInput);
+
+    // Enforce Minecraft scope boundary (26.2 bounded)
+    if (runtime.minecraft !== "26.2") {
+      throw new Error(
+        `Unsupported Minecraft version '${runtime.minecraft}'. Lampas Launcher currently only supports Minecraft 26.2.`
+      );
+    }
+
     const librariesDir = path.join(gameDir, "libraries");
     const assetsDir = path.join(gameDir, "assets");
     const nativesDir = path.join(gameDir, "natives");
-    const versionsDir = path.join(gameDir, "versions", mcVersion);
+    const versionsDir = path.join(gameDir, "versions", runtime.minecraft);
+    const cacheDir = path.join(gameDir, ".lampas", "cache");
 
     fs.mkdirSync(librariesDir, { recursive: true });
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.mkdirSync(nativesDir, { recursive: true });
     fs.mkdirSync(versionsDir, { recursive: true });
 
-    onLog(`[Bootstrap] Resolving Minecraft ${mcVersion} environment (Fabric Loader ${fabricVersion})...`);
+    onLog(
+      `[Bootstrap] Resolving Minecraft ${runtime.minecraft} environment (Fabric Loader ${runtime.loader.version})...`
+    );
 
     // 1. Download Minecraft 26.2 Client JAR
     const clientJar = versionMeta262.mainJar.downloads.artifact;
-    const clientJarPath = path.join(versionsDir, `${mcVersion}-client.jar`);
-    onLog(`[Bootstrap] Verifying Minecraft ${mcVersion} client JAR...`);
-    await this.ensureFile(clientJar.url, clientJarPath, clientJar.sha1, clientJar.size, verificationMode);
+    const clientJarPath = path.join(versionsDir, `${runtime.minecraft}-client.jar`);
+    onLog(`[Bootstrap] Verifying Minecraft ${runtime.minecraft} client JAR...`);
+    await this.ensureFile(
+      clientJar.url,
+      clientJarPath,
+      clientJar.sha1,
+      clientJar.size,
+      verificationMode
+    );
 
     const classpath: string[] = [clientJarPath];
 
-    // 2. Download Fabric Loader 0.19.3 & Intermediary 26.2
-    onLog(`[Bootstrap] Verifying Fabric Loader & Intermediary...`);
-    const fabricPaths = await Promise.all(FABRIC_LOADER_LIBRARIES.map(async (lib) => {
+    // 2. Dynamically resolve Fabric Loader, Intermediary, and runtime libraries from Fabric Meta
+    onLog(
+      `[Bootstrap] Resolving Fabric Loader ${runtime.loader.version} runtime metadata...`
+    );
+    const fabricMeta = await FabricMetaResolver.resolveFabricRuntime(
+      runtime,
+      cacheDir,
+      options?.fabricMetaOptions
+    );
+
+    onLog(
+      `[Bootstrap] Verifying ${fabricMeta.libraries.length} Fabric Loader and support libraries...`
+    );
+    const fabricPaths: string[] = [];
+    for (const lib of fabricMeta.libraries) {
       const coord = parseMavenCoordinate(lib.name);
       const relPath = mavenToPath(coord);
       const destPath = path.join(librariesDir, relPath);
@@ -150,11 +191,11 @@ export class MinecraftBootstrap {
       const downloadUrl = `${repoUrl.replace(/\/+$/, "")}/${relPath}`;
 
       await this.ensureFile(downloadUrl, destPath, undefined, undefined, verificationMode);
-      return destPath;
-    }));
+      fabricPaths.push(destPath);
+    }
     classpath.push(...fabricPaths);
 
-    // 3. Download Mojang & LWJGL 3.4.1 Libraries (Fastutil, Gson, Guava, Log4j, LWJGL, etc.)
+    // 3. Download Mojang & LWJGL Libraries (Fastutil, Gson, Guava, Log4j, LWJGL, etc.)
     const allLibs = (versionMeta262.libraries || []) as MavenCoordinate[];
     const allowedLibs = allLibs.filter(isLibraryAllowed);
     onLog(`[Bootstrap] Verifying ${allowedLibs.length} core game libraries (Mojang & LWJGL)...`);
@@ -197,12 +238,19 @@ export class MinecraftBootstrap {
         }
       }
     }
-    await Promise.all(Array.from({ length: Math.min(8, allowedLibs.length) }, () => libraryWorker()));
+    await Promise.all(
+      Array.from({ length: Math.min(8, allowedLibs.length) }, () => libraryWorker())
+    );
     classpath.push(...libraryPaths);
 
-    const nativeMarker = path.join(gameDir, ".lampas", `natives-${mcVersion}-${process.platform}.complete`);
+    const nativeMarker = path.join(
+      gameDir,
+      ".lampas",
+      `natives-${runtime.minecraft}-${process.platform}.complete`
+    );
     if (!fs.existsSync(nativeMarker) || nativeArchives.some((archive) => archive.changed)) {
-      for (const archive of nativeArchives) this.extractNatives(fs.readFileSync(archive.path), nativesDir);
+      for (const archive of nativeArchives)
+        this.extractNatives(fs.readFileSync(archive.path), nativesDir);
       fs.mkdirSync(path.dirname(nativeMarker), { recursive: true });
       fs.writeFileSync(nativeMarker, new Date().toISOString(), "utf-8");
     }
@@ -211,11 +259,9 @@ export class MinecraftBootstrap {
     const assetIndex = versionMeta262.assetIndex;
     await this.ensureAssets(assetsDir, assetIndex, onLog, verificationMode);
 
-    const mainClass = "net.fabricmc.loader.impl.launch.knot.KnotClient";
-
     return {
       classpath,
-      mainClass,
+      mainClass: fabricMeta.mainClass,
       assetIndex: assetIndex.id,
     };
   }
@@ -235,7 +281,13 @@ export class MinecraftBootstrap {
 
     if (!fs.existsSync(assetIndexPath)) {
       onLog(`[Bootstrap] Downloading Minecraft asset index (${assetIndexMeta.id})...`);
-      await this.ensureFile(assetIndexMeta.url, assetIndexPath, assetIndexMeta.sha1, assetIndexMeta.size, "full");
+      await this.ensureFile(
+        assetIndexMeta.url,
+        assetIndexPath,
+        assetIndexMeta.sha1,
+        assetIndexMeta.size,
+        "full"
+      );
     }
 
     let indexData: any = {};
@@ -243,7 +295,13 @@ export class MinecraftBootstrap {
       indexData = JSON.parse(fs.readFileSync(assetIndexPath, "utf-8"));
     } catch {
       await fs.promises.rm(assetIndexPath, { force: true });
-      await this.ensureFile(assetIndexMeta.url, assetIndexPath, assetIndexMeta.sha1, assetIndexMeta.size, "full");
+      await this.ensureFile(
+        assetIndexMeta.url,
+        assetIndexPath,
+        assetIndexMeta.sha1,
+        assetIndexMeta.size,
+        "full"
+      );
       indexData = JSON.parse(fs.readFileSync(assetIndexPath, "utf-8"));
     }
 
@@ -266,7 +324,10 @@ export class MinecraftBootstrap {
       if (fs.existsSync(destFile)) {
         try {
           const stat = fs.statSync(destFile);
-          if (stat.size === item.size && (verificationMode === "fast" || await hashFile(destFile, "sha1") === item.hash)) {
+          if (
+            stat.size === item.size &&
+            (verificationMode === "fast" || (await hashFile(destFile, "sha1")) === item.hash)
+          ) {
             alreadyPresentCount++;
             continue;
           }
@@ -303,7 +364,9 @@ export class MinecraftBootstrap {
 
           completed++;
           if (completed % 250 === 0 || completed === total) {
-            onLog(`[Bootstrap] Assets: ${completed}/${total} (${Math.round((completed / total) * 100)}%)...`);
+            onLog(
+              `[Bootstrap] Assets: ${completed}/${total} (${Math.round((completed / total) * 100)}%)...`
+            );
           }
         }
       }
