@@ -74,16 +74,9 @@ export class LauncherSync {
     const channel = config.selectedChannel || "stable";
     const gameDir = config.gameDir;
 
-    if (!fs.existsSync(gameDir)) {
-      fs.mkdirSync(gameDir, { recursive: true });
-    }
-
     const stateDir = path.join(gameDir, ".lampas");
     const stateFile = path.join(stateDir, "installation.json");
     const cacheDir = path.join(stateDir, "cache", "sha256");
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
-    }
 
     onProgress({
       status: "checking",
@@ -171,6 +164,14 @@ export class LauncherSync {
 
     // Validate and cross-check runtime definition (fails hard before any pack mutation or download)
     const runtime = resolveRuntimeDefinition(releaseData, manifest);
+
+    // Initialize directory structure only after release, manifest, and runtime are validated
+    if (!fs.existsSync(gameDir)) {
+      fs.mkdirSync(gameDir, { recursive: true });
+    }
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
 
     const disabledClientMods = new Set(config.disabledClientMods || []);
     const disabledFilenames = new Set(
