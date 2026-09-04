@@ -104,6 +104,14 @@ bun run package:win    # Windows installer & portable exe
 bun run package:linux  # Linux AppImage & tar.gz
 ```
 
+### ⚙️ Manifest-Defined Fabric Runtime Contract
+- **Authoritative Release Ownership**: The Lampas Launcher does **not** choose or hardcode the Fabric Loader version. The active release descriptor and client manifest specify the exact required Minecraft and Fabric Loader versions (`runtime: { minecraft, loader: { type: "fabric", version } }`).
+- **Pre-Sync Cross-Validation**: The launcher validates exact Minecraft and Loader agreement between the release descriptor and client manifest before performing downloads, cache checks, or deletions.
+- **Dynamic Fabric Bootstrap**: `FabricMetaResolver` queries the official Fabric Meta API (`/v2/versions/loader/{minecraft}/{loaderVersion}`) for Loader and Intermediary Maven coordinates, support libraries, SHA-256 sidecar checksums, and the client main class.
+- **Isolated Classpath**: The launch classpath is assembled dynamically using only the libraries declared for the active Loader version. Coexisting older Loader versions on disk never enter the active classpath.
+- **Scope Boundary**: Client runtime bootstrap is currently scoped to Minecraft `26.2`.
+- **Consistent Operations**: GameRunner, Sync, and Repair share the exact same manifest-defined runtime. Repair in full verification mode re-validates and repairs all Fabric libraries against trusted sidecar checksums.
+
 ---
 
 ## 📄 License
