@@ -146,6 +146,24 @@ function updateLaunchTargetUI(release) {
   }
 }
 
+const runtimeLoaderType = document.getElementById("runtime-loader-type");
+const runtimeLoaderVersion = document.getElementById("runtime-loader-version");
+const runtimeMinecraftVersion = document.getElementById("runtime-minecraft-version");
+
+function updateRuntimeSpecsUI(runtime) {
+  if (!runtime) return;
+  const loader = runtime.loader;
+  if (loader?.version && runtimeLoaderVersion) {
+    runtimeLoaderVersion.innerText = loader.version;
+  }
+  if (loader?.type && runtimeLoaderType) {
+    runtimeLoaderType.innerText = `${loader.type === "fabric" ? "Fabric" : loader.type} Loader`;
+  }
+  if (runtime.minecraft && runtimeMinecraftVersion) {
+    runtimeMinecraftVersion.innerText = runtime.minecraft;
+  }
+}
+
 // DOM Elements: Modpack Info Tab
 const modsPackVersion = document.getElementById("mods-pack-version");
 const modsChannelBadge = document.getElementById("mods-channel-badge");
@@ -935,6 +953,7 @@ if (btnPlay) {
       removeListener();
 
       updateLaunchTargetUI(syncResult.release);
+      updateRuntimeSpecsUI(syncResult.runtime || syncResult.release);
 
       if (btnPlayText) btnPlayText.innerText = "LAUNCHING...";
       setConsoleStatus("launching", "STARTING JVM...");
@@ -942,7 +961,9 @@ if (btnPlay) {
       if (progressFill) progressFill.style.width = "100%";
       if (progressPercent) progressPercent.innerText = "100%";
 
-      appendLog("INFO", `Pack v${syncResult.version} synchronized. Bootstrapping KnotClient runtime...`);
+      const loaderType = syncResult.runtime?.loader?.type || syncResult.release?.loader?.type || "Fabric";
+      const loaderName = loaderType === "fabric" ? "Fabric" : loaderType;
+      appendLog("INFO", `Pack v${syncResult.version} synchronized. Bootstrapping ${loaderName} runtime...`);
       showToast(`Pack v${syncResult.version} verified. Launching game...`, "info", 2500);
 
       await window.lampas.game.launch(currentUser, syncResult.release);
@@ -1006,6 +1027,16 @@ async function init() {
       }
     } catch {
       updateUserUI(null);
+    }
+
+    // Load installed runtime specs into Quick Spec cards
+    if (window.lampas.sync?.getInstalledRuntime) {
+      try {
+        const installedRuntime = await window.lampas.sync.getInstalledRuntime();
+        if (installedRuntime) {
+          updateRuntimeSpecsUI(installedRuntime);
+        }
+      } catch {}
     }
 
     // Load rich mod catalog

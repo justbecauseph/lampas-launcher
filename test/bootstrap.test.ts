@@ -1,4 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 mock.module("electron", () => ({
   app: { getPath: () => "C:\\DummyAppData" },
@@ -71,5 +75,63 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
     await expect(
       MinecraftBootstrap.prepareGameEnvironment("C:\\DummyGameDir", invalidRuntime, () => {})
     ).rejects.toThrow("unsupported loader type 'neoforge'");
+  });
+
+  test("ensureFile in full mode redownloads corrupt file when hash mismatches, verifies clean file, and redownloads when no hash is present", async () => {
+    const testFileDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-ensure-test-"));
+    const destPath = path.join(testFileDir, "test-lib.jar");
+
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response("healthy-content");
+      },
+    });
+
+    try {
+      // 1. Write corrupt content to destPath
+      fs.writeFileSync(destPath, "corrupted-content");
+
+      // Compute healthy sha256
+      const healthyHash = crypto.createHash("sha256").update("healthy-content").digest("hex");
+
+      // In full mode, corrupt file should be detected and re-downloaded
+      const changed = await (MinecraftBootstrap as any).ensureFile(
+        `http://127.0.0.1:${server.port}/test-lib.jar`,
+        destPath,
+        healthyHash,
+        undefined,
+        "full",
+        "sha256"
+      );
+
+      expect(changed).toBe(true);
+      expect(fs.readFileSync(destPath, "utf-8")).toBe("healthy-content");
+
+      // 2. Running again with healthy content should return false (no re-download)
+      const unchanged = await (MinecraftBootstrap as any).ensureFile(
+        `http://127.0.0.1:${server.port}/test-lib.jar`,
+        destPath,
+        healthyHash,
+        undefined,
+        "full",
+        "sha256"
+      );
+      expect(unchanged).toBe(false);
+
+      // 3. In full mode with NO expected hash, must re-download rather than assume verified
+      const redownloadedWithoutHash = await (MinecraftBootstrap as any).ensureFile(
+        `http://127.0.0.1:${server.port}/test-lib.jar`,
+        destPath,
+        undefined,
+        undefined,
+        "full",
+        "sha256"
+      );
+      expect(redownloadedWithoutHash).toBe(true);
+    } finally {
+      server.stop(true);
+      fs.rmSync(testFileDir, { recursive: true, force: true });
+    }
   });
 });

@@ -412,4 +412,36 @@ describe("GameRunner launch flow & Quick Play", () => {
       )
     ).rejects.toThrow("unsupported loader type 'neoforge'");
   });
+
+  test("logs starting Minecraft client via dynamic mainClass without KnotClient hardcode", async () => {
+    spawnedCalls = [];
+    bootstrapCalls = [];
+    const loggedMessages: string[] = [];
+
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.99.123-test" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+      launch: {},
+    };
+
+    await GameRunner.launchGame(
+      dummyUser,
+      (entry) => loggedMessages.push(entry.message),
+      () => {},
+      release
+    );
+
+    const startLog = loggedMessages.find((m) => m.startsWith("Starting Minecraft client via"));
+    expect(startLog).toBeDefined();
+    expect(startLog).toBe("Starting Minecraft client via net.fabricmc.loader.impl.launch.knot.KnotClient...");
+    expect(startLog?.includes("via KnotClient (")).toBe(false);
+  });
 });

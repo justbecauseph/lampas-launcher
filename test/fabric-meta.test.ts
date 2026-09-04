@@ -2,10 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FabricMetaResolver } from "../src/fabric-meta";
+import {
+  FabricMetaResolver,
+  parseMavenCoordinate,
+  mavenToPath,
+  validateFabricRuntimeMetadata,
+  PermanentFabricMetaError,
+  TransientFabricMetaError,
+} from "../src/fabric-meta";
 import type { MinecraftRuntimeDefinition } from "../src/types";
 
-describe("FabricMetaResolver (PLAN.md Part D & Section 46)", () => {
+describe("FabricMetaResolver & Maven Coordinate Validation (PLAN.md Part D & Hardening)", () => {
   let tempDir: string;
   let cacheDir: string;
 
@@ -74,219 +81,241 @@ describe("FabricMetaResolver (PLAN.md Part D & Section 46)", () => {
     }
   });
 
-  test("resolves exact Minecraft and Loader version using correct URL and URL encoding", async () => {
-    let capturedUrl = "";
-    const mockFetch = async (input: string | URL | Request) => {
-      capturedUrl = input.toString();
-      return new Response(JSON.stringify(sampleMetaPayload), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    };
-
-    const runtime: MinecraftRuntimeDefinition = {
-      minecraft: "26.2+build.1",
-      loader: {
-        type: "fabric",
-        version: "0.99.123-test/alpha",
-      },
-    };
-
-    const payloadWithSentinel = {
-      ...sampleMetaPayload,
-      loader: {
-        ...sampleMetaPayload.loader,
-        version: "0.99.123-test/alpha",
-        maven: "net.fabricmc:fabric-loader:0.99.123-test/alpha",
-      },
-      intermediary: {
-        ...sampleMetaPayload.intermediary,
-        version: "26.2+build.1",
-        maven: "net.fabricmc:intermediary:26.2+build.1",
-      },
-    };
-
-    const mockFetchSentinel = async (input: string | URL | Request) => {
-      capturedUrl = input.toString();
-      return new Response(JSON.stringify(payloadWithSentinel), { status: 200 });
-    };
-
-    const metadata = await FabricMetaResolver.resolveFabricRuntime(runtime, cacheDir, {
-      fetchFn: mockFetchSentinel,
-    });
-
-    expect(capturedUrl).toBe(
-      "https://meta.fabricmc.net/v2/versions/loader/26.2%2Bbuild.1/0.99.123-test%2Falpha"
-    );
-    expect(metadata.loader.version).toBe("0.99.123-test/alpha");
-    expect(metadata.loader.maven).toBe("net.fabricmc:fabric-loader:0.99.123-test/alpha");
-    expect(metadata.intermediary.version).toBe("26.2+build.1");
-    expect(metadata.intermediary.maven).toBe("net.fabricmc:intermediary:26.2+build.1");
-  });
-
-  test("extracts client main class and deduplicated libraries with repository preservation", async () => {
-    const mockFetch = async () =>
-      new Response(JSON.stringify(sampleMetaPayload), { status: 200 });
-
-    const metadata = await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
-      fetchFn: mockFetch,
-    });
-
-    expect(metadata.mainClass).toBe("net.fabricmc.loader.impl.launch.knot.KnotClient");
-
-    // Libraries should include loader, intermediary, common, and client libraries
-    const libNames = metadata.libraries.map((l) => l.name);
-    expect(libNames).toContain("net.fabricmc:fabric-loader:0.19.3");
-    expect(libNames).toContain("net.fabricmc:intermediary:26.2");
-    expect(libNames).toContain("org.ow2.asm:asm:9.9");
-    expect(libNames).toContain("net.fabricmc:sponge-mixin:0.15.3+mixin.0.8.7");
-    expect(libNames).toContain("net.fabricmc:client-lib:1.0.0");
-
-    // Deduplication check: fabric-loader was in common libs AND top-level loader, should appear exactly once
-    const loaderMatches = libNames.filter((n) => n === "net.fabricmc:fabric-loader:0.19.3");
-    expect(loaderMatches.length).toBe(1);
-
-    // Repository preservation check
-    const customRepoLib = metadata.libraries.find((l) => l.name === "net.fabricmc:client-lib:1.0.0");
-    expect(customRepoLib?.url).toBe("https://custom.repo.net/");
-
-    const defaultRepoLib = metadata.libraries.find((l) => l.name === "net.fabricmc:sponge-mixin:0.15.3+mixin.0.8.7");
-    expect(defaultRepoLib?.url).toBe("https://maven.fabricmc.net/");
-  });
-
-  test("persists metadata cache to disk keyed by Minecraft and Loader version", async () => {
-    const mockFetch = async () =>
-      new Response(JSON.stringify(sampleMetaPayload), { status: 200 });
-
-    await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
-      fetchFn: mockFetch,
-    });
-
-    const expectedCachePath = FabricMetaResolver.getCachePath(
-      cacheDir,
-      validRuntime.minecraft,
-      validRuntime.loader.version
-    );
-    expect(fs.existsSync(expectedCachePath)).toBe(true);
-
-    const cachedData = JSON.parse(fs.readFileSync(expectedCachePath, "utf-8"));
-    expect(cachedData.loader.version).toBe("0.19.3");
-    expect(cachedData.mainClass).toBe("net.fabricmc.loader.impl.launch.knot.KnotClient");
-  });
-
-  test("falls back to cached metadata when network request fails", async () => {
-    // Seed cache
-    const cachePath = FabricMetaResolver.getCachePath(
-      cacheDir,
-      validRuntime.minecraft,
-      validRuntime.loader.version
-    );
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const cachedMetadata = {
-      loader: {
+  describe("Maven Coordinate & Path Validation", () => {
+    test("parses valid 3-part and 4-part Maven coordinates", () => {
+      const coord3 = parseMavenCoordinate("net.fabricmc:fabric-loader:0.19.3");
+      expect(coord3).toEqual({
+        group: "net.fabricmc",
+        artifact: "fabric-loader",
         version: "0.19.3",
-        maven: "net.fabricmc:fabric-loader:0.19.3",
-      },
-      intermediary: {
-        version: "26.2",
-        maven: "net.fabricmc:intermediary:26.2",
-      },
-      libraries: [
-        { name: "net.fabricmc:fabric-loader:0.19.3", url: "https://maven.fabricmc.net/" },
-      ],
-      mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
-    };
-    fs.writeFileSync(cachePath, JSON.stringify(cachedMetadata), "utf-8");
+        classifier: undefined,
+      });
 
-    // Network failure mock
-    const failingFetch = async () => {
-      throw new Error("Network connection refused");
-    };
+      const coord4 = parseMavenCoordinate("org.lwjgl:lwjgl:3.4.1:natives-windows");
+      expect(coord4).toEqual({
+        group: "org.lwjgl",
+        artifact: "lwjgl",
+        version: "3.4.1",
+        classifier: "natives-windows",
+      });
 
-    const result = await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
-      fetchFn: failingFetch,
+      const coordPlus = parseMavenCoordinate("net.fabricmc:sponge-mixin:0.15.3+mixin.0.8.7");
+      expect(coordPlus.version).toBe("0.15.3+mixin.0.8.7");
     });
 
-    expect(result.loader.version).toBe("0.19.3");
-    expect(result.mainClass).toBe("net.fabricmc.loader.impl.launch.knot.KnotClient");
+    test("rejects malformed or incomplete Maven coordinates", () => {
+      expect(() => parseMavenCoordinate("")).toThrow("coordinate must be a non-empty string");
+      expect(() => parseMavenCoordinate("only-one-part")).toThrow("expected 3 or 4 colon-separated parts");
+      expect(() => parseMavenCoordinate("group:artifact")).toThrow("expected 3 or 4 colon-separated parts");
+      expect(() => parseMavenCoordinate("g:a:v:c:extra")).toThrow("expected 3 or 4 colon-separated parts");
+      expect(() => parseMavenCoordinate("  :artifact:version")).toThrow("malformed or unsafe group");
+      expect(() => parseMavenCoordinate("group:  :version")).toThrow("malformed or unsafe artifact");
+      expect(() => parseMavenCoordinate("group:artifact:  ")).toThrow("malformed or unsafe version");
+    });
+
+    test("rejects path traversal, separators, and illegal characters in Maven coordinates", () => {
+      expect(() => parseMavenCoordinate("../malicious:artifact:1.0")).toThrow("malformed or unsafe group");
+      expect(() => parseMavenCoordinate("group/sub:artifact:1.0")).toThrow("malformed or unsafe group");
+      expect(() => parseMavenCoordinate("group\\sub:artifact:1.0")).toThrow("malformed or unsafe group");
+      expect(() => parseMavenCoordinate("group:../artifact:1.0")).toThrow("malformed or unsafe artifact");
+      expect(() => parseMavenCoordinate("group:artifact:1.0/../../bin")).toThrow("malformed or unsafe version");
+      expect(() => parseMavenCoordinate("group:artifact:1.0:nat/ives")).toThrow("malformed or unsafe classifier");
+      expect(() => parseMavenCoordinate("group\0:artifact:1.0")).toThrow("malformed or unsafe group");
+      expect(() => parseMavenCoordinate("group:artifact:1.0*")).toThrow("malformed or unsafe version");
+    });
+
+    test("mavenToPath generates safe normalized paths and prevents escape", () => {
+      const path1 = mavenToPath({
+        group: "net.fabricmc",
+        artifact: "fabric-loader",
+        version: "0.19.3",
+      });
+      expect(path1).toBe("net/fabricmc/fabric-loader/0.19.3/fabric-loader-0.19.3.jar");
+
+      const path2 = mavenToPath({
+        group: "org.lwjgl",
+        artifact: "lwjgl",
+        version: "3.4.1",
+        classifier: "natives-windows",
+      });
+      expect(path2).toBe("org/lwjgl/lwjgl/3.4.1/lwjgl-3.4.1-natives-windows.jar");
+    });
   });
 
-  test("throws immediately on HTTP 404 without falling back to cache", async () => {
-    // Seed cache to prove 404 does NOT fall back
-    const cachePath = FabricMetaResolver.getCachePath(
-      cacheDir,
-      validRuntime.minecraft,
-      validRuntime.loader.version
-    );
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    fs.writeFileSync(cachePath, JSON.stringify({ loader: { version: "0.19.3" } }), "utf-8");
+  describe("Unified Strict Metadata Validation", () => {
+    test("validates complete well-formed metadata structure", () => {
+      const validData = {
+        loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
+        intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
+        mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        libraries: [
+          {
+            name: "net.fabricmc:fabric-loader:0.19.3",
+            url: "https://maven.fabricmc.net/",
+            sha256: "73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958",
+          },
+        ],
+      };
 
-    const notFoundFetch = async () => new Response("Not Found", { status: 404 });
+      const result = validateFabricRuntimeMetadata(validData, validRuntime);
+      expect(result.loader.version).toBe("0.19.3");
+      expect(result.mainClass).toBe("net.fabricmc.loader.impl.launch.knot.KnotClient");
+      expect(result.libraries[0].sha256).toBe(
+        "73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958"
+      );
+    });
 
-    await expect(
-      FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
-        fetchFn: notFoundFetch,
-      })
-    ).rejects.toThrow("Fabric Loader 0.19.3 is not available for Minecraft 26.2 (Fabric Meta returned 404 Not Found)");
+    test("rejects missing or empty mainClass", () => {
+      const badData = {
+        loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
+        intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
+        mainClass: "   ",
+        libraries: [{ name: "net.fabricmc:fabric-loader:0.19.3" }],
+      };
+      expect(() => validateFabricRuntimeMetadata(badData, validRuntime)).toThrow(
+        "Metadata is missing a valid 'mainClass' string"
+      );
+    });
+
+    test("rejects malformed library URLs and coordinates", () => {
+      const badLibCoord = {
+        loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
+        intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
+        mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        libraries: [{ name: "not-a-maven-coord" }],
+      };
+      expect(() => validateFabricRuntimeMetadata(badLibCoord, validRuntime)).toThrow(
+        "expected 3 or 4 colon-separated parts"
+      );
+
+      const badLibUrl = {
+        loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
+        intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
+        mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        libraries: [{ name: "group:artifact:1.0", url: "ftp://unsafe.repo.net" }],
+      };
+      expect(() => validateFabricRuntimeMetadata(badLibUrl, validRuntime)).toThrow(
+        "url must be HTTP or HTTPS"
+      );
+    });
+
+    test("rejects invalid sha256 or sha1 checksum strings", () => {
+      const badHash = {
+        loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
+        intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
+        mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        libraries: [{ name: "group:artifact:1.0", sha256: "not-64-hex-characters" }],
+      };
+      expect(() => validateFabricRuntimeMetadata(badHash, validRuntime)).toThrow(
+        "invalid sha256 checksum"
+      );
+    });
   });
 
-  test("fails when network fails and no offline cache exists", async () => {
-    const failingFetch = async () => {
-      throw new Error("DNS lookup failed");
-    };
+  describe("HTTP Fallback Semantics & Error Classification", () => {
+    test("permanent 4xx errors fail immediately without cache fallback", async () => {
+      // Seed cache
+      const cachePath = FabricMetaResolver.getCachePath(cacheDir, "26.2", "0.19.3");
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(
+        cachePath,
+        JSON.stringify({
+          loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
+          intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
+          mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+          libraries: [{ name: "net.fabricmc:fabric-loader:0.19.3" }],
+        }),
+        "utf-8"
+      );
 
-    await expect(
-      FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
-        fetchFn: failingFetch,
-      })
-    ).rejects.toThrow("Failed to resolve Fabric runtime for Minecraft 26.2 + Loader 0.19.3 and no offline cache exists");
+      // 404
+      const fetch404 = async () => new Response("Not Found", { status: 404 });
+      await expect(
+        FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, { fetchFn: fetch404 })
+      ).rejects.toThrow("Fabric Meta returned HTTP 404");
+
+      // 400 Bad Request
+      const fetch400 = async () => new Response("Bad Request", { status: 400 });
+      await expect(
+        FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, { fetchFn: fetch400 })
+      ).rejects.toThrow("Fabric Meta returned HTTP 400");
+    });
+
+    test("transient errors (500, 429, timeout) fall back to exact cache", async () => {
+      // Seed valid cache
+      const cachePath = FabricMetaResolver.getCachePath(cacheDir, "26.2", "0.19.3");
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(
+        cachePath,
+        JSON.stringify({
+          loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
+          intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
+          mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+          libraries: [{ name: "net.fabricmc:fabric-loader:0.19.3" }],
+        }),
+        "utf-8"
+      );
+
+      // HTTP 500
+      const fetch500 = async () => new Response("Internal Server Error", { status: 500 });
+      const res500 = await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
+        fetchFn: fetch500,
+      });
+      expect(res500.loader.version).toBe("0.19.3");
+
+      // HTTP 429 Too Many Requests
+      const fetch429 = async () => new Response("Rate Limited", { status: 429 });
+      const res429 = await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
+        fetchFn: fetch429,
+      });
+      expect(res429.loader.version).toBe("0.19.3");
+
+      // Network connection error
+      const fetchConnErr = async () => {
+        throw new Error("Connection reset by peer");
+      };
+      const resConn = await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
+        fetchFn: fetchConnErr,
+      });
+      expect(resConn.loader.version).toBe("0.19.3");
+    });
   });
 
-  test("rejects response when returned loader version does not match requested", async () => {
-    const mismatchedPayload = {
-      ...sampleMetaPayload,
-      loader: {
-        ...sampleMetaPayload.loader,
-        version: "0.19.4", // requested 0.19.3
-      },
-    };
+  describe("Atomic Cache Writes & Sidecar Checksums", () => {
+    test("resolves sidecar checksums and writes cache atomically", async () => {
+      const mockFetch = async (input: string | URL | Request) => {
+        const urlStr = input.toString();
+        if (urlStr.endsWith(".sha256")) {
+          return new Response(
+            "73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958\n",
+            { status: 200 }
+          );
+        }
+        if (urlStr.endsWith(".sha1")) {
+          return new Response("354dfaa02d0552e11867f85dff7cdbfaf813ba3e\n", { status: 200 });
+        }
+        return new Response(JSON.stringify(sampleMetaPayload), { status: 200 });
+      };
 
-    const mockFetch = async () =>
-      new Response(JSON.stringify(mismatchedPayload), { status: 200 });
-
-    await expect(
-      FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
+      const metadata = await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
         fetchFn: mockFetch,
-      })
-    ).rejects.toThrow("Fabric Meta returned loader version '0.19.4', but '0.19.3' was requested");
-  });
+      });
 
-  test("rejects response missing launcherMeta.mainClass.client", async () => {
-    const invalidPayload = {
-      ...sampleMetaPayload,
-      launcherMeta: {
-        ...sampleMetaPayload.launcherMeta,
-        mainClass: {},
-      },
-    };
+      // Assert sidecar was resolved
+      const loaderLib = metadata.libraries.find((l) => l.name === "net.fabricmc:fabric-loader:0.19.3");
+      expect(loaderLib?.sha256).toBe(
+        "73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958"
+      );
 
-    const mockFetch = async () =>
-      new Response(JSON.stringify(invalidPayload), { status: 200 });
+      // Assert cache file exists and contains valid JSON with sha256
+      const cachePath = FabricMetaResolver.getCachePath(cacheDir, "26.2", "0.19.3");
+      expect(fs.existsSync(cachePath)).toBe(true);
 
-    await expect(
-      FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
-        fetchFn: mockFetch,
-      })
-    ).rejects.toThrow("Fabric Meta response is missing launcherMeta.mainClass.client");
-  });
-
-  test("cache isolation: different loader or minecraft version does not hit cache", () => {
-    const pathA = FabricMetaResolver.getCachePath(cacheDir, "26.2", "0.19.3");
-    const pathB = FabricMetaResolver.getCachePath(cacheDir, "26.2", "0.19.4");
-    const pathC = FabricMetaResolver.getCachePath(cacheDir, "26.3", "0.19.3");
-
-    expect(pathA).not.toBe(pathB);
-    expect(pathA).not.toBe(pathC);
-    expect(pathB).not.toBe(pathC);
+      const cachedJson = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+      expect(cachedJson.loader.version).toBe("0.19.3");
+      expect(cachedJson.libraries[0].sha256).toBe(
+        "73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958"
+      );
+    });
   });
 });

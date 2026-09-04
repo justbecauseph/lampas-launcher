@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld("lampas", {
     repair: (): Promise<{ success: boolean; message: string; version: string; packName: string }> =>
       ipcRenderer.invoke("sync:repair"),
     getModCatalog: (): Promise<any[]> => ipcRenderer.invoke("sync:getModCatalog"),
+    getInstalledRuntime: (): Promise<{ minecraft: string; loader: { type: string; version: string } } | null> =>
+      ipcRenderer.invoke("sync:getInstalledRuntime"),
     onProgress: (callback: (progress: SyncProgress) => void) => {
       const handler = (_: any, data: SyncProgress) => callback(data);
       ipcRenderer.on("sync:progress", handler);

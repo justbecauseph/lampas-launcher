@@ -2,10 +2,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { unzipSync } from "fflate";
 import { downloadVerified, hashFile } from "./file-transfer";
-import { FabricMetaResolver, type FabricMetaResolverOptions } from "./fabric-meta";
+import {
+  FabricMetaResolver,
+  type FabricMetaResolverOptions,
+  parseMavenCoordinate,
+  mavenToPath,
+  type ParsedMavenCoordinate,
+} from "./fabric-meta";
 import { validateRuntimeDefinition } from "./runtime-definition";
 import type { MinecraftRuntimeDefinition } from "./types";
 import versionMeta262 from "./version-meta-26.2.json";
+
+export { parseMavenCoordinate, mavenToPath, type ParsedMavenCoordinate };
 
 export interface MavenCoordinate {
   name: string;
@@ -21,31 +29,6 @@ export interface MavenCoordinate {
     };
     classifiers?: Record<string, { sha1: string; size: number; url: string; path?: string }>;
   };
-}
-
-export function parseMavenCoordinate(name: string): {
-  group: string;
-  artifact: string;
-  version: string;
-  classifier?: string;
-} {
-  const parts = name.split(":");
-  const group = parts[0];
-  const artifact = parts[1];
-  const version = parts[2];
-  const classifier = parts.length > 3 ? parts[3] : undefined;
-  return { group, artifact, version, classifier };
-}
-
-export function mavenToPath(coord: {
-  group: string;
-  artifact: string;
-  version: string;
-  classifier?: string;
-}): string {
-  const groupPath = coord.group.replace(/\./g, "/");
-  const fileSuffix = coord.classifier ? `-${coord.classifier}` : "";
-  return `${groupPath}/${coord.artifact}/${coord.version}/${coord.artifact}-${coord.version}${fileSuffix}.jar`;
 }
 
 function isLibraryAllowed(lib: MavenCoordinate): boolean {
@@ -78,27 +61,33 @@ export class MinecraftBootstrap {
   private static async ensureFile(
     url: string,
     destPath: string,
-    expectedSha1: string | undefined,
+    expectedHash: string | undefined,
     expectedSize: number | undefined,
-    verificationMode: "fast" | "full"
+    verificationMode: "fast" | "full",
+    algorithm: "sha1" | "sha256" = "sha1"
   ): Promise<boolean> {
     if (fs.existsSync(destPath)) {
       const stat = fs.statSync(destPath);
       if (!expectedSize || stat.size === expectedSize) {
-        if (
-          verificationMode === "fast" ||
-          !expectedSha1 ||
-          (await hashFile(destPath, "sha1")) === expectedSha1
-        ) {
+        if (verificationMode === "fast") {
           return false;
         }
+        // In "full" mode: verify hash if available
+        if (expectedHash) {
+          const actualHash = await hashFile(destPath, algorithm);
+          if (actualHash.toLowerCase() === expectedHash.toLowerCase()) {
+            return false;
+          }
+        }
+        // If no expectedHash, or if hash mismatch: DO NOT return false!
+        // Fall through to re-download below.
       }
     }
 
     await fs.promises.rm(destPath, { force: true });
     await downloadVerified(url, destPath, {
-      algorithm: "sha1",
-      expectedHash: expectedSha1,
+      algorithm,
+      expectedHash: expectedHash ? expectedHash.toLowerCase() : undefined,
       expectedSize,
       headers: { "User-Agent": "Lampas-Launcher/1.0" },
     });
@@ -189,8 +178,10 @@ export class MinecraftBootstrap {
       const destPath = path.join(librariesDir, relPath);
       const repoUrl = lib.url || "https://maven.fabricmc.net/";
       const downloadUrl = `${repoUrl.replace(/\/+$/, "")}/${relPath}`;
+      const hash = lib.sha256 || lib.sha1;
+      const algorithm: "sha256" | "sha1" = lib.sha256 ? "sha256" : "sha1";
 
-      await this.ensureFile(downloadUrl, destPath, undefined, undefined, verificationMode);
+      await this.ensureFile(downloadUrl, destPath, hash, undefined, verificationMode, algorithm);
       fabricPaths.push(destPath);
     }
     classpath.push(...fabricPaths);

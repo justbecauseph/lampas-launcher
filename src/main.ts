@@ -184,6 +184,25 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle("sync:getModCatalog", () => LauncherSync.getModCatalog());
+  ipcMain.handle("sync:getInstalledRuntime", () => {
+    const config = ConfigManager.get();
+    const releasePath = path.join(config.gameDir, ".lampas", "release.json");
+    if (fs.existsSync(releasePath)) {
+      try {
+        const release = JSON.parse(fs.readFileSync(releasePath, "utf-8"));
+        if (release?.minecraft && release?.loader?.version) {
+          return {
+            minecraft: release.minecraft,
+            loader: {
+              type: release.loader.type || "fabric",
+              version: release.loader.version,
+            },
+          };
+        }
+      } catch {}
+    }
+    return null;
+  });
 
   ipcMain.handle("mods:browseAndAdd", async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {

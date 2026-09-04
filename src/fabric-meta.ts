@@ -3,9 +3,97 @@ import * as path from "node:path";
 import { validateRuntimeDefinition } from "./runtime-definition";
 import type { MinecraftRuntimeDefinition } from "./types";
 
+export class PermanentFabricMetaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentFabricMetaError";
+  }
+}
+
+export class TransientFabricMetaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransientFabricMetaError";
+  }
+}
+
+export interface ParsedMavenCoordinate {
+  group: string;
+  artifact: string;
+  version: string;
+  classifier?: string;
+}
+
+export function parseMavenCoordinate(name: string): ParsedMavenCoordinate {
+  if (typeof name !== "string" || !name.trim()) {
+    throw new Error(`Invalid Maven coordinate: coordinate must be a non-empty string.`);
+  }
+
+  const parts = name.split(":");
+  if (parts.length < 3 || parts.length > 4) {
+    throw new Error(
+      `Invalid Maven coordinate '${name}': expected 3 or 4 colon-separated parts (group:artifact:version[:classifier]), got ${parts.length}.`
+    );
+  }
+
+  const group = parts[0].trim();
+  const artifact = parts[1].trim();
+  const version = parts[2].trim();
+  const classifier = parts.length === 4 ? parts[3].trim() : undefined;
+
+  // Validate group (e.g. net.fabricmc, org.ow2.asm)
+  if (
+    !group ||
+    !/^[a-zA-Z0-9_.-]+$/.test(group) ||
+    group.includes("..") ||
+    group.startsWith(".") ||
+    group.endsWith(".")
+  ) {
+    throw new Error(`Invalid Maven coordinate '${name}': malformed or unsafe group '${group}'.`);
+  }
+
+  // Validate artifact (e.g. fabric-loader)
+  if (!artifact || !/^[a-zA-Z0-9_.-]+$/.test(artifact) || artifact.includes("..")) {
+    throw new Error(`Invalid Maven coordinate '${name}': malformed or unsafe artifact '${artifact}'.`);
+  }
+
+  // Validate version (e.g. 0.19.3, 0.15.3+mixin.0.8.7)
+  if (!version || !/^[a-zA-Z0-9_.+~-]+$/.test(version) || version.includes("..")) {
+    throw new Error(`Invalid Maven coordinate '${name}': malformed or unsafe version '${version}'.`);
+  }
+
+  // Validate classifier if present
+  if (classifier !== undefined) {
+    if (!classifier || !/^[a-zA-Z0-9_.-]+$/.test(classifier) || classifier.includes("..")) {
+      throw new Error(`Invalid Maven coordinate '${name}': malformed or unsafe classifier '${classifier}'.`);
+    }
+  }
+
+  return { group, artifact, version, classifier };
+}
+
+export function mavenToPath(coord: ParsedMavenCoordinate): string {
+  const groupPath = coord.group.replace(/\./g, "/");
+  const fileSuffix = coord.classifier ? `-${coord.classifier}` : "";
+  const relPath = `${groupPath}/${coord.artifact}/${coord.version}/${coord.artifact}-${coord.version}${fileSuffix}.jar`;
+
+  if (
+    relPath.includes("..") ||
+    relPath.startsWith("/") ||
+    relPath.startsWith("\\") ||
+    relPath.includes("\0")
+  ) {
+    throw new Error(`Unsafe Maven path derived from coordinate: '${relPath}'`);
+  }
+
+  return relPath;
+}
+
 export interface FabricLibraryDefinition {
   name: string;
   url?: string;
+  sha256?: string;
+  sha1?: string;
 }
 
 export interface FabricRuntimeMetadata {
@@ -21,10 +109,108 @@ export interface FabricRuntimeMetadata {
   mainClass: string;
 }
 
+export function validateFabricRuntimeMetadata(
+  data: unknown,
+  runtime: MinecraftRuntimeDefinition
+): FabricRuntimeMetadata {
+  if (!data || typeof data !== "object") {
+    throw new Error(
+      `[FabricMeta] Malformed metadata: expected an object, got ${typeof data}.`
+    );
+  }
+
+  const raw = data as Record<string, any>;
+
+  // Validate loader
+  if (!raw.loader || typeof raw.loader !== "object") {
+    throw new Error(`[FabricMeta] Metadata is missing 'loader' object.`);
+  }
+  if (raw.loader.version !== runtime.loader.version) {
+    throw new Error(
+      `[FabricMeta] Loader version mismatch: expected '${runtime.loader.version}', got '${raw.loader.version}'.`
+    );
+  }
+  parseMavenCoordinate(raw.loader.maven);
+
+  // Validate intermediary
+  if (!raw.intermediary || typeof raw.intermediary !== "object") {
+    throw new Error(`[FabricMeta] Metadata is missing 'intermediary' object.`);
+  }
+  if (typeof raw.intermediary.version !== "string" || !raw.intermediary.version.trim()) {
+    throw new Error(`[FabricMeta] Intermediary mapping version is missing or empty.`);
+  }
+  parseMavenCoordinate(raw.intermediary.maven);
+
+  // Validate mainClass
+  if (typeof raw.mainClass !== "string" || !raw.mainClass.trim()) {
+    throw new Error(`[FabricMeta] Metadata is missing a valid 'mainClass' string.`);
+  }
+
+  // Validate libraries
+  if (!Array.isArray(raw.libraries) || raw.libraries.length === 0) {
+    throw new Error(`[FabricMeta] Metadata has missing or empty libraries array.`);
+  }
+
+  const validatedLibraries: FabricLibraryDefinition[] = [];
+  for (let i = 0; i < raw.libraries.length; i++) {
+    const lib = raw.libraries[i];
+    if (!lib || typeof lib !== "object") {
+      throw new Error(`[FabricMeta] Library at index ${i} is not a valid object.`);
+    }
+    if (typeof lib.name !== "string" || !lib.name.trim()) {
+      throw new Error(`[FabricMeta] Library at index ${i} has missing or empty name.`);
+    }
+    parseMavenCoordinate(lib.name);
+
+    if (lib.url !== undefined) {
+      if (typeof lib.url !== "string" || !lib.url.trim()) {
+        throw new Error(`[FabricMeta] Library '${lib.name}' has invalid url.`);
+      }
+      try {
+        const parsedUrl = new URL(lib.url);
+        if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+          throw new Error(`[FabricMeta] Library '${lib.name}' url must be HTTP or HTTPS.`);
+        }
+      } catch (err: any) {
+        throw new Error(`[FabricMeta] Library '${lib.name}' has malformed url '${lib.url}': ${err.message}`);
+      }
+    }
+
+    if (lib.sha256 !== undefined && !/^[0-9a-f]{64}$/i.test(lib.sha256)) {
+      throw new Error(`[FabricMeta] Library '${lib.name}' has invalid sha256 checksum: '${lib.sha256}'.`);
+    }
+
+    if (lib.sha1 !== undefined && !/^[0-9a-f]{40}$/i.test(lib.sha1)) {
+      throw new Error(`[FabricMeta] Library '${lib.name}' has invalid sha1 checksum: '${lib.sha1}'.`);
+    }
+
+    validatedLibraries.push({
+      name: lib.name.trim(),
+      url: lib.url?.trim(),
+      sha256: lib.sha256 ? lib.sha256.toLowerCase() : undefined,
+      sha1: lib.sha1 ? lib.sha1.toLowerCase() : undefined,
+    });
+  }
+
+  return {
+    loader: {
+      version: raw.loader.version,
+      maven: raw.loader.maven,
+    },
+    intermediary: {
+      version: raw.intermediary.version,
+      maven: raw.intermediary.maven,
+    },
+    libraries: validatedLibraries,
+    mainClass: raw.mainClass.trim(),
+  };
+}
+
 export interface FabricMetaResolverOptions {
   metaBaseUrl?: string;
   fetchFn?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   timeoutMs?: number;
+  resolveSidecars?: boolean;
 }
 
 export class FabricMetaResolver {
@@ -46,6 +232,7 @@ export class FabricMetaResolver {
     const metaBaseUrl = options?.metaBaseUrl || "https://meta.fabricmc.net";
     const customFetch = options?.fetchFn || fetch;
     const timeoutMs = options?.timeoutMs ?? 5000;
+    const resolveSidecars = options?.resolveSidecars ?? true;
 
     const url = `${metaBaseUrl.replace(/\/+$/, "")}/v2/versions/loader/${encodeURIComponent(runtime.minecraft)}/${encodeURIComponent(runtime.loader.version)}`;
     const cachePath = cacheDir
@@ -59,14 +246,16 @@ export class FabricMetaResolver {
       const signal = AbortSignal.timeout(timeoutMs);
       const response = await customFetch(url, { signal });
 
-      if (response.status === 404) {
-        throw new Error(
-          `[FabricMeta] Fabric Loader ${runtime.loader.version} is not available for Minecraft ${runtime.minecraft} (Fabric Meta returned 404 Not Found).`
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        // Permanent 4xx error (404 Not Found, 400 Bad Request, etc.)
+        throw new PermanentFabricMetaError(
+          `[FabricMeta] Fabric Loader ${runtime.loader.version} is not available for Minecraft ${runtime.minecraft} (Fabric Meta returned HTTP ${response.status} ${response.statusText}).`
         );
       }
 
       if (!response.ok) {
-        throw new Error(
+        // Transient error (429 Rate Limit, 500, 502, 503, 504)
+        throw new TransientFabricMetaError(
           `[FabricMeta] Fabric Meta query failed with HTTP ${response.status} ${response.statusText} (${url}).`
         );
       }
@@ -74,21 +263,42 @@ export class FabricMetaResolver {
       data = await response.json();
     } catch (err: any) {
       networkError = err;
-      // If 404, fail immediately without cache fallback
-      if (err.message && err.message.includes("404 Not Found")) {
+      if (err instanceof PermanentFabricMetaError) {
         throw err;
       }
     }
 
-    // If network succeeded, validate and parse response
+    // If network succeeded, validate and resolve sidecar hashes
     if (data) {
-      const metadata = this.validateAndTransform(data, runtime);
+      const rawMetadata = this.transformRawResponse(data, runtime);
 
-      // Save to cache if cache directory provided
+      // Resolve sidecar checksums (SHA-256 / SHA-1) from Maven repository
+      if (resolveSidecars) {
+        await Promise.all(
+          rawMetadata.libraries.map(async (lib) => {
+            if (!lib.sha256 && !lib.sha1) {
+              const checksums = await this.fetchSidecarChecksum(lib, customFetch, timeoutMs);
+              if (checksums.sha256) lib.sha256 = checksums.sha256;
+              if (checksums.sha1) lib.sha1 = checksums.sha1;
+            }
+          })
+        );
+      }
+
+      // Strictly validate transformed metadata before caching
+      const metadata = validateFabricRuntimeMetadata(rawMetadata, runtime);
+
+      // Atomically persist to disk cache
       if (cachePath) {
         try {
-          fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-          fs.writeFileSync(cachePath, JSON.stringify(metadata, null, 2), "utf-8");
+          const dir = path.dirname(cachePath);
+          fs.mkdirSync(dir, { recursive: true });
+          const tempPath = path.join(
+            dir,
+            `.tmp-${path.basename(cachePath)}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+          );
+          fs.writeFileSync(tempPath, JSON.stringify(metadata, null, 2), "utf-8");
+          fs.renameSync(tempPath, cachePath);
         } catch {
           // Non-fatal cache write error
         }
@@ -97,11 +307,11 @@ export class FabricMetaResolver {
       return metadata;
     }
 
-    // Network failed or offline: check cache
+    // Network failed or offline: check exact cache
     if (cachePath && fs.existsSync(cachePath)) {
       try {
         const cachedRaw = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
-        return this.validateCachedMetadata(cachedRaw, runtime);
+        return validateFabricRuntimeMetadata(cachedRaw, runtime);
       } catch (cacheErr: any) {
         throw new Error(
           `[FabricMeta] Network query failed (${networkError?.message}) and cached metadata at '${cachePath}' is corrupted: ${cacheErr.message}`
@@ -114,10 +324,15 @@ export class FabricMetaResolver {
     );
   }
 
-  private static validateAndTransform(
+  private static transformRawResponse(
     data: any,
     runtime: MinecraftRuntimeDefinition
-  ): FabricRuntimeMetadata {
+  ): {
+    loader: { version: string; maven: string };
+    intermediary: { version: string; maven: string };
+    libraries: FabricLibraryDefinition[];
+    mainClass: string;
+  } {
     if (!data || typeof data !== "object") {
       throw new Error(
         `[FabricMeta] Malformed Fabric Meta response for Minecraft ${runtime.minecraft} and Loader ${runtime.loader.version}.`
@@ -127,38 +342,39 @@ export class FabricMetaResolver {
     if (
       !data.loader ||
       typeof data.loader !== "object" ||
-      data.loader.version !== runtime.loader.version ||
-      typeof data.loader.maven !== "string" ||
-      !data.loader.maven.trim()
+      typeof data.loader.version !== "string" ||
+      typeof data.loader.maven !== "string"
     ) {
-      if (data?.loader?.version && data.loader.version !== runtime.loader.version) {
-        throw new Error(
-          `[FabricMeta] Fabric Meta returned loader version '${data?.loader?.version}', but '${runtime.loader.version}' was requested.`
-        );
-      }
       throw new Error(
-        `[FabricMeta] Fabric Meta response has missing or invalid loader metadata (expected valid 'version' and 'maven' coordinates).`
+        `[FabricMeta] Fabric Meta response has missing or invalid loader metadata.`
       );
     }
+
+    if (data.loader.version !== runtime.loader.version) {
+      throw new Error(
+        `[FabricMeta] Fabric Meta returned loader version '${data.loader.version}', but '${runtime.loader.version}' was requested.`
+      );
+    }
+    parseMavenCoordinate(data.loader.maven);
 
     if (
       !data.intermediary ||
       typeof data.intermediary !== "object" ||
-      typeof data.intermediary.maven !== "string" ||
-      !data.intermediary.maven.trim() ||
       typeof data.intermediary.version !== "string" ||
-      !data.intermediary.version.trim()
+      typeof data.intermediary.maven !== "string"
     ) {
       throw new Error(
         `[FabricMeta] Fabric Meta response is missing valid intermediary mappings for Minecraft ${runtime.minecraft}.`
       );
     }
+    parseMavenCoordinate(data.intermediary.maven);
 
     if (!data.launcherMeta || typeof data.launcherMeta !== "object") {
       throw new Error(`[FabricMeta] Fabric Meta response is missing launcherMeta.`);
     }
 
-    if (!data.launcherMeta.mainClass || !data.launcherMeta.mainClass.client) {
+    const clientMainClass = data.launcherMeta.mainClass?.client;
+    if (typeof clientMainClass !== "string" || !clientMainClass.trim()) {
       throw new Error(`[FabricMeta] Fabric Meta response is missing launcherMeta.mainClass.client.`);
     }
 
@@ -173,13 +389,19 @@ export class FabricMetaResolver {
     const seenNames = new Set<string>();
     const libraries: FabricLibraryDefinition[] = [];
 
-    function addLib(lib: { name: string; url?: string }) {
-      if (!lib || typeof lib.name !== "string" || !lib.name.trim()) return;
+    function addLib(lib: { name: string; url?: string; sha256?: string; sha1?: string }) {
+      if (!lib || typeof lib.name !== "string" || !lib.name.trim()) {
+        throw new Error(`[FabricMeta] Invalid library entry in launcherMeta.`);
+      }
+      parseMavenCoordinate(lib.name);
+
       if (!seenNames.has(lib.name)) {
         seenNames.add(lib.name);
         libraries.push({
           name: lib.name.trim(),
           url: lib.url || "https://maven.fabricmc.net/",
+          sha256: lib.sha256,
+          sha1: lib.sha1,
         });
       }
     }
@@ -213,36 +435,46 @@ export class FabricMetaResolver {
         maven: data.intermediary.maven,
       },
       libraries,
-      mainClass: data.launcherMeta.mainClass.client,
+      mainClass: clientMainClass.trim(),
     };
   }
 
-  private static validateCachedMetadata(
-    cached: any,
-    runtime: MinecraftRuntimeDefinition
-  ): FabricRuntimeMetadata {
-    if (!cached || typeof cached !== "object") {
-      throw new Error("Cached metadata is not an object.");
-    }
+  private static async fetchSidecarChecksum(
+    lib: FabricLibraryDefinition,
+    fetchFn: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+    timeoutMs: number
+  ): Promise<{ sha256?: string; sha1?: string }> {
+    try {
+      const coord = parseMavenCoordinate(lib.name);
+      const relPath = mavenToPath(coord);
+      const repoUrl = lib.url || "https://maven.fabricmc.net/";
+      const artifactUrl = `${repoUrl.replace(/\/+$/, "")}/${relPath}`;
 
-    if (cached.loader?.version !== runtime.loader.version) {
-      throw new Error(
-        `Cached loader version '${cached.loader?.version}' does not match requested '${runtime.loader.version}'.`
-      );
-    }
+      // Try .sha256
+      try {
+        const signal = AbortSignal.timeout(Math.min(3000, timeoutMs));
+        const res256 = await fetchFn(`${artifactUrl}.sha256`, { signal });
+        if (res256.ok) {
+          const text = (await res256.text()).trim().split(/\s+/)[0].toLowerCase();
+          if (/^[0-9a-f]{64}$/.test(text)) {
+            return { sha256: text };
+          }
+        }
+      } catch {}
 
-    if (!cached.loader?.maven || !cached.intermediary?.maven || !cached.intermediary?.version) {
-      throw new Error("Cached metadata is missing loader or intermediary maven coordinates.");
-    }
+      // Try .sha1
+      try {
+        const signal = AbortSignal.timeout(Math.min(3000, timeoutMs));
+        const res1 = await fetchFn(`${artifactUrl}.sha1`, { signal });
+        if (res1.ok) {
+          const text = (await res1.text()).trim().split(/\s+/)[0].toLowerCase();
+          if (/^[0-9a-f]{40}$/.test(text)) {
+            return { sha1: text };
+          }
+        }
+      } catch {}
+    } catch {}
 
-    if (!cached.mainClass || typeof cached.mainClass !== "string") {
-      throw new Error("Cached metadata is missing mainClass.");
-    }
-
-    if (!Array.isArray(cached.libraries) || cached.libraries.length === 0) {
-      throw new Error("Cached metadata has empty or invalid library list.");
-    }
-
-    return cached as FabricRuntimeMetadata;
+    return {};
   }
 }

@@ -176,7 +176,7 @@ export class GameRunner {
       jvmArgs.push("--quickPlayMultiplayer", serverAddr);
     }
 
-    log("INFO", `Starting Minecraft client via KnotClient (${mainClass})...`);
+    log("INFO", `Starting Minecraft client via ${mainClass}...`);
 
     try {
       const proc = spawn(javaExe, jvmArgs, {
