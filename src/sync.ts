@@ -8,7 +8,8 @@ import { reconcileRequiredResourcePacks } from "./resource-packs";
 import { app } from "electron";
 import { reconcileConfigPatches } from "./config-patches";
 import { LauncherLogger } from "./logger";
-import type { ConfigPatch, InstallationState, RequiredResourcePack, SyncProgress } from "./types";
+import { resolveRuntimeDefinition } from "./runtime-definition";
+import type { ConfigPatch, InstallationState, MinecraftRuntimeDefinition, RequiredResourcePack, SyncProgress } from "./types";
 
 export const MAX_SUPPORTED_PROTOCOL = 3;
 
@@ -58,7 +59,13 @@ export class LauncherSync {
   static async syncClient(
     onProgress: (progress: SyncProgress) => void,
     verificationMode: "fast" | "full" = "fast"
-  ): Promise<{ success: boolean; version: string; packName: string; release?: any }> {
+  ): Promise<{
+    success: boolean;
+    version: string;
+    packName: string;
+    release?: any;
+    runtime: MinecraftRuntimeDefinition;
+  }> {
     const config = ConfigManager.get();
     if (!config.token) {
       throw new Error("Authentication required: Please log in with your Lampas Portal account.");
@@ -161,6 +168,9 @@ export class LauncherSync {
         );
       }
     }
+
+    // Validate and cross-check runtime definition (fails hard before any pack mutation or download)
+    const runtime = resolveRuntimeDefinition(releaseData, manifest);
 
     const disabledClientMods = new Set(config.disabledClientMods || []);
     const disabledFilenames = new Set(
@@ -497,6 +507,7 @@ export class LauncherSync {
       version: targetVersion,
       packName: newState.pack,
       release: releaseData,
+      runtime,
     };
   }
 

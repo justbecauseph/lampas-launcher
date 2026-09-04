@@ -124,15 +124,18 @@ export interface ReleaseLaunchConfig {
   requiredResourcePacks?: RequiredResourcePack[];
 }
 
-export interface ReleaseDescriptor {
-  schemaVersion: number;
-  pack: string;
-  version: string;
+export interface MinecraftRuntimeDefinition {
   minecraft: string;
   loader: {
     type: "fabric";
     version: string;
   };
+}
+
+export interface ReleaseDescriptor extends MinecraftRuntimeDefinition {
+  schemaVersion: number;
+  pack: string;
+  version: string;
   minimumLauncherVersion: string;
   protocol: number;
   gitCommit?: string;

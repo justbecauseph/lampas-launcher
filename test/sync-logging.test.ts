@@ -107,13 +107,21 @@ describe("Launcher sync and mod management logging", () => {
         }
 
         if (url.pathname === "/api/v1/releases/2.0.0") {
-          return Response.json({ pack: "Lampas 2", version: "2.0.0", launch: {} });
+          return Response.json({
+            pack: "Lampas 2",
+            version: "2.0.0",
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
+            launch: {},
+          });
         }
 
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
             pack: "Lampas 2",
             version: "2.0.0",
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
             files: [
               {
                 path: "mods/fabric-api.jar",

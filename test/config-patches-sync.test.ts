@@ -147,6 +147,8 @@ describe("LauncherSync config patches and protocol integration", () => {
             pack: "Lampas 2",
             version: "2.1.0",
             protocol: 3,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
           });
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
@@ -155,6 +157,8 @@ describe("LauncherSync config patches and protocol integration", () => {
             pack: "Lampas 2",
             version: "2.1.0",
             protocol: 3,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
             files: [],
             mods: [],
             configPatches: [
@@ -229,7 +233,13 @@ describe("LauncherSync config patches and protocol integration", () => {
           return Response.json({ channel: "stable", version: "2.1.0" });
         }
         if (url.pathname === "/api/v1/releases/2.1.0") {
-          return Response.json({ pack: "Lampas 2", version: "2.1.0", protocol: 3 });
+          return Response.json({
+            pack: "Lampas 2",
+            version: "2.1.0",
+            protocol: 3,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
+          });
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
           return Response.json({
@@ -237,6 +247,8 @@ describe("LauncherSync config patches and protocol integration", () => {
             pack: "Lampas 2",
             version: "2.1.0",
             protocol: 3,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
             files: [],
             mods: [],
             configPatches: [
@@ -292,7 +304,13 @@ describe("LauncherSync config patches and protocol integration", () => {
           return Response.json({ channel: "stable", version: "2.1.0" });
         }
         if (url.pathname === "/api/v1/releases/2.1.0") {
-          return Response.json({ pack: "Lampas 2", version: "2.1.0", protocol: 3 });
+          return Response.json({
+            pack: "Lampas 2",
+            version: "2.1.0",
+            protocol: 3,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
+          });
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
           return Response.json({
@@ -300,6 +318,8 @@ describe("LauncherSync config patches and protocol integration", () => {
             pack: "Lampas 2",
             version: "2.1.0",
             protocol: 3,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
             files: [],
             mods: [],
             configPatches: [
