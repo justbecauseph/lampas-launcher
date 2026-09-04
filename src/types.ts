@@ -124,15 +124,17 @@ export interface ReleaseLaunchConfig {
   requiredResourcePacks?: RequiredResourcePack[];
 }
 
+export interface FabricLoaderDefinition {
+  type: "fabric";
+  version: string;
+}
+
 export interface ReleaseDescriptor {
   schemaVersion: number;
   pack: string;
   version: string;
   minecraft: string;
-  loader: {
-    type: "fabric";
-    version: string;
-  };
+  loader: FabricLoaderDefinition;
   minimumLauncherVersion: string;
   protocol: number;
   gitCommit?: string;
