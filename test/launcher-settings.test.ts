@@ -97,4 +97,25 @@ describe("launcher settings", () => {
     expect(updated.gameDirConfigured).toBe(true);
     expect(updated.allocatedRamGb).toBe(8);
   });
+
+  test("noSync defaults to false (off by default) and toggles cleanly", () => {
+    ConfigManager.resetForTesting();
+    // Default config check
+    expect(ConfigManager.get().noSync).toBe(false);
+
+    // Toggle on
+    ConfigManager.set({ noSync: true });
+    expect(ConfigManager.get().noSync).toBe(true);
+
+    // Persists across re-reading from disk
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().noSync).toBe(true);
+
+    // Toggle off
+    ConfigManager.set({ noSync: false });
+    expect(ConfigManager.get().noSync).toBe(false);
+
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().noSync).toBe(false);
+  });
 });

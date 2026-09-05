@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld("lampas", {
     repair: (): Promise<{ success: boolean; message: string; version: string; packName: string }> =>
       ipcRenderer.invoke("sync:repair"),
     getModCatalog: (): Promise<any[]> => ipcRenderer.invoke("sync:getModCatalog"),
-    getInstalledRuntime: (): Promise<{ minecraft: string; loader: { type: string; version: string } } | null> =>
+    getInstalledRuntime: (): Promise<{ minecraft: string; loader: { type: string; version: string }; launch?: any } | null> =>
       ipcRenderer.invoke("sync:getInstalledRuntime"),
     onProgress: (callback: (progress: SyncProgress) => void) => {
       const handler = (_: any, data: SyncProgress) => callback(data);
@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld("lampas", {
     close: () => ipcRenderer.invoke("window:close"),
   },
   utils: {
+    getAppVersion: (): Promise<string> => ipcRenderer.invoke("utils:getAppVersion"),
     openPath: (targetPath: string): Promise<string> => ipcRenderer.invoke("utils:openPath", targetPath),
     getLogPath: (): Promise<string> => ipcRenderer.invoke("utils:getLogPath"),
     openLogsDir: (): Promise<string> => ipcRenderer.invoke("utils:openLogsDir"),

@@ -394,6 +394,15 @@ body { position: fixed; inset: 0; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  image-rendering: pixelated;
 }
 
 .icon-btn {
@@ -715,6 +724,14 @@ h1, h2 { letter-spacing: .015em !important; }
 .mod-switch input:checked + span { background: rgba(118,167,126,.55); }
 .mod-switch input:checked + span::after { transform: translateX(12px); background: #d8ebd8; }
 .mod-switch input:focus-visible + span { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+.toggle-switch { display: inline-flex; align-items: center; cursor: pointer; position: relative; }
+.toggle-switch input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
+.toggle-switch span { width: 32px; height: 18px; border-radius: 10px; background: #35413c; position: relative; transition: .16s ease; display: inline-block; }
+.toggle-switch span::after { content: ""; position: absolute; width: 14px; height: 14px; left: 2px; top: 2px; border-radius: 50%; background: #a9afa9; transition: .16s ease; }
+.toggle-switch input:checked + span { background: rgba(214, 155, 69, 0.55); }
+.toggle-switch input:checked + span::after { transform: translateX(14px); background: #ffe6ba; }
+.toggle-switch input:focus-visible + span { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .local-mod-badge { color: var(--cyan); font: 600 8px/1 'IBM Plex Mono', monospace; letter-spacing: .08em; }
 .mod-remove-btn { border: 0; background: transparent; color: #a56e62; font: 500 9px/1 'IBM Plex Mono', monospace; }
 .mod-remove-btn:hover { color: #f28b74; }

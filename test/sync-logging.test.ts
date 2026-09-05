@@ -205,4 +205,31 @@ describe("Launcher sync and mod management logging", () => {
       server.stop(true);
     }
   });
+
+  test("logs whenever noSync toggle is enabled or disabled", () => {
+    ConfigManager.set({ noSync: true });
+    let logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
+    expect(logContent).toContain("[Settings] No-sync mode enabled");
+    expect(logContent).toContain("[Config] noSync changed: false -> true");
+
+    ConfigManager.set({ noSync: false });
+    logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
+    expect(logContent).toContain("[Settings] No-sync mode disabled");
+    expect(logContent).toContain("[Config] noSync changed: true -> false");
+  });
+
+  test("logs any configuration property changes and redacts sensitive tokens", () => {
+    ConfigManager.set({ allocatedRamGb: 8 });
+    let logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
+    expect(logContent).toContain("[Config] allocatedRamGb changed: 4 -> 8");
+
+    ConfigManager.set({ selectedChannel: "beta" });
+    logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
+    expect(logContent).toContain('[Config] selectedChannel changed: "stable" -> "beta"');
+
+    ConfigManager.set({ token: "super-secret-token-xyz" });
+    logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
+    expect(logContent).toContain("[Config] token changed: [REDACTED] -> [REDACTED]");
+    expect(logContent).not.toContain("super-secret-token-xyz");
+  });
 });

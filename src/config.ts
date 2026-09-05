@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { app } from "electron";
+import { LauncherLogger } from "./logger";
 import type { LauncherConfig } from "./types";
 
 export function getDefaultGameDir(): string {
@@ -26,6 +27,7 @@ const DEFAULT_CONFIG: LauncherConfig = {
   javaArgs: "",
   disabledClientMods: [],
   customClientMods: [],
+  noSync: false,
 };
 
 export function normalizePortalUrl(url?: string): string {
@@ -38,6 +40,34 @@ export function normalizePortalUrl(url?: string): string {
     normalized = normalized.replace(/^http:\/\//i, "https://");
   }
   return normalized;
+}
+
+function valuesEqual(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return a === b;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a === "object") {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return false;
+}
+
+function formatConfigValue(key: string, value: any): string {
+  if (value === undefined || value === null) {
+    return "<unset>";
+  }
+  if (key === "token" || key === "refreshToken" || key === "minecraftAccessToken") {
+    return "[REDACTED]";
+  }
+  if (typeof value === "string") {
+    return value.length > 80 ? `"${value.slice(0, 77)}..."` : JSON.stringify(value);
+  }
+  if (typeof value === "object") {
+    const serialized = JSON.stringify(value);
+    return serialized.length > 80 ? `${serialized.slice(0, 77)}...` : serialized;
+  }
+  return String(value);
 }
 
 export class ConfigManager {
@@ -96,6 +126,8 @@ export class ConfigManager {
       loaded.gameDir = defaultGameDir;
     }
 
+    loaded.noSync = Boolean(loaded.noSync);
+
     this.cachedConfig = loaded;
     return loaded;
   }
@@ -107,11 +139,32 @@ export class ConfigManager {
     if (updated.portalUrl) {
       updated.portalUrl = normalizePortalUrl(updated.portalUrl);
     }
+    if (updated.noSync !== undefined) {
+      updated.noSync = Boolean(updated.noSync);
+    }
     for (const key of Object.keys(updated) as Array<keyof LauncherConfig>) {
       if (updated[key] === undefined) {
         delete updated[key];
       }
     }
+
+    // Log all changed configuration properties
+    const allKeys = new Set([
+      ...Object.keys(current),
+      ...Object.keys(updated),
+    ]) as Set<keyof LauncherConfig>;
+
+    for (const key of allKeys) {
+      if (!valuesEqual(current[key], updated[key])) {
+        const oldValStr = formatConfigValue(key, current[key]);
+        const newValStr = formatConfigValue(key, updated[key]);
+        LauncherLogger.info(`[Config] ${key} changed: ${oldValStr} -> ${newValStr}`);
+        if (key === "noSync") {
+          LauncherLogger.info(`[Settings] No-sync mode ${updated.noSync ? "enabled" : "disabled"}`);
+        }
+      }
+    }
+
     this.cachedConfig = updated;
     const dir = path.dirname(this.configPath);
     if (!fs.existsSync(dir)) {

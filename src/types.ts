@@ -51,6 +51,7 @@ export interface LauncherConfig {
   javaArgs?: string;
   disabledClientMods?: string[];
   customClientMods?: CustomClientMod[];
+  noSync?: boolean;
   token?: string;
   refreshToken?: string;
   minecraftAccessToken?: string;

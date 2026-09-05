@@ -18,8 +18,9 @@
       <span class="font-extrabold tracking-tight text-xs text-white">
         LAMPAS <span class="text-cyan-400">LAUNCHER</span>
       </span>
-      <span class="badge">Fabric 26.2</span>
+      <span id="titlebar-version-badge" class="badge text-slate-400 font-mono">v1.2.1</span>
       <span id="titlebar-channel-badge" class="badge text-cyan-400">STABLE</span>
+      <span id="titlebar-nosync-badge" class="badge text-amber-400 border-amber-500/40 bg-amber-950/40 hidden">NO SYNC</span>
       <div id="titlebar-game-status" class="badge flex items-center gap-1.5 text-slate-400">
         <span id="titlebar-status-dot" class="status-dot status-dot-idle"></span>
         <span id="titlebar-status-text" class="font-mono text-[10px] font-bold">IDLE</span>
@@ -412,12 +413,28 @@
 
           <!-- Auth & Pipeline Settings -->
           <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5">
-            <h3 class="text-sm font-bold text-white border-b border-slate-800 pb-3">Network & Authentication</h3>
+            <h3 class="text-sm font-bold text-white border-b border-slate-800 pb-3">Network & Modpack Pipeline</h3>
 
             <div class="space-y-2">
               <label for="setting-portal" class="text-xs font-bold text-slate-300">Portal API Endpoint</label>
               <input id="setting-portal" type="text" placeholder="https://dev.lampas.town" class="input-field">
               <p class="text-[11px] text-slate-500">The remote portal URL for API queries and authentication.</p>
+            </div>
+
+            <div class="space-y-2 pt-2 border-t border-slate-800/80">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="flex items-center gap-2">
+                    <label for="setting-nosync" class="text-xs font-bold text-slate-300 cursor-pointer">No Sync</label>
+                    <span class="badge text-amber-400 border-amber-500/30 bg-amber-950/40">SKIP PIPELINE</span>
+                  </div>
+                  <p class="text-[11px] text-slate-500 mt-0.5">Skip modpack update checks and file synchronization on launch. Uses existing local files.</p>
+                </div>
+                <label class="toggle-switch mod-switch" title="Toggle No Sync (Off by default)">
+                  <input id="setting-nosync" type="checkbox">
+                  <span></span>
+                </label>
+              </div>
             </div>
           </div>
 

@@ -72,6 +72,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("window:close", () => mainWindow?.close());
 
   // IPC Handlers: Utils
+  ipcMain.handle("utils:getAppVersion", () => app.getVersion());
   ipcMain.handle("utils:openPath", async (_, targetPath: string) => {
     if (targetPath) {
       if (/^https?:\/\//i.test(targetPath)) await shell.openExternal(targetPath);
@@ -197,6 +198,7 @@ app.whenReady().then(async () => {
               type: release.loader.type || "fabric",
               version: release.loader.version,
             },
+            launch: release.launch,
           };
         }
       } catch {}

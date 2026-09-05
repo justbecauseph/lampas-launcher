@@ -9,7 +9,9 @@ let logLineCount = 0;
 const btnMinimize = document.getElementById("btn-minimize");
 const btnMaximize = document.getElementById("btn-maximize");
 const btnClose = document.getElementById("btn-close");
+const titlebarVersionBadge = document.getElementById("titlebar-version-badge");
 const titlebarChannelBadge = document.getElementById("titlebar-channel-badge");
+const titlebarNoSyncBadge = document.getElementById("titlebar-nosync-badge");
 const titlebarGameStatus = document.getElementById("titlebar-game-status");
 const titlebarStatusDot = document.getElementById("titlebar-status-dot");
 const titlebarStatusText = document.getElementById("titlebar-status-text");
@@ -231,9 +233,16 @@ const settingGamedirInput = document.getElementById("setting-gamedir-input");
 const btnSettingsOpenDir = document.getElementById("btn-settings-open-dir");
 const btnSettingsMoveDir = document.getElementById("btn-settings-move-dir");
 const settingPortal = document.getElementById("setting-portal");
+const settingNoSync = document.getElementById("setting-nosync");
 const settingJavaArgs = document.getElementById("setting-java-args");
 const btnRepairSettings = document.getElementById("btn-repair-settings");
 const btnSaveSettings = document.getElementById("btn-save-settings");
+
+function updateNoSyncUI(noSync) {
+  const isNoSync = Boolean(noSync);
+  if (settingNoSync) settingNoSync.checked = isNoSync;
+  if (titlebarNoSyncBadge) titlebarNoSyncBadge.classList.toggle("hidden", !isNoSync);
+}
 
 // DOM Elements: Initial Directory Setup Modal
 const modalInitialDir = document.getElementById("modal-initial-dir");
@@ -450,7 +459,23 @@ function updateUserUI(user) {
       userRole.innerText = user.isTech ? "Tech Staff" : user.isAdmin ? "Admin" : "Verified";
     }
     if (userAvatar) {
-      userAvatar.innerText = displayName[0]?.toUpperCase() || "P";
+      const fallbackInitial = displayName[0]?.toUpperCase() || "P";
+      const identifier = user.minecraftUuid && user.minecraftUuid !== "00000000-0000-0000-0000-000000000000"
+        ? user.minecraftUuid.replace(/-/g, "")
+        : (user.minecraftUsername || displayName);
+
+      if (identifier) {
+        userAvatar.replaceChildren();
+        const img = document.createElement("img");
+        img.src = `https://mc-heads.net/avatar/${encodeURIComponent(identifier)}/64`;
+        img.alt = `${displayName}'s avatar`;
+        img.onerror = () => {
+          userAvatar.innerText = fallbackInitial;
+        };
+        userAvatar.appendChild(img);
+      } else {
+        userAvatar.innerText = fallbackInitial;
+      }
     }
 
     if (btnPlayText && !isLaunching) {
@@ -466,6 +491,10 @@ function updateUserUI(user) {
   } else {
     if (btnLogin) btnLogin.classList.remove("hidden");
     if (userCard) userCard.classList.add("hidden");
+    if (userAvatar) {
+      userAvatar.replaceChildren();
+      userAvatar.innerText = "P";
+    }
 
     if (btnPlayText && !isLaunching) {
       btnPlayText.innerText = "LOG IN TO PLAY";
@@ -549,8 +578,12 @@ channelBtns.forEach((btn) => {
   btn.onclick = async () => {
     if (btn.disabled) return;
     const channel = btn.dataset.channel;
+    const prevChannel = currentConfig?.selectedChannel;
     applyChannel(channel);
     currentConfig = await window.lampas.config.set({ selectedChannel: channel });
+    if (prevChannel !== channel) {
+      appendLog("INFO", `[Settings] Selected channel changed to ${channel.toUpperCase()}`);
+    }
     showToast(`Switched channel to ${channel.toUpperCase()}`, "info", 2000);
   };
 });
@@ -751,17 +784,51 @@ if (btnConfirmMove) {
 // ========================================================
 // Settings Management
 // ========================================================
+if (settingNoSync) {
+  settingNoSync.onchange = async () => {
+    try {
+      const noSyncVal = Boolean(settingNoSync.checked);
+      currentConfig = await window.lampas.config.set({ noSync: noSyncVal });
+      updateNoSyncUI(currentConfig?.noSync);
+      appendLog("INFO", `[Settings] No-sync mode ${noSyncVal ? "enabled" : "disabled"}`);
+      showToast(`No-sync mode ${noSyncVal ? "enabled (sync skipped on launch)" : "disabled"}`, "info", 2500);
+    } catch (err) {
+      showToast(`Failed to update setting: ${err.message}`, "error");
+      if (settingNoSync) settingNoSync.checked = Boolean(currentConfig?.noSync);
+    }
+  };
+}
+
 if (btnSaveSettings) {
   btnSaveSettings.onclick = async () => {
     try {
       const ram = parseInt(ramSlider?.value || "4", 10);
       const portalUrl = settingPortal?.value?.trim() || "https://dev.lampas.town";
+      const javaArgs = settingJavaArgs?.value?.trim() || "";
+      const noSync = Boolean(settingNoSync?.checked);
+      const prev = currentConfig || {};
 
       currentConfig = await window.lampas.config.set({
         allocatedRamGb: ram,
         portalUrl,
-        javaArgs: settingJavaArgs?.value?.trim() || "",
+        javaArgs,
+        noSync,
       });
+
+      updateNoSyncUI(currentConfig?.noSync);
+
+      if (prev.allocatedRamGb !== ram) {
+        appendLog("INFO", `[Settings] RAM allocation updated to ${ram} GB`);
+      }
+      if (prev.portalUrl !== portalUrl) {
+        appendLog("INFO", `[Settings] Portal URL updated to ${portalUrl}`);
+      }
+      if ((prev.javaArgs || "") !== javaArgs) {
+        appendLog("INFO", `[Settings] Java arguments updated: ${javaArgs || "<none>"}`);
+      }
+      if (Boolean(prev.noSync) !== noSync) {
+        appendLog("INFO", `[Settings] No-sync mode ${noSync ? "enabled" : "disabled"}`);
+      }
 
       showToast("Settings saved successfully!", "success");
     } catch (err) {
@@ -926,47 +993,69 @@ if (btnPlay) {
       }
       updateUserUI(session.user);
 
-      if (progressContainer) {
-        progressContainer.classList.remove("hidden");
-      }
-      if (progressFill) progressFill.style.width = "0%";
-      if (progressPercent) progressPercent.innerText = "0%";
-      if (progressMsg) progressMsg.innerText = "Connecting to pipeline...";
+      if (currentConfig?.noSync) {
+        appendLog("INFO", "No-sync mode enabled: Skipping modpack synchronization.");
+        if (progressContainer) progressContainer.classList.add("hidden");
 
-      // Progress listener
-      const removeListener = window.lampas.sync.onProgress((progress) => {
-        if (progressFill) progressFill.style.width = `${progress.percent}%`;
-        if (progressPercent) progressPercent.innerText = `${progress.percent}%`;
-        if (progressMsg) progressMsg.innerText = progress.message;
+        try {
+          const installedRuntime = await window.lampas.sync.getInstalledRuntime();
+          if (installedRuntime) {
+            updateRuntimeSpecsUI(installedRuntime);
+            if (installedRuntime.launch) {
+              updateLaunchTargetUI(installedRuntime);
+            }
+          }
+        } catch {}
 
-        if (progress.status === "downloading") {
-          if (btnPlayText) btnPlayText.innerText = "DOWNLOADING...";
-          setConsoleStatus("syncing", "DOWNLOADING...");
-        } else if (progress.status === "staging") {
-          if (btnPlayText) btnPlayText.innerText = "STAGING...";
-          setConsoleStatus("syncing", "STAGING...");
+        if (btnPlayText) btnPlayText.innerText = "LAUNCHING...";
+        setConsoleStatus("launching", "STARTING JVM...");
+        appendLog("INFO", "Bootstrapping runtime and launching game...");
+        showToast("No-sync mode active. Launching game...", "info", 2500);
+
+        await window.lampas.game.launch(currentUser);
+      } else {
+        if (progressContainer) {
+          progressContainer.classList.remove("hidden");
         }
-      });
+        if (progressFill) progressFill.style.width = "0%";
+        if (progressPercent) progressPercent.innerText = "0%";
+        if (progressMsg) progressMsg.innerText = "Connecting to pipeline...";
 
-      appendLog("INFO", "Initiating modpack synchronization...");
-      const syncResult = await window.lampas.sync.start();
-      removeListener();
+        // Progress listener
+        const removeListener = window.lampas.sync.onProgress((progress) => {
+          if (progressFill) progressFill.style.width = `${progress.percent}%`;
+          if (progressPercent) progressPercent.innerText = `${progress.percent}%`;
+          if (progressMsg) progressMsg.innerText = progress.message;
 
-      updateLaunchTargetUI(syncResult.release);
-      updateRuntimeSpecsUI(syncResult.runtime || syncResult.release);
+          if (progress.status === "downloading") {
+            if (btnPlayText) btnPlayText.innerText = "DOWNLOADING...";
+            setConsoleStatus("syncing", "DOWNLOADING...");
+          } else if (progress.status === "staging") {
+            if (btnPlayText) btnPlayText.innerText = "STAGING...";
+            setConsoleStatus("syncing", "STAGING...");
+          }
+        });
 
-      if (btnPlayText) btnPlayText.innerText = "LAUNCHING...";
-      setConsoleStatus("launching", "STARTING JVM...");
-      if (progressMsg) progressMsg.innerText = "Starting Minecraft JVM...";
-      if (progressFill) progressFill.style.width = "100%";
-      if (progressPercent) progressPercent.innerText = "100%";
+        appendLog("INFO", "Initiating modpack synchronization...");
+        const syncResult = await window.lampas.sync.start();
+        removeListener();
 
-      const loaderType = syncResult.runtime?.loader?.type || syncResult.release?.loader?.type || "Fabric";
-      const loaderName = loaderType === "fabric" ? "Fabric" : loaderType;
-      appendLog("INFO", `Pack v${syncResult.version} synchronized. Bootstrapping ${loaderName} runtime...`);
-      showToast(`Pack v${syncResult.version} verified. Launching game...`, "info", 2500);
+        updateLaunchTargetUI(syncResult.release);
+        updateRuntimeSpecsUI(syncResult.runtime || syncResult.release);
 
-      await window.lampas.game.launch(currentUser, syncResult.release);
+        if (btnPlayText) btnPlayText.innerText = "LAUNCHING...";
+        setConsoleStatus("launching", "STARTING JVM...");
+        if (progressMsg) progressMsg.innerText = "Starting Minecraft JVM...";
+        if (progressFill) progressFill.style.width = "100%";
+        if (progressPercent) progressPercent.innerText = "100%";
+
+        const loaderType = syncResult.runtime?.loader?.type || syncResult.release?.loader?.type || "Fabric";
+        const loaderName = loaderType === "fabric" ? "Fabric" : loaderType;
+        appendLog("INFO", `Pack v${syncResult.version} synchronized. Bootstrapping ${loaderName} runtime...`);
+        showToast(`Pack v${syncResult.version} verified. Launching game...`, "info", 2500);
+
+        await window.lampas.game.launch(currentUser, syncResult.release);
+      }
 
       if (btnPlayText) btnPlayText.innerText = "RUNNING";
       setConsoleStatus("running", "GAME RUNNING");
@@ -1013,6 +1102,19 @@ async function init() {
     }
     if (settingJavaArgs) settingJavaArgs.value = currentConfig.javaArgs || "";
 
+    // Launcher version badge
+    if (window.lampas.utils?.getAppVersion) {
+      try {
+        const appVer = await window.lampas.utils.getAppVersion();
+        if (appVer && titlebarVersionBadge) {
+          titlebarVersionBadge.innerText = `v${appVer}`;
+        }
+      } catch {}
+    }
+
+    // No Sync toggle & UI indicator
+    updateNoSyncUI(currentConfig.noSync);
+
     // Selected Channel
     const selChannel = currentConfig.selectedChannel || "stable";
     applyChannel(selChannel);
@@ -1035,6 +1137,9 @@ async function init() {
         const installedRuntime = await window.lampas.sync.getInstalledRuntime();
         if (installedRuntime) {
           updateRuntimeSpecsUI(installedRuntime);
+          if (installedRuntime.launch) {
+            updateLaunchTargetUI(installedRuntime);
+          }
         }
       } catch {}
     }
