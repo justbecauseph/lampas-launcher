@@ -370,14 +370,26 @@ function appendLog(level, message, timestamp) {
   }
 }
 
+function clearConsoleLogs(notify = false) {
+  if (consoleOutput) {
+    consoleOutput.innerHTML = "";
+  }
+  logLineCount = 0;
+  if (consoleCount) {
+    consoleCount.innerText = "0 lines";
+  }
+  if (notify) {
+    showToast("Console cleared", "info", 1500);
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.clearConsoleLogs = clearConsoleLogs;
+}
+
 if (btnClearLogs) {
   btnClearLogs.onclick = () => {
-    if (consoleOutput) {
-      consoleOutput.innerHTML = "";
-      logLineCount = 0;
-      if (consoleCount) consoleCount.innerText = "0 lines";
-      showToast("Console cleared", "info", 1500);
-    }
+    clearConsoleLogs(true);
   };
 }
 
@@ -952,6 +964,9 @@ if (btnPlay) {
       switchTab(navConsole, tabConsole);
       return;
     }
+
+    // Clear previous display logs (on UI) on interaction with Play button
+    clearConsoleLogs();
 
     // Require authentication before playing
     if (!currentUser) {

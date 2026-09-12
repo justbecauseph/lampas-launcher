@@ -130,7 +130,7 @@ export class GameRunner {
     const jvmArgs = [
       `-Xmx${ramGb}G`,
       `-Xms${Math.min(2, ramGb)}G`,
-      "-XX:+UseG1GC",
+      "-XX:+UseZGC",
       "-XX:+ParallelRefProcEnabled",
       "-XX:MaxGCPauseMillis=200",
       "-XX:+UnlockExperimentalVMOptions",
