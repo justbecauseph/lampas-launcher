@@ -146,6 +146,7 @@ export interface ReleaseDescriptor extends MinecraftRuntimeDefinition {
   totalMods?: number;
   totalFiles?: number;
   launch?: ReleaseLaunchConfig;
+  syncGeneration?: string;
 }
 
 export type ConfigPatchMode = "enforce" | "once";
@@ -188,6 +189,8 @@ export interface InstallationState {
   pack: string;
   version: string;
   installedAt: string;
+  syncGeneration?: string;
+  releaseVersion?: string;
   managedResourcePacks?: string[];
   appliedConfigPatches?: Record<string, AppliedConfigPatchState>;
   files: Record<

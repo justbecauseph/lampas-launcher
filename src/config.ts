@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { app } from "electron";
 import { LauncherLogger } from "./logger";
+import { writeAtomicFileSync } from "./file-transfer";
 import type { LauncherConfig } from "./types";
 
 export function getDefaultGameDir(): string {
@@ -148,7 +149,14 @@ export class ConfigManager {
       }
     }
 
-    // Log all changed configuration properties
+    // Persist to disk FIRST using atomic write before updating in-memory state or emitting change logs
+    const dir = path.dirname(this.configPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    writeAtomicFileSync(this.configPath, JSON.stringify(updated, null, 2), "utf-8");
+
+    // Only after persistence succeeds, log all changed configuration properties
     const allKeys = new Set([
       ...Object.keys(current),
       ...Object.keys(updated),
@@ -166,11 +174,6 @@ export class ConfigManager {
     }
 
     this.cachedConfig = updated;
-    const dir = path.dirname(this.configPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(this.configPath, JSON.stringify(this.cachedConfig, null, 2), "utf-8");
     return this.cachedConfig;
   }
 

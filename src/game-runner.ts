@@ -91,6 +91,35 @@ export class GameRunner {
         );
       }
 
+      // Cross-validate release descriptor with installation state to prevent launching incompatible states
+      if (!releaseOverride) {
+        const stateFilePath = path.join(gameDir, ".lampas", "installation.json");
+        if (fs.existsSync(stateFilePath)) {
+          let installedState: any;
+          try {
+            installedState = JSON.parse(fs.readFileSync(stateFilePath, "utf-8"));
+          } catch {
+            throw new Error(
+              "Installation state metadata is corrupted. Please synchronize or repair your modpack installation first."
+            );
+          }
+          if (installedState.version && release.version && installedState.version !== release.version) {
+            throw new Error(
+              `Incompatible installation state detected: installed version '${installedState.version}' does not match release descriptor '${release.version}'. Please synchronize or repair.`
+            );
+          }
+          if (
+            installedState.syncGeneration &&
+            release.syncGeneration &&
+            installedState.syncGeneration !== release.syncGeneration
+          ) {
+            throw new Error(
+              `Incompatible installation generation detected: installed generation '${installedState.syncGeneration}' does not match release descriptor '${release.syncGeneration}'. Please synchronize or repair.`
+            );
+          }
+        }
+      }
+
     const runtime = validateRuntimeDefinition(release);
 
     // Verify required resource packs before bootstrapping

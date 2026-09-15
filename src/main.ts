@@ -214,6 +214,20 @@ app.whenReady().then(async () => {
     if (fs.existsSync(releasePath)) {
       try {
         const release = JSON.parse(fs.readFileSync(releasePath, "utf-8"));
+        const statePath = path.join(config.gameDir, ".lampas", "installation.json");
+        if (fs.existsSync(statePath)) {
+          const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+          if (state.version && release.version && state.version !== release.version) {
+            return null;
+          }
+          if (
+            state.syncGeneration &&
+            release.syncGeneration &&
+            state.syncGeneration !== release.syncGeneration
+          ) {
+            return null;
+          }
+        }
         if (release?.minecraft && release?.loader?.version) {
           return {
             minecraft: release.minecraft,

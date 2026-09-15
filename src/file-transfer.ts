@@ -247,3 +247,65 @@ export async function copyAtomic(
     throw error;
   }
 }
+
+export async function writeAtomicFile(
+  destination: string,
+  content: string | Buffer,
+  options?: { encoding?: BufferEncoding; signal?: AbortSignal }
+): Promise<void> {
+  if (options?.signal?.aborted) {
+    throw options.signal.reason || new Error("Write aborted before start");
+  }
+
+  await fs.promises.mkdir(path.dirname(destination), { recursive: true });
+  const tempPath = tempSibling(destination);
+  try {
+    if (typeof content === "string") {
+      await fs.promises.writeFile(tempPath, content, options?.encoding || "utf-8");
+    } else {
+      await fs.promises.writeFile(tempPath, content);
+    }
+    if (options?.signal?.aborted) {
+      throw options.signal.reason || new Error("Write aborted after write");
+    }
+    await replaceFile(tempPath, destination);
+  } catch (error) {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export function writeAtomicFileSync(
+  destination: string,
+  content: string | Buffer,
+  encoding: BufferEncoding = "utf-8"
+): void {
+  const dir = path.dirname(destination);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tempPath = `${destination}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+  try {
+    if (typeof content === "string") {
+      fs.writeFileSync(tempPath, content, encoding);
+    } else {
+      fs.writeFileSync(tempPath, content);
+    }
+    try {
+      fs.renameSync(tempPath, destination);
+    } catch (err: any) {
+      if (err.code === "EEXIST" || err.code === "EPERM") {
+        fs.copyFileSync(tempPath, destination);
+        fs.rmSync(tempPath, { force: true });
+      } else {
+        throw err;
+      }
+    }
+  } catch (error) {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {}
+    throw error;
+  }
+}
+

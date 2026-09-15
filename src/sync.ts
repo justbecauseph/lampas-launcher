@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { ConfigManager, normalizePortalUrl } from "./config";
 import { MinecraftBootstrap } from "./minecraft-bootstrap";
 import { JavaRuntimeManager } from "./java-runtime";
-import { copyAtomic, copyVerified, downloadVerified, fetchJsonWithRetry, hashFile, HttpResponseError } from "./file-transfer";
+import { copyAtomic, copyVerified, downloadVerified, fetchJsonWithRetry, hashFile, HttpResponseError, writeAtomicFile } from "./file-transfer";
 import { reconcileRequiredResourcePacks } from "./resource-packs";
 import { app } from "electron";
 import { reconcileConfigPatches } from "./config-patches";
@@ -11,6 +11,15 @@ import { LauncherLogger } from "./logger";
 import { resolveRuntimeDefinition } from "./runtime-definition";
 import { runBoundedPool } from "./async-pool";
 import type { ConfigPatch, InstallationState, MinecraftRuntimeDefinition, RequiredResourcePack, SyncProgress } from "./types";
+
+export interface TransferOutcome {
+  artifactId: string;
+  cacheVerified: boolean;
+  destinationPath: string;
+  size: number;
+  stage: "cached" | "staged" | "installed" | "verified";
+  operationId: string;
+}
 
 export const MAX_SUPPORTED_PROTOCOL = 3;
 
@@ -206,49 +215,78 @@ export class LauncherSync {
       desiredFilesMap.set(f.path, f);
     }
 
+    const syncGenerationId = `gen-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    const transferOutcomes = new Map<string, TransferOutcome>();
     const toDownload: any[] = [];
     let upToDateCount = 0;
     const verifiedAt = new Map<string, string>();
 
-    for (const file of manifestFiles) {
-      const localPath = path.join(gameDir, file.path);
-      const policy = file.policy || "MANAGED";
+    // Bounded async metadata checking across manifest files (concurrency 8)
+    const checkResults = new Array<{ file: any; needDownload: boolean; verifiedTimestamp?: string }>(
+      manifestFiles.length
+    );
 
-      if (policy === "PRESERVE" || isPathProtected(file.path)) {
-        if (fs.existsSync(localPath)) {
-          upToDateCount++;
-          continue;
+    await runBoundedPool(
+      manifestFiles,
+      async (file, index) => {
+        const localPath = path.join(gameDir, file.path);
+        const policy = file.policy || "MANAGED";
+
+        if (policy === "PRESERVE" || isPathProtected(file.path)) {
+          if (fs.existsSync(localPath)) {
+            checkResults[index] = { file, needDownload: false };
+            return;
+          }
+        }
+
+        const stat = await fs.promises.stat(localPath).catch(() => null);
+        if (stat) {
+          const previous = prevState.files[file.path];
+          const metadataMatches =
+            verificationMode !== "full" &&
+            previous?.sha256 === file.hashes.sha256 &&
+            previous.size === file.size &&
+            previous.mtimeMs === stat.mtimeMs &&
+            stat.size === file.size;
+
+          if (metadataMatches) {
+            checkResults[index] = { file, needDownload: false };
+            return;
+          }
+
+          const hash = await hashFile(localPath, "sha256");
+          if (hash.toLowerCase() === file.hashes.sha256.toLowerCase() && stat.size === file.size) {
+            checkResults[index] = {
+              file,
+              needDownload: false,
+              verifiedTimestamp: new Date().toISOString(),
+            };
+            return;
+          } else {
+            LauncherLogger.info(
+              `  ⚠️ [Hash Mismatch] ${file.path} (expected: ${file.hashes.sha256.slice(0, 10)}..., actual: ${hash.slice(0, 10)}...)`
+            );
+          }
+        }
+
+        checkResults[index] = { file, needDownload: true };
+      },
+      { concurrency: 8 }
+    );
+
+    for (const r of checkResults) {
+      if (!r) continue;
+      if (r.needDownload) {
+        toDownload.push(r.file);
+      } else {
+        upToDateCount++;
+        if (r.verifiedTimestamp) {
+          verifiedAt.set(r.file.path, r.verifiedTimestamp);
         }
       }
-
-      if (fs.existsSync(localPath)) {
-        const stat = fs.statSync(localPath);
-        const previous = prevState.files[file.path];
-        const metadataMatches =
-          verificationMode !== "full" &&
-          previous?.sha256 === file.hashes.sha256 &&
-          previous.size === file.size &&
-          previous.mtimeMs === stat.mtimeMs &&
-          stat.size === file.size;
-        if (metadataMatches) {
-          upToDateCount++;
-          continue;
-        }
-
-        const hash = await hashFile(localPath, "sha256");
-        if (hash === file.hashes.sha256 && stat.size === file.size) {
-          upToDateCount++;
-          verifiedAt.set(file.path, new Date().toISOString());
-          continue;
-        } else {
-          LauncherLogger.info(
-            `  ⚠️ [Hash Mismatch] ${file.path} (expected: ${file.hashes.sha256.slice(0, 10)}..., actual: ${hash.slice(0, 10)}...)`
-          );
-        }
-      }
-
-      toDownload.push(file);
     }
+
+    const stagedPathsSet = new Set(toDownload.map((f) => f.path));
 
     // Identify obsolete managed files from previous state AND unmanifested mods on disk
     const toDeleteSet = new Set<string>();
@@ -347,7 +385,14 @@ export class LauncherSync {
           if (!cached) {
             networkBytes = await cacheFile(file, cachePath, signal);
           }
-          verifiedAt.set(file.path, new Date().toISOString());
+          transferOutcomes.set(file.path, {
+            artifactId: file.hashes.sha256,
+            cacheVerified: true,
+            destinationPath: path.join(gameDir, file.path),
+            size: file.size,
+            stage: "cached",
+            operationId: syncGenerationId,
+          });
           completedCount++;
           bytesDownloaded += networkBytes;
 
@@ -384,8 +429,13 @@ export class LauncherSync {
 
       for (const file of toDownload) {
         const cachePath = path.join(cacheDir, file.hashes.sha256.substring(0, 2), file.hashes.sha256);
-        await copyAtomic(cachePath, path.join(gameDir, file.path));
+        const destPath = path.join(gameDir, file.path);
+        await copyAtomic(cachePath, destPath);
         LauncherLogger.info(`  ✓ [Replaced] ${file.path}`);
+        const outcome = transferOutcomes.get(file.path);
+        if (outcome) {
+          outcome.stage = "installed";
+        }
       }
 
     }
@@ -414,16 +464,16 @@ export class LauncherSync {
     for (const file of manifestFiles) {
       if ((file.policy || "MANAGED") === "MANAGED") {
         const localPath = path.join(gameDir, file.path);
-        if (!fs.existsSync(localPath)) {
+        const stat = await fs.promises.stat(localPath).catch(() => null);
+        if (!stat) {
           throw new Error(`Verification failed: managed file '${file.path}' is missing on disk.`);
         }
-        const stat = fs.statSync(localPath);
         if (typeof file.size === "number" && stat.size !== file.size) {
           throw new Error(
             `Verification failed: size mismatch for '${file.path}' (expected ${file.size}, got ${stat.size})`
           );
         }
-        const wasDownloaded = toDownload.some((f) => f.path === file.path);
+        const wasDownloaded = stagedPathsSet.has(file.path);
         if (verificationMode === "full" || wasDownloaded) {
           const actualHash = await hashFile(localPath, "sha256");
           if (actualHash.toLowerCase() !== file.hashes.sha256.toLowerCase()) {
@@ -432,6 +482,11 @@ export class LauncherSync {
             );
           }
         }
+        const outcome = transferOutcomes.get(file.path);
+        if (outcome) {
+          outcome.stage = "verified";
+        }
+        verifiedAt.set(file.path, new Date().toISOString());
       }
     }
 
@@ -459,14 +514,23 @@ export class LauncherSync {
 
     // 10. Write release descriptor and installation state only after successful mutations
     const releaseFilePath = path.join(stateDir, "release.json");
-    try {
-      fs.writeFileSync(releaseFilePath, JSON.stringify(releaseData, null, 2), "utf-8");
-    } catch {}
+    const releaseWithGen = {
+      ...releaseData,
+      syncGeneration: syncGenerationId,
+    };
+    // Atomic temporary publication for release.json - DO NOT swallow error!
+    await writeAtomicFile(
+      releaseFilePath,
+      JSON.stringify(releaseWithGen, null, 2),
+      { encoding: "utf-8" }
+    );
 
     const newState: InstallationState = {
       pack: manifest.pack || releaseData.pack || "Lampas 2",
       version: targetVersion,
       installedAt: new Date().toISOString(),
+      syncGeneration: syncGenerationId,
+      releaseVersion: targetVersion,
       managedResourcePacks: updatedManagedPacks,
       appliedConfigPatches: updatedAppliedPatches,
       files: {} as Record<string, any>,
@@ -474,7 +538,7 @@ export class LauncherSync {
 
     for (const file of manifestFiles) {
       const filePath = path.join(gameDir, file.path);
-      const stat = fs.existsSync(filePath) ? fs.statSync(filePath) : undefined;
+      const stat = await fs.promises.stat(filePath).catch(() => null);
       const previous = prevState.files[file.path];
       newState.files[file.path] = {
         sha256: file.hashes.sha256,
@@ -485,7 +549,12 @@ export class LauncherSync {
       };
     }
 
-    fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), "utf-8");
+    // Atomic temporary publication for installation.json
+    await writeAtomicFile(
+      stateFile,
+      JSON.stringify(newState, null, 2),
+      { encoding: "utf-8" }
+    );
 
     LauncherLogger.info(
       `[OK] Client successfully synchronized to ${newState.pack} v${targetVersion}!`
