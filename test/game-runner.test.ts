@@ -18,6 +18,8 @@ mock.module("electron", () => ({
   shell: { openExternal: async () => undefined },
 }));
 
+let mockSpawnHook: ((proc: any) => void) | null = null;
+
 mock.module("node:child_process", () => ({
   spawn: (javaExe: string, jvmArgs: string[]) => {
     spawnedCalls.push({ javaExe, jvmArgs });
@@ -29,6 +31,9 @@ mock.module("node:child_process", () => ({
       proc.killed = true;
       proc.emit("exit", 0);
     };
+    if (mockSpawnHook) {
+      mockSpawnHook(proc);
+    }
     return proc;
   },
 }));
@@ -443,5 +448,44 @@ describe("GameRunner launch flow & Quick Play", () => {
     expect(startLog).toBeDefined();
     expect(startLog).toBe("Starting Minecraft client via net.fabricmc.loader.impl.launch.knot.KnotClient...");
     expect(startLog?.includes("via KnotClient (")).toBe(false);
+  });
+
+  test("spawn ENOENT error rejects launchGame and resets running state", async () => {
+    mockSpawnHook = (proc) => {
+      queueMicrotask(() => {
+        const err: any = new Error("spawn java.exe ENOENT");
+        err.code = "ENOENT";
+        proc.emit("error", err);
+      });
+    };
+
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.99.123-test" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+      launch: {},
+    };
+
+    try {
+      await expect(
+        GameRunner.launchGame(
+          dummyUser,
+          () => {},
+          () => {},
+          release
+        )
+      ).rejects.toThrow("spawn java.exe ENOENT");
+
+      expect(GameRunner.isGameRunning()).toBe(false);
+    } finally {
+      mockSpawnHook = null;
+    }
   });
 });

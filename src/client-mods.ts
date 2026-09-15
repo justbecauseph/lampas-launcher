@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ConfigManager } from "./config";
 import { LauncherLogger } from "./logger";
+import { OperationCoordinator } from "./operations";
 import type { CustomClientMod } from "./types";
 
 function assertJar(sourcePath: string): void {
@@ -26,6 +27,7 @@ export class ClientModManager {
   }
 
   static add(sourcePaths: string[]): CustomClientMod[] {
+    OperationCoordinator.assertCanMutate("Cannot modify client mods while an operation or Minecraft is running.");
     const config = ConfigManager.get();
     const modsDir = path.join(config.gameDir, "mods");
     fs.mkdirSync(modsDir, { recursive: true });
@@ -62,6 +64,7 @@ export class ClientModManager {
   }
 
   static setEnabled(filename: string, enabled: boolean): CustomClientMod[] {
+    OperationCoordinator.assertCanMutate("Cannot modify client mods while an operation or Minecraft is running.");
     const config = ConfigManager.get();
     const mods = [...(config.customClientMods || [])];
     const mod = mods.find((entry) => entry.filename === filename);
@@ -80,6 +83,7 @@ export class ClientModManager {
   }
 
   static remove(filename: string): CustomClientMod[] {
+    OperationCoordinator.assertCanMutate("Cannot modify client mods while an operation or Minecraft is running.");
     const config = ConfigManager.get();
     const mods = [...(config.customClientMods || [])];
     const mod = mods.find((entry) => entry.filename === filename);
@@ -92,6 +96,7 @@ export class ClientModManager {
   }
 
   static setOfficialEnabled(modId: string, enabled: boolean): string[] {
+    OperationCoordinator.assertCanMutate("Cannot modify client mods while an operation or Minecraft is running.");
     const disabled = new Set(ConfigManager.get().disabledClientMods || []);
     if (enabled) disabled.delete(modId);
     else disabled.add(modId);

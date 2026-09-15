@@ -9,6 +9,7 @@ import { app } from "electron";
 import { reconcileConfigPatches } from "./config-patches";
 import { LauncherLogger } from "./logger";
 import { resolveRuntimeDefinition } from "./runtime-definition";
+import { runBoundedPool } from "./async-pool";
 import type { ConfigPatch, InstallationState, MinecraftRuntimeDefinition, RequiredResourcePack, SyncProgress } from "./types";
 
 export const MAX_SUPPORTED_PROTOCOL = 3;
@@ -290,13 +291,41 @@ export class LauncherSync {
 
     if (toDownload.length > 0) {
       const concurrency = 6;
-      let nextIndex = 0;
 
-      async function worker() {
-        while (nextIndex < toDownload.length) {
-          const file = toDownload[nextIndex++];
-          if (!file) break;
+      async function cacheFile(fileEntry: any, cachePath: string, signal?: AbortSignal): Promise<number> {
+        let url = fileEntry.download.url;
+        const expectedSha256 = fileEntry.hashes.sha256;
 
+        if (url.startsWith("/")) {
+          const candidates = [
+            path.join(__dirname, "../../pack/common", fileEntry.path),
+            path.join(__dirname, "../../pack/client", fileEntry.path),
+            path.join(__dirname, "../../pack/custom", path.basename(fileEntry.path)),
+          ];
+          for (const c of candidates) {
+            if (fs.existsSync(c)) {
+              await copyVerified(c, cachePath, {
+                expectedHash: expectedSha256,
+                expectedSize: fileEntry.size,
+                signal,
+              });
+              return 0;
+            }
+          }
+          url = `${portalUrl}${url}`;
+        }
+
+        return downloadVerified(url, cachePath, {
+          expectedHash: expectedSha256,
+          expectedSize: fileEntry.size,
+          headers: { "User-Agent": "Lampas-Launcher/1.0" },
+          signal,
+        });
+      }
+
+      await runBoundedPool(
+        toDownload,
+        async (file, _index, signal) => {
           let downloadUrl = file.download.url;
           if (downloadUrl.startsWith("/")) {
             downloadUrl = `${portalUrl}${downloadUrl}`;
@@ -316,7 +345,7 @@ export class LauncherSync {
 
           let networkBytes = 0;
           if (!cached) {
-            networkBytes = await cacheFile(file, cachePath);
+            networkBytes = await cacheFile(file, cachePath, signal);
           }
           verifiedAt.set(file.path, new Date().toISOString());
           completedCount++;
@@ -338,40 +367,9 @@ export class LauncherSync {
             bytesDownloaded,
             totalBytes,
           });
-        }
-      }
-
-      async function cacheFile(fileEntry: any, cachePath: string): Promise<number> {
-        let url = fileEntry.download.url;
-        const expectedSha256 = fileEntry.hashes.sha256;
-
-        if (url.startsWith("/")) {
-          const candidates = [
-            path.join(__dirname, "../../pack/common", fileEntry.path),
-            path.join(__dirname, "../../pack/client", fileEntry.path),
-            path.join(__dirname, "../../pack/custom", path.basename(fileEntry.path)),
-          ];
-          for (const c of candidates) {
-            if (fs.existsSync(c)) {
-              await copyVerified(c, cachePath, {
-                expectedHash: expectedSha256,
-                expectedSize: fileEntry.size,
-              });
-              return 0;
-            }
-          }
-          url = `${portalUrl}${url}`;
-        }
-
-        return downloadVerified(url, cachePath, {
-          expectedHash: expectedSha256,
-          expectedSize: fileEntry.size,
-          headers: { "User-Agent": "Lampas-Launcher/1.0" },
-        });
-      }
-
-      const workers = Array.from({ length: Math.min(concurrency, toDownload.length) }, () => worker());
-      await Promise.all(workers);
+        },
+        { concurrency }
+      );
 
       // Apply only after every artifact is present and verified in the cache.
       onProgress({

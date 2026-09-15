@@ -9,11 +9,14 @@ import { ClientModManager } from "./client-mods";
 import { LauncherLogger } from "./logger";
 import { GameDirectoryManager } from "./game-directory";
 import { ServerStatusClient } from "./server-status";
-import type { UserProfile } from "./types";
+import { OperationCoordinator, safeSend as safeSendToWindow } from "./operations";
+import type { DirectoryMoveProgress, SyncProgress, UserProfile } from "./types";
 
 let mainWindow: BrowserWindow | null = null;
-type LauncherOperation = "sync" | "repair" | "move" | "launch" | null;
-let currentOperation: LauncherOperation = null;
+
+function safeSend(channel: string, ...args: any[]): void {
+  safeSendToWindow(mainWindow, channel, ...args);
+}
 
 function createWindow() {
   const iconPath = path.join(__dirname, "../ui/assets/lampas.png");
@@ -94,6 +97,7 @@ app.whenReady().then(async () => {
   // IPC Handlers: Config
   ipcMain.handle("config:get", () => ConfigManager.get());
   ipcMain.handle("config:set", (_, newConfig) => {
+    OperationCoordinator.assertCanMutate("update configuration");
     const safeConfig = { ...newConfig };
     delete safeConfig.gameDir; // Generic config updates cannot directly overwrite gameDir
     delete safeConfig.gameDirConfigured; // Generic config updates cannot manipulate directory onboarding state
@@ -113,23 +117,24 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("gameDir:validate", (_, targetPath: string, currentPath?: string) =>
     GameDirectoryManager.validateTarget(targetPath, currentPath));
-  ipcMain.handle("gameDir:configure", (_, targetPath: string) =>
-    GameDirectoryManager.configureInitial(targetPath));
+  ipcMain.handle("gameDir:configure", (_, targetPath: string) => {
+    OperationCoordinator.assertCanMutate("configure game directory");
+    return GameDirectoryManager.configureInitial(targetPath);
+  });
   ipcMain.handle("gameDir:move", async (_, targetPath: string) => {
-    if (GameRunner.isGameRunning()) {
-      throw new Error("Cannot move installation while Minecraft is running.");
-    }
-    if (currentOperation !== null) {
-      throw new Error(`Another operation (${currentOperation}) is currently in progress.`);
-    }
-    currentOperation = "move";
+    const op = OperationCoordinator.acquire("move", `Move installation to ${targetPath}`);
+    const throttledProgress = op.createThrottledProgress<DirectoryMoveProgress>(
+      (progress) => safeSend("gameDir:moveProgress", progress),
+      100,
+      (p) => p.phase === "complete"
+    );
     try {
       LauncherLogger.info(`Moving game installation to: ${targetPath}`);
       return await GameDirectoryManager.moveInstallation(targetPath, (progress) => {
-        mainWindow?.webContents.send("gameDir:moveProgress", progress);
+        throttledProgress(progress);
       });
     } finally {
-      currentOperation = null;
+      op.release();
     }
   });
 
@@ -144,44 +149,42 @@ app.whenReady().then(async () => {
 
   // IPC Handlers: Sync & Repair
   ipcMain.handle("sync:start", async () => {
-    if (GameRunner.isGameRunning()) {
-      throw new Error("Cannot synchronize while Minecraft is running.");
-    }
-    if (currentOperation !== null) {
-      throw new Error(`Another operation (${currentOperation}) is currently in progress.`);
-    }
-    currentOperation = "sync";
+    const op = OperationCoordinator.acquire("sync", "Modpack synchronization");
+    const throttledProgress = op.createThrottledProgress<SyncProgress>(
+      (progress) => safeSend("sync:progress", progress),
+      100,
+      (p) => p.status === "complete" || p.status === "error" || p.percent === 100
+    );
     try {
       LauncherLogger.info("Starting modpack synchronization...");
       return await LauncherSync.syncClient((progress) => {
         if (progress.message) {
           LauncherLogger.info(`[Sync] ${progress.message}`);
         }
-        mainWindow?.webContents.send("sync:progress", progress);
+        throttledProgress(progress);
       });
     } finally {
-      currentOperation = null;
+      op.release();
     }
   });
   ipcMain.handle("sync:repair", async () => {
-    if (GameRunner.isGameRunning()) {
-      throw new Error("Cannot repair while Minecraft is running.");
-    }
-    if (currentOperation !== null) {
-      throw new Error(`Another operation (${currentOperation}) is currently in progress.`);
-    }
-    currentOperation = "repair";
+    const op = OperationCoordinator.acquire("repair", "Full installation repair");
+    const throttledProgress = op.createThrottledProgress<SyncProgress>(
+      (progress) => safeSend("sync:progress", progress),
+      100,
+      (p) => p.status === "complete" || p.status === "error" || p.percent === 100
+    );
     try {
       LauncherLogger.info("Starting full installation repair...");
       return await LauncherSync.repairInstallation(
-        (progress) => mainWindow?.webContents.send("sync:progress", progress),
+        (progress) => throttledProgress(progress),
         (log) => {
           LauncherLogger.log(log.level, log.message);
-          mainWindow?.webContents.send("game:log", log);
+          safeSend("game:log", log);
         }
       );
     } finally {
-      currentOperation = null;
+      op.release();
     }
   });
   ipcMain.handle("sync:getModCatalog", () => LauncherSync.getModCatalog());
@@ -207,6 +210,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("mods:browseAndAdd", async () => {
+    OperationCoordinator.assertCanMutate("add client mods");
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: "Add local client mods",
       filters: [{ name: "Minecraft mods", extensions: ["jar"] }],
@@ -214,38 +218,42 @@ app.whenReady().then(async () => {
     });
     return result.canceled ? ClientModManager.list() : ClientModManager.add(result.filePaths);
   });
-  ipcMain.handle("mods:addPaths", (_, paths: string[]) => ClientModManager.add(paths));
-  ipcMain.handle("mods:setOfficialEnabled", (_, id: string, enabled: boolean) =>
-    ClientModManager.setOfficialEnabled(id, enabled));
-  ipcMain.handle("mods:setCustomEnabled", (_, filename: string, enabled: boolean) =>
-    ClientModManager.setEnabled(filename, enabled));
-  ipcMain.handle("mods:removeCustom", (_, filename: string) => ClientModManager.remove(filename));
+  ipcMain.handle("mods:addPaths", (_, paths: string[]) => {
+    OperationCoordinator.assertCanMutate("add client mods");
+    return ClientModManager.add(paths);
+  });
+  ipcMain.handle("mods:setOfficialEnabled", (_, id: string, enabled: boolean) => {
+    OperationCoordinator.assertCanMutate("toggle official mod");
+    return ClientModManager.setOfficialEnabled(id, enabled);
+  });
+  ipcMain.handle("mods:setCustomEnabled", (_, filename: string, enabled: boolean) => {
+    OperationCoordinator.assertCanMutate("toggle custom mod");
+    return ClientModManager.setEnabled(filename, enabled);
+  });
+  ipcMain.handle("mods:removeCustom", (_, filename: string) => {
+    OperationCoordinator.assertCanMutate("remove custom mod");
+    return ClientModManager.remove(filename);
+  });
 
   // IPC Handlers: Game
   ipcMain.handle("game:launch", async (_, user: UserProfile | null, releaseOverride?: any) => {
-    if (GameRunner.isGameRunning()) {
-      throw new Error("Minecraft is already running.");
-    }
-    if (currentOperation !== null) {
-      throw new Error(`Cannot launch Minecraft while ${currentOperation} is in progress.`);
-    }
-    currentOperation = "launch";
+    const op = OperationCoordinator.acquire("launch", `Launch Minecraft for ${user?.minecraftUsername || user?.name || "Unknown"}`);
     try {
       LauncherLogger.info(`Initiating game launch for player: ${user?.minecraftUsername || user?.name || "Unknown"}`);
       return await GameRunner.launchGame(
         user,
         (log) => {
           // Stream live game output to UI console only (Minecraft Log4j logs stay in logs/latest.log)
-          mainWindow?.webContents.send("game:log", log);
+          safeSend("game:log", log);
         },
         (code) => {
           LauncherLogger.info(`Minecraft process exited with code ${code}`);
-          mainWindow?.webContents.send("game:exit", code);
+          safeSend("game:exit", code);
         },
         releaseOverride
       );
     } finally {
-      currentOperation = null;
+      op.release();
     }
   });
   ipcMain.handle("game:kill", () => {

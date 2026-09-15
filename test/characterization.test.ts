@@ -78,22 +78,19 @@ describe("Phase 0 Characterization — Operation Settlement & Guard Gaps (F07, F
     expect(ConfigManager.get().customClientMods.length).toBe(1);
   });
 
-  test("GameRunner.killGame clears runningProcess state synchronously before exit event (Baseline F08)", () => {
-    // Characterizes current killGame() behavior: runningProcess is cleared immediately
+  test("GameRunner.killGame retains runningProcess until actual exit settlement (Phase 1 Fix F08)", () => {
     const proc = new EventEmitter() as any;
     proc.killed = false;
-    let exitEmitted = false;
     proc.kill = () => {
       proc.killed = true;
-      // In real life or async mocks, exit is emitted asynchronously
     };
 
     (GameRunner as any).runningProcess = proc;
     expect(GameRunner.isGameRunning()).toBe(true);
 
     GameRunner.killGame();
-    // Notice: runningProcess is null immediately, even though exit event was not emitted
-    expect(GameRunner.isGameRunning()).toBe(false);
+    // In Phase 1: runningProcess is retained until exit/close event settlement
+    expect(GameRunner.isGameRunning()).toBe(true);
     expect(proc.killed).toBe(true);
   });
 });

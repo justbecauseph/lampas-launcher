@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,7 +56,12 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  GameRunner.resetForTesting();
+});
+
 afterAll(() => {
+  GameRunner.resetForTesting();
   LauncherLogger.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
@@ -64,7 +69,7 @@ afterAll(() => {
 });
 
 describe("Phase 1 Regression Gate — Guarded Mod Mutators (F08)", () => {
-  test.skip("[Phase 1 Gate] ClientModManager.add rejects mutations when an installation operation or game is running", () => {
+  test("[Phase 1 Gate] ClientModManager.add rejects mutations when an installation operation or game is running", () => {
     // When Phase 1 centralizes operation guard:
     // Any mutation attempt during an active operation must throw or be rejected.
     const modFile = path.join(testRoot, "unauthorized-mod.jar");
@@ -78,7 +83,7 @@ describe("Phase 1 Regression Gate — Guarded Mod Mutators (F08)", () => {
     }).toThrow(/Cannot modify client mods while an operation or Minecraft is running/);
   });
 
-  test.skip("[Phase 1 Gate] GameRunner.killGame retains runningProcess until actual exit settlement", () => {
+  test("[Phase 1 Gate] GameRunner.killGame retains runningProcess until actual exit settlement", () => {
     // When Phase 1 fixes process lifecycle:
     // isGameRunning() must stay true until child process emits exit
     const fakeProc: any = {
