@@ -11,6 +11,9 @@
     "syncDesktopName": true
   },
   "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "benchmark": "bun test/benchmark/benchmark-harness.ts",
     "dev": "concurrently \"tsc -w\" \"electron .\"",
     "build": "tsc",
     "package:dir": "tsc && electron-builder --dir --publish never",
@@ -27,6 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.9.0",
+    "@types/bun": "^1.4.0",
     "concurrently": "^9.1.2",
     "electron": "44.0.0",
     "electron-builder": "^26.15.3",
