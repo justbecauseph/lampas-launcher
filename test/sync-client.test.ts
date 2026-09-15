@@ -27,8 +27,6 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  LauncherLogger.resetForTesting();
-  LauncherLogger.init();
   ConfigManager.resetForTesting();
   ConfigManager.set({
     token: "mock-token",
@@ -41,7 +39,6 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  LauncherLogger.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }

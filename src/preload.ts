@@ -55,6 +55,14 @@ contextBridge.exposeInMainWorld("lampas", {
       ipcRenderer.on("game:log", handler);
       return () => ipcRenderer.removeListener("game:log", handler);
     },
+    onLogBatch: (callback: (batch: { entries: GameLogEntry[]; dropped: number }) => void) => {
+      const handler = (_: any, data: { entries: GameLogEntry[]; dropped: number }) => {
+        callback(data);
+        ipcRenderer.send("game:logAck");
+      };
+      ipcRenderer.on("game:logBatch", handler);
+      return () => ipcRenderer.removeListener("game:logBatch", handler);
+    },
     onExit: (callback: (code: number | null) => void) => {
       const handler = (_: any, code: number | null) => callback(code);
       ipcRenderer.on("game:exit", handler);
@@ -94,5 +102,7 @@ contextBridge.exposeInMainWorld("lampas", {
     getLogPath: (): Promise<string> => ipcRenderer.invoke("utils:getLogPath"),
     openLogsDir: (): Promise<string> => ipcRenderer.invoke("utils:openLogsDir"),
     openLogFile: (): Promise<string> => ipcRenderer.invoke("utils:openLogFile"),
+    getMinecraftLogPath: (): Promise<string> => ipcRenderer.invoke("utils:getMinecraftLogPath"),
+    openMinecraftLog: (): Promise<string> => ipcRenderer.invoke("utils:openMinecraftLog"),
   },
 });

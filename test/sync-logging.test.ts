@@ -27,9 +27,12 @@ beforeAll(() => {
   fs.mkdirSync(gameDir, { recursive: true });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await LauncherLogger.close();
   LauncherLogger.resetForTesting();
-  LauncherLogger.init();
+  LauncherLogger.init(path.join(userDataDir, "logs"));
+  fs.rmSync(gameDir, { recursive: true, force: true });
+  fs.mkdirSync(gameDir, { recursive: true });
   ConfigManager.resetForTesting();
   ConfigManager.set({
     token: "mock-token",
@@ -41,7 +44,8 @@ beforeEach(() => {
   });
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await LauncherLogger.close();
   LauncherLogger.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
@@ -49,41 +53,48 @@ afterAll(() => {
 });
 
 describe("Launcher sync and mod management logging", () => {
-  test("ClientModManager logs add, replace, enable, disable, and remove operations", () => {
+  test("ClientModManager logs add, replace, enable, disable, and remove operations", async () => {
     const modSource = path.join(testRoot, "sample-mod.jar");
     fs.writeFileSync(modSource, "dummy jar binary data");
 
     // Add
     ClientModManager.add([modSource]);
+    await LauncherLogger.flush();
     let logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Client Mods] Added custom mod: sample-mod.jar");
 
     // Replace
     ClientModManager.add([modSource]);
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Client Mods] Replaced custom mod: sample-mod.jar");
 
     // Disable
     ClientModManager.setEnabled("sample-mod.jar", false);
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Client Mods] Disabled custom mod: sample-mod.jar");
 
     // Enable
     ClientModManager.setEnabled("sample-mod.jar", true);
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Client Mods] Enabled custom mod: sample-mod.jar");
 
     // Remove
     ClientModManager.remove("sample-mod.jar");
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Client Mods] Removed custom mod: sample-mod.jar");
 
     // Toggle official mod
     ClientModManager.setOfficialEnabled("sodium", false);
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Client Mods] Disabled official mod: sodium");
 
     ClientModManager.setOfficialEnabled("sodium", true);
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Client Mods] Enabled official mod: sodium");
   });
@@ -178,6 +189,7 @@ describe("Launcher sync and mod management logging", () => {
       expect(result.success).toBe(true);
       expect(result.version).toBe("2.0.0");
 
+      await LauncherLogger.flush();
       const logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
 
       // Verify sync plan log
@@ -206,28 +218,33 @@ describe("Launcher sync and mod management logging", () => {
     }
   });
 
-  test("logs whenever noSync toggle is enabled or disabled", () => {
+  test("logs whenever noSync toggle is enabled or disabled", async () => {
     ConfigManager.set({ noSync: true });
+    await LauncherLogger.flush();
     let logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Settings] No-sync mode enabled");
     expect(logContent).toContain("[Config] noSync changed: false -> true");
 
     ConfigManager.set({ noSync: false });
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Settings] No-sync mode disabled");
     expect(logContent).toContain("[Config] noSync changed: true -> false");
   });
 
-  test("logs any configuration property changes and redacts sensitive tokens", () => {
+  test("logs any configuration property changes and redacts sensitive tokens", async () => {
     ConfigManager.set({ allocatedRamGb: 8 });
+    await LauncherLogger.flush();
     let logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Config] allocatedRamGb changed: 4 -> 8");
 
     ConfigManager.set({ selectedChannel: "beta" });
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain('[Config] selectedChannel changed: "stable" -> "beta"');
 
     ConfigManager.set({ token: "super-secret-token-xyz" });
+    await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Config] token changed: [REDACTED] -> [REDACTED]");
     expect(logContent).not.toContain("super-secret-token-xyz");

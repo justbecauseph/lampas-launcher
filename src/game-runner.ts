@@ -8,6 +8,7 @@ import { MinecraftBootstrap } from "./minecraft-bootstrap";
 import { JavaRuntimeManager } from "./java-runtime";
 import { isValidServerAddress, verifyRequiredResourcePacks } from "./resource-packs";
 import { validateRuntimeDefinition } from "./runtime-definition";
+import { ProcessLogFramer } from "./game-log-stream";
 import type { GameLogEntry, ReleaseDescriptor, UserProfile } from "./types";
 
 function generateOfflineUuid(username: string): string {
@@ -37,7 +38,7 @@ export class GameRunner {
 
     this.isStarting = true;
 
-    const log = (level: "INFO" | "WARN" | "ERROR", message: string) => {
+    const log = (level: GameLogEntry["level"], message: string) => {
       onLog({
         timestamp: new Date().toLocaleTimeString(),
         level,
@@ -221,25 +222,18 @@ export class GameRunner {
         }, 10);
       });
 
-      proc.stdout?.on("data", (data) => {
-        const text = data.toString().trim();
-        if (text) {
-          log("INFO", text);
-        }
-      });
+      const stdoutFramer = new ProcessLogFramer("INFO", onLog);
+      const stderrFramer = new ProcessLogFramer("WARN", onLog);
 
-      proc.stderr?.on("data", (data) => {
-        const text = data.toString().trim();
-        if (text) {
-          const level = text.includes("ERROR") || text.includes("Exception") ? "ERROR" : "WARN";
-          log(level, text);
-        }
-      });
+      stdoutFramer.attach(proc.stdout);
+      stderrFramer.attach(proc.stderr);
 
       let exitReported = false;
       const handleExit = (code: number | null) => {
         if (exitReported) return;
         exitReported = true;
+        stdoutFramer.flush();
+        stderrFramer.flush();
         this.runningProcess = null;
         log(code === 0 ? "INFO" : "ERROR", `Minecraft exited with code ${code}`);
         onExit(code);

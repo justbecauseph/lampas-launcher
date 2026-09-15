@@ -180,6 +180,7 @@ const consoleOutput = document.getElementById("console-output");
 const consoleCount = document.getElementById("console-count");
 const consoleAutoscroll = document.getElementById("console-autoscroll");
 const btnOpenLogFile = document.getElementById("btn-open-log-file");
+const btnOpenMinecraftLog = document.getElementById("btn-open-minecraft-log");
 const btnCopyLogs = document.getElementById("btn-copy-logs");
 const btnClearLogs = document.getElementById("btn-clear-logs");
 const consoleGameStatus = document.getElementById("console-game-status");
@@ -348,21 +349,41 @@ if (ramSlider) {
 // ========================================================
 // Console Logging
 // ========================================================
-function appendLog(level, message, timestamp) {
-  if (!consoleOutput) return;
+const MAX_DISPLAY_LINES = 1000;
+const MAX_PENDING_QUEUE = 2000;
+let pendingLogQueue = [];
+let renderRafId = null;
+let clientDroppedLines = 0;
 
-  const line = document.createElement("div");
-  const lvl = (level || "INFO").toUpperCase();
-  const time = timestamp || new Date().toLocaleTimeString();
+function flushLogQueueToDOM() {
+  renderRafId = null;
+  if (!consoleOutput || pendingLogQueue.length === 0) return;
 
-  line.className = `console-line console-line-${lvl.toLowerCase()}`;
-  line.innerText = `[${time}] [${lvl}] ${message}`;
+  const fragment = document.createDocumentFragment();
+  const entries = pendingLogQueue;
+  pendingLogQueue = [];
 
-  consoleOutput.appendChild(line);
-  logLineCount++;
+  for (const entry of entries) {
+    const line = document.createElement("div");
+    const lvl = (entry.level || "INFO").toUpperCase();
+    const time = entry.timestamp || new Date().toLocaleTimeString();
+
+    line.className = `console-line console-line-${lvl.toLowerCase()}`;
+    line.innerText = `[${time}] [${lvl}] ${entry.message}`;
+    fragment.appendChild(line);
+    logLineCount++;
+  }
+
+  consoleOutput.appendChild(fragment);
+
+  // Strictly bound DOM node count to MAX_DISPLAY_LINES
+  while (consoleOutput.childElementCount > MAX_DISPLAY_LINES) {
+    consoleOutput.removeChild(consoleOutput.firstElementChild);
+  }
 
   if (consoleCount) {
-    consoleCount.innerText = `${logLineCount} line${logLineCount === 1 ? "" : "s"}`;
+    const droppedText = clientDroppedLines > 0 ? ` (${clientDroppedLines} dropped)` : "";
+    consoleCount.innerText = `${logLineCount} line${logLineCount === 1 ? "" : "s"}${droppedText}`;
   }
 
   if (consoleAutoscroll && consoleAutoscroll.checked) {
@@ -370,7 +391,58 @@ function appendLog(level, message, timestamp) {
   }
 }
 
+function scheduleLogRender() {
+  if (!renderRafId) {
+    if (typeof requestAnimationFrame === "function") {
+      renderRafId = requestAnimationFrame(flushLogQueueToDOM);
+    } else {
+      renderRafId = setTimeout(flushLogQueueToDOM, 16);
+    }
+  }
+}
+
+function appendLog(level, message, timestamp) {
+  if (pendingLogQueue.length >= MAX_PENDING_QUEUE) {
+    pendingLogQueue.shift();
+    clientDroppedLines++;
+  }
+  pendingLogQueue.push({ level, message, timestamp });
+  scheduleLogRender();
+}
+
+function appendLogBatch(entries, serverDropped = 0) {
+  if (serverDropped > 0) {
+    clientDroppedLines += serverDropped;
+    pendingLogQueue.push({
+      level: "WARN",
+      message: `[System] Backlog overload: ${serverDropped} log lines dropped by transport`,
+      timestamp: new Date().toLocaleTimeString(),
+    });
+  }
+
+  for (const entry of entries) {
+    if (pendingLogQueue.length >= MAX_PENDING_QUEUE) {
+      pendingLogQueue.shift();
+      clientDroppedLines++;
+    }
+    pendingLogQueue.push(entry);
+  }
+
+  scheduleLogRender();
+}
+
 function clearConsoleLogs(notify = false) {
+  if (renderRafId) {
+    if (typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(renderRafId);
+    } else {
+      clearTimeout(renderRafId);
+    }
+    renderRafId = null;
+  }
+  pendingLogQueue = [];
+  clientDroppedLines = 0;
+
   if (consoleOutput) {
     consoleOutput.innerHTML = "";
   }
@@ -409,6 +481,21 @@ if (btnOpenLogFile) {
   };
 }
 
+if (btnOpenMinecraftLog) {
+  btnOpenMinecraftLog.onclick = async () => {
+    try {
+      if (window.lampas.utils?.openMinecraftLog) {
+        await window.lampas.utils.openMinecraftLog();
+        showToast("Opening Minecraft latest.log...", "info", 2000);
+      } else {
+        showToast("Action not supported", "error", 2000);
+      }
+    } catch (err) {
+      showToast(`Failed to open Minecraft log: ${err.message}`, "error", 3500);
+    }
+  };
+}
+
 if (btnCopyLogs) {
   btnCopyLogs.onclick = async () => {
     if (!consoleOutput) return;
@@ -423,9 +510,15 @@ if (btnCopyLogs) {
 }
 
 // Subscribe to Game Logs
-window.lampas.game.onLog((entry) => {
-  appendLog(entry.level, entry.message, entry.timestamp);
-});
+if (window.lampas?.game?.onLogBatch) {
+  window.lampas.game.onLogBatch((batch) => {
+    appendLogBatch(batch.entries, batch.dropped);
+  });
+} else if (window.lampas?.game?.onLog) {
+  window.lampas.game.onLog((entry) => {
+    appendLog(entry.level, entry.message, entry.timestamp);
+  });
+}
 
 // Subscribe to Game Exit
 window.lampas.game.onExit((code) => {

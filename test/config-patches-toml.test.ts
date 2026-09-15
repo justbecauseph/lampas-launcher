@@ -24,13 +24,10 @@ describe("TOML conservative targeted adapter preservation tests", () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-toml-game-"));
-    LauncherLogger.resetForTesting();
-    LauncherLogger.init();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-game-dir-"));
   });
 
   afterEach(() => {
-    LauncherLogger.resetForTesting();
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -10,6 +10,7 @@ import { LauncherLogger } from "./logger";
 import { GameDirectoryManager } from "./game-directory";
 import { ServerStatusClient } from "./server-status";
 import { OperationCoordinator, safeSend as safeSendToWindow } from "./operations";
+import { BoundedLogBatchTransport } from "./game-log-stream";
 import type { DirectoryMoveProgress, SyncProgress, UserProfile } from "./types";
 
 let mainWindow: BrowserWindow | null = null;
@@ -62,6 +63,11 @@ app.whenReady().then(async () => {
 
   createWindow();
 
+  const logTransport = new BoundedLogBatchTransport(() => mainWindow);
+  ipcMain.on("game:logAck", () => {
+    logTransport.onRendererAck();
+  });
+
   // IPC Handlers: Window Controls
   ipcMain.handle("window:minimize", () => mainWindow?.minimize());
   ipcMain.handle("window:maximize", () => {
@@ -92,6 +98,19 @@ app.whenReady().then(async () => {
     const logPath = LauncherLogger.getLogPath();
     await shell.openPath(logPath);
     return logPath;
+  });
+  ipcMain.handle("utils:getMinecraftLogPath", () => {
+    const config = ConfigManager.get();
+    return path.join(config.gameDir, "logs", "latest.log");
+  });
+  ipcMain.handle("utils:openMinecraftLog", async () => {
+    const config = ConfigManager.get();
+    const latestLog = path.join(config.gameDir, "logs", "latest.log");
+    if (!fs.existsSync(latestLog)) {
+      throw new Error("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
+    }
+    await shell.openPath(latestLog);
+    return latestLog;
   });
 
   // IPC Handlers: Config
@@ -180,7 +199,7 @@ app.whenReady().then(async () => {
         (progress) => throttledProgress(progress),
         (log) => {
           LauncherLogger.log(log.level, log.message);
-          safeSend("game:log", log);
+          logTransport.push(log);
         }
       );
     } finally {
@@ -243,10 +262,11 @@ app.whenReady().then(async () => {
       return await GameRunner.launchGame(
         user,
         (log) => {
-          // Stream live game output to UI console only (Minecraft Log4j logs stay in logs/latest.log)
-          safeSend("game:log", log);
+          // Stream live game output to bounded IPC batch transport
+          logTransport.push(log);
         },
         (code) => {
+          logTransport.flushAndClose();
           LauncherLogger.info(`Minecraft process exited with code ${code}`);
           safeSend("game:exit", code);
         },
@@ -267,4 +287,8 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", async () => {
+  await LauncherLogger.close();
 });
