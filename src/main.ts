@@ -14,6 +14,7 @@ import { BoundedLogBatchTransport } from "./game-log-stream";
 import type { DirectoryMoveProgress, SyncProgress, UserProfile } from "./types";
 
 let mainWindow: BrowserWindow | null = null;
+let logTransport: BoundedLogBatchTransport | null = null;
 
 function safeSend(channel: string, ...args: any[]): void {
   safeSendToWindow(mainWindow, channel, ...args);
@@ -63,9 +64,9 @@ app.whenReady().then(async () => {
 
   createWindow();
 
-  const logTransport = new BoundedLogBatchTransport(() => mainWindow);
-  ipcMain.on("game:logAck", () => {
-    logTransport.onRendererAck();
+  logTransport = new BoundedLogBatchTransport(() => mainWindow);
+  ipcMain.on("game:logAck", (_, data?: { batchId?: number }) => {
+    logTransport?.onRendererAck(data?.batchId);
   });
 
   // IPC Handlers: Window Controls
@@ -199,7 +200,7 @@ app.whenReady().then(async () => {
         (progress) => throttledProgress(progress),
         (log) => {
           LauncherLogger.log(log.level, log.message);
-          logTransport.push(log);
+          logTransport?.push(log);
         }
       );
     } finally {
@@ -263,10 +264,10 @@ app.whenReady().then(async () => {
         user,
         (log) => {
           // Stream live game output to bounded IPC batch transport
-          logTransport.push(log);
+          logTransport?.push(log);
         },
         (code) => {
-          logTransport.flushAndClose();
+          logTransport?.flushSession();
           LauncherLogger.info(`Minecraft process exited with code ${code}`);
           safeSend("game:exit", code);
         },
@@ -281,6 +282,13 @@ app.whenReady().then(async () => {
     GameRunner.killGame();
   });
   ipcMain.handle("game:isRunning", () => GameRunner.isGameRunning());
+
+  if (process.argv.includes("--smoke-test")) {
+    LauncherLogger.info("[Smoke Test] All handlers registered; initiating graceful shutdown");
+    setTimeout(() => {
+      app.quit();
+    }, 200);
+  }
 });
 
 app.on("window-all-closed", () => {
@@ -289,6 +297,27 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", async () => {
-  await LauncherLogger.close();
+let isQuitting = false;
+app.on("before-quit", async (event) => {
+  if (isQuitting) return;
+  event.preventDefault();
+  isQuitting = true;
+  try {
+    await Promise.race([
+      Promise.all([
+        LauncherLogger.close(),
+        logTransport ? Promise.resolve(logTransport.close()) : Promise.resolve(),
+      ]),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  } catch (err: any) {
+    process.stderr.write(`[Shutdown Error] ${err?.message || err}\n`);
+  } finally {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.destroy();
+      }
+    }
+    app.quit();
+  }
 });

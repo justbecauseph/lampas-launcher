@@ -276,7 +276,7 @@ async function runDirectoryMoveBenchmark(): Promise<BenchmarkResult> {
   };
 }
 
-async function runLogStormBenchmark(): Promise<BenchmarkResult> {
+async function runLogStormBenchmark(iterations = 3): Promise<BenchmarkResult> {
   const lineCount = 20_000;
   const logDir = path.join(benchRoot, "log-bench");
   fs.mkdirSync(logDir, { recursive: true });
@@ -284,31 +284,96 @@ async function runLogStormBenchmark(): Promise<BenchmarkResult> {
   const origConsoleLog = console.log;
   console.log = () => {}; // suppress stdout during benchmark
 
-  const ald = monitorEventLoopDelay({ resolution: 10 });
-  ald.enable();
+  const rawRuns: Array<{
+    run: number;
+    producerWallTimeMs: number;
+    flushWallTimeMs: number;
+    totalWallTimeMs: number;
+    linesPerSec: number;
+    eventLoopLagMaxMs: number;
+    eventLoopDelayP99Ms: number;
+    produced: number;
+    written: number;
+    dropped: number;
+    errors: number;
+  }> = [];
 
-  const startRss = process.memoryUsage().rss;
-  const start = performance.now();
+  for (let r = 1; r <= iterations; r++) {
+    LauncherLogger.resetForTesting();
+    LauncherLogger.init(path.join(logDir, `run-${r}`));
 
-  for (let i = 0; i < lineCount; i++) {
-    LauncherLogger.info(`[Game Log Worker ${i % 4}] Server tick took ${(i % 50).toFixed(2)}ms, entities: ${i * 2}`);
+    const ald = monitorEventLoopDelay({ resolution: 10 });
+    ald.enable();
+
+    let maxImmediateLagMs = 0;
+    let samplingActive = true;
+    const sampleLoop = () => {
+      if (!samplingActive) return;
+      const t0 = performance.now();
+      setImmediate(() => {
+        const diff = performance.now() - t0;
+        if (diff > maxImmediateLagMs) maxImmediateLagMs = diff;
+        if (samplingActive) sampleLoop();
+      });
+    };
+    sampleLoop();
+
+    const pStart = performance.now();
+    for (let i = 0; i < lineCount; i++) {
+      LauncherLogger.info(`[Game Log Worker ${i % 4}] Server tick took ${(i % 50).toFixed(2)}ms, entities: ${i * 2}`);
+    }
+    const pEnd = performance.now();
+    const producerMs = pEnd - pStart;
+
+    const fStart = performance.now();
+    await LauncherLogger.flush();
+    const fEnd = performance.now();
+    const flushMs = fEnd - fStart;
+
+    samplingActive = false;
+    ald.disable();
+    const metrics = LauncherLogger.getMetrics();
+    await LauncherLogger.close();
+
+    const totalMs = producerMs + flushMs;
+    const p99 = Math.round((ald.percentile(99) / 1_000_000) * 100) / 100;
+    const maxLag = Math.round(Math.max(maxImmediateLagMs, ald.max / 1_000_000) * 100) / 100;
+
+    rawRuns.push({
+      run: r,
+      producerWallTimeMs: Math.round(producerMs * 100) / 100,
+      flushWallTimeMs: Math.round(flushMs * 100) / 100,
+      totalWallTimeMs: Math.round(totalMs * 100) / 100,
+      linesPerSec: Math.round(lineCount / (totalMs / 1000)),
+      eventLoopLagMaxMs: maxLag,
+      eventLoopDelayP99Ms: p99,
+      produced: metrics.producedCount,
+      written: metrics.writtenCount,
+      dropped: metrics.droppedCount,
+      errors: metrics.errorCount,
+    });
   }
 
-  const end = performance.now();
-  ald.disable();
-  const endRss = process.memoryUsage().rss;
   console.log = origConsoleLog;
 
+  const avgProducer = Math.round((rawRuns.reduce((s, r) => s + r.producerWallTimeMs, 0) / rawRuns.length) * 100) / 100;
+  const avgFlush = Math.round((rawRuns.reduce((s, r) => s + r.flushWallTimeMs, 0) / rawRuns.length) * 100) / 100;
+  const avgTotal = Math.round((rawRuns.reduce((s, r) => s + r.totalWallTimeMs, 0) / rawRuns.length) * 100) / 100;
+  const avgLinesPerSec = Math.round(lineCount / (avgTotal / 1000));
+
   return {
-    scenario: "Log Storm (20,000 entries through appendFileSync sink)",
-    durationMs: end - start,
+    scenario: "Log Storm (20,000 entries: separated producer latency & completed disk writes)",
+    durationMs: avgTotal,
     details: {
+      platform: `${os.platform()} ${os.release()} (${os.arch()})`,
+      runtime: `Node ${process.version} / Bun ${Bun.version}`,
       lineCount,
-      wallTimeMs: Math.round((end - start) * 100) / 100,
-      linesPerSec: Math.round((lineCount / ((end - start) / 1000))),
-      rssDeltaMB: Math.round(((endRss - startRss) / 1024 / 1024) * 100) / 100,
-      eventLoopDelayMaxMs: Math.round((ald.max / 1_000_000) * 100) / 100,
-      eventLoopDelayP99Ms: Math.round((ald.percentile(99) / 1_000_000) * 100) / 100,
+      iterations,
+      avgProducerWallTimeMs: avgProducer,
+      avgFlushWallTimeMs: avgFlush,
+      avgTotalWallTimeMs: avgTotal,
+      avgLinesPerSec,
+      rawRuns,
     },
   };
 }
@@ -383,9 +448,16 @@ export async function runAllBenchmarks(): Promise<BenchmarkResult[]> {
   results.push(moveRes);
   console.log(`[3/5] ${moveRes.scenario}: Rename ${moveRes.details.renameWallTimeMs} ms | Copy+Verify ${moveRes.details.copyVerifyWallTimeMs} ms`);
 
-  const logStormRes = await runLogStormBenchmark();
+  const logStormRes = await runLogStormBenchmark(3);
   results.push(logStormRes);
-  console.log(`[4/5] ${logStormRes.scenario}: ${logStormRes.details.wallTimeMs} ms (${logStormRes.details.linesPerSec} lines/sec, max event-loop stall: ${logStormRes.details.eventLoopDelayMaxMs} ms)`);
+  console.log(`[4/5] ${logStormRes.scenario}:`);
+  console.log(`      Producer Enqueue Avg: ${logStormRes.details.avgProducerWallTimeMs} ms`);
+  console.log(`      Disk Flush Avg:       ${logStormRes.details.avgFlushWallTimeMs} ms`);
+  console.log(`      Total Wall Time Avg:  ${logStormRes.details.avgTotalWallTimeMs} ms (${logStormRes.details.avgLinesPerSec} lines/sec)`);
+  console.log(`      Raw Runs (3 reps):`);
+  for (const r of logStormRes.details.rawRuns) {
+    console.log(`        Run ${r.run}: producer=${r.producerWallTimeMs}ms, flush=${r.flushWallTimeMs}ms, total=${r.totalWallTimeMs}ms, produced=${r.produced}, written=${r.written}, dropped=${r.dropped}, maxLag=${r.eventLoopLagMaxMs}ms`);
+  }
 
   const catalogRes = await runModCatalogSearchBenchmark();
   results.push(catalogRes);

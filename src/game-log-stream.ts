@@ -2,6 +2,7 @@ import { StringDecoder } from "node:string_decoder";
 import { type Readable } from "node:stream";
 import type { GameLogEntry } from "./types";
 import { safeSend } from "./operations";
+import { LauncherLogger } from "./logger";
 
 export interface ProcessLogFramerOptions {
   maxLineLength?: number;
@@ -9,12 +10,14 @@ export interface ProcessLogFramerOptions {
 
 /**
  * Handles streaming UTF-8 decoding and line framing for child process stdout/stderr streams.
- * Prevents memory exhaustion from unbounded lines and correctly stitches split UTF-8 sequences.
+ * Prevents memory exhaustion from unbounded lines, redacts sensitive tokens, and correctly
+ * stitches split UTF-8 sequences across chunk boundaries.
  */
 export class ProcessLogFramer {
   private decoder: StringDecoder;
   private buffer = "";
   private readonly maxLineLength: number;
+  private finished = false;
 
   constructor(
     private readonly defaultLevel: "INFO" | "WARN" | "ERROR",
@@ -32,9 +35,15 @@ export class ProcessLogFramer {
       this.pushChunk(chunk);
     });
 
-    stream.on("end", () => {
-      this.flush();
-    });
+    const onFinish = () => this.finishOnce();
+    stream.once("end", onFinish);
+    stream.once("close", onFinish);
+  }
+
+  finishOnce(): void {
+    if (this.finished) return;
+    this.finished = true;
+    this.flush();
   }
 
   pushChunk(chunk: Buffer | string): void {
@@ -107,9 +116,12 @@ export class ProcessLogFramer {
       level = isError ? "ERROR" : "WARN";
     }
 
+    // Apply tested redaction to live-output delivery
+    const sanitizedMessage = LauncherLogger.sanitize(message);
+
     this.onEntry({
       level,
-      message,
+      message: sanitizedMessage,
       timestamp: new Date().toLocaleTimeString(),
     });
   }
@@ -118,26 +130,58 @@ export class ProcessLogFramer {
 export interface LogBatchTransportOptions {
   intervalMs?: number;
   maxBatchSize?: number;
+  maxBatchBytes?: number;
   maxQueueCapacity?: number;
-  ackTimeoutMs?: number;
+  maxQueueBytes?: number;
+}
+
+export interface TransportMetrics {
+  producedCount: number;
+  producedBytes: number;
+  dispatchedCount: number;
+  dispatchedBytes: number;
+  acknowledgedCount: number;
+  acknowledgedBytes: number;
+  droppedCount: number;
+  droppedBytes: number;
+}
+
+interface QueuedItem {
+  entry: GameLogEntry;
+  bytes: number;
 }
 
 /**
- * Bounded, flow-controlled IPC batch transport for streaming game logs to Electron renderer.
- * Prevents event loop stalling, IPC pipe saturation, and unbounded DOM growth.
+ * Bounded, flow-controlled IPC batch transport with identified, receiver-bound ACK accounting.
+ * Enforces per-record, queue, and batch byte budgets. Separates application transport lifetime
+ * from individual game sessions.
  */
 export class BoundedLogBatchTransport {
-  private queue: GameLogEntry[] = [];
+  private queue: QueuedItem[] = [];
+  private queueBytes = 0;
   private droppedCount = 0;
-  private inFlight = false;
+  private droppedBytes = 0;
+  private nextBatchId = 1;
+  private inFlightBatch: { batchId: number; entries: GameLogEntry[]; bytes: number } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private ackFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
 
   private readonly intervalMs: number;
   private readonly maxBatchSize: number;
+  private readonly maxBatchBytes: number;
   private readonly maxQueueCapacity: number;
-  private readonly ackTimeoutMs: number;
+  private readonly maxQueueBytes: number;
+
+  private metrics: TransportMetrics = {
+    producedCount: 0,
+    producedBytes: 0,
+    dispatchedCount: 0,
+    dispatchedBytes: 0,
+    acknowledgedCount: 0,
+    acknowledgedBytes: 0,
+    droppedCount: 0,
+    droppedBytes: 0,
+  };
 
   constructor(
     private readonly targetWindowProvider: () => any,
@@ -145,24 +189,37 @@ export class BoundedLogBatchTransport {
   ) {
     this.intervalMs = options?.intervalMs ?? 50;
     this.maxBatchSize = options?.maxBatchSize ?? 100;
+    this.maxBatchBytes = options?.maxBatchBytes ?? 64 * 1024; // 64 KB
     this.maxQueueCapacity = options?.maxQueueCapacity ?? 2_000;
-    this.ackTimeoutMs = options?.ackTimeoutMs ?? 500;
+    this.maxQueueBytes = options?.maxQueueBytes ?? 2 * 1024 * 1024; // 2 MB
   }
 
   push(entry: GameLogEntry): void {
     if (this.closed) return;
 
-    if (this.queue.length >= this.maxQueueCapacity) {
-      // Bounded queue: drop oldest records, keep newest
-      this.queue.shift();
+    const entryBytes = Buffer.byteLength(JSON.stringify(entry), "utf-8");
+    this.metrics.producedCount++;
+    this.metrics.producedBytes += entryBytes;
+
+    // Enforce queue capacity and byte budget
+    while (
+      (this.queue.length >= this.maxQueueCapacity || this.queueBytes + entryBytes > this.maxQueueBytes) &&
+      this.queue.length > 0
+    ) {
+      const dropped = this.queue.shift()!;
+      this.queueBytes -= dropped.bytes;
       this.droppedCount++;
+      this.droppedBytes += dropped.bytes;
+      this.metrics.droppedCount++;
+      this.metrics.droppedBytes += dropped.bytes;
     }
 
-    this.queue.push(entry);
+    this.queue.push({ entry, bytes: entryBytes });
+    this.queueBytes += entryBytes;
 
-    if (this.queue.length >= this.maxBatchSize && !this.inFlight) {
+    if (this.queue.length >= this.maxBatchSize && !this.inFlightBatch) {
       this.dispatchBatch();
-    } else if (!this.timer) {
+    } else if (!this.timer && !this.inFlightBatch) {
       this.timer = setTimeout(() => {
         this.timer = null;
         this.dispatchBatch();
@@ -170,19 +227,26 @@ export class BoundedLogBatchTransport {
     }
   }
 
-  onRendererAck(): void {
-    if (this.ackFallbackTimer) {
-      clearTimeout(this.ackFallbackTimer);
-      this.ackFallbackTimer = null;
+  onRendererAck(batchId?: number): void {
+    if (!this.inFlightBatch) return;
+
+    // Identified, receiver-bound ACK check
+    if (batchId !== undefined && batchId !== this.inFlightBatch.batchId) {
+      // Ignore mismatched or stale ACKs; do not grant credit
+      return;
     }
-    this.inFlight = false;
-    if (this.queue.length > 0) {
+
+    this.metrics.acknowledgedCount += this.inFlightBatch.entries.length;
+    this.metrics.acknowledgedBytes += this.inFlightBatch.bytes;
+    this.inFlightBatch = null;
+
+    if (this.queue.length > 0 && !this.closed) {
       this.dispatchBatch();
     }
   }
 
   private dispatchBatch(): void {
-    if (this.inFlight || this.queue.length === 0 || this.closed) {
+    if (this.inFlightBatch || this.queue.length === 0 || this.closed) {
       return;
     }
 
@@ -191,57 +255,137 @@ export class BoundedLogBatchTransport {
       this.timer = null;
     }
 
-    const countToSend = Math.min(this.queue.length, this.maxBatchSize);
-    const entries = this.queue.splice(0, countToSend);
+    const batchEntries: GameLogEntry[] = [];
+    let batchBytes = 0;
+
+    while (
+      this.queue.length > 0 &&
+      batchEntries.length < this.maxBatchSize &&
+      batchBytes + this.queue[0].bytes <= this.maxBatchBytes
+    ) {
+      const item = this.queue.shift()!;
+      this.queueBytes -= item.bytes;
+      batchEntries.push(item.entry);
+      batchBytes += item.bytes;
+    }
+
+    // If a single record exceeds maxBatchBytes, allow it as a 1-entry batch
+    if (batchEntries.length === 0 && this.queue.length > 0) {
+      const item = this.queue.shift()!;
+      this.queueBytes -= item.bytes;
+      batchEntries.push(item.entry);
+      batchBytes += item.bytes;
+    }
+
+    const batchId = this.nextBatchId++;
     const dropped = this.droppedCount;
     this.droppedCount = 0;
+    this.droppedBytes = 0;
+
+    this.metrics.dispatchedCount += batchEntries.length;
+    this.metrics.dispatchedBytes += batchBytes;
 
     const win = this.targetWindowProvider();
-    const sent = safeSend(win, "game:logBatch", { entries, dropped });
+    const sent = safeSend(win, "game:logBatch", {
+      batchId,
+      entries: batchEntries,
+      dropped,
+      bytes: batchBytes,
+    });
 
     if (sent) {
-      this.inFlight = true;
-      // Fallback timer if renderer is hidden, minimized, or crashed
-      this.ackFallbackTimer = setTimeout(() => {
-        this.ackFallbackTimer = null;
-        this.inFlight = false;
-        if (this.queue.length > 0) {
-          this.dispatchBatch();
-        }
-      }, this.ackTimeoutMs);
+      this.inFlightBatch = { batchId, entries: batchEntries, bytes: batchBytes };
     } else {
-      // Window unavailable or destroyed: discard dispatched batch and reset inFlight
-      this.inFlight = false;
+      // Window unavailable or destroyed: cannot deliver, reset inFlight and restore dropped count
+      this.inFlightBatch = null;
+      this.droppedCount += dropped;
     }
   }
 
-  flushAndClose(): void {
+  /**
+   * Flush pending logs at the conclusion of an individual game session or repair.
+   * Keeps the application transport alive for subsequent sessions.
+   */
+  flushSession(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (!this.inFlightBatch && this.queue.length > 0 && !this.closed) {
+      this.dispatchBatch();
+    }
+  }
+
+  /**
+   * Permanently closes the transport upon application shutdown.
+   * Obeys batch and outstanding-delivery limits: does not dispatch if a delivery is in-flight,
+   * and dispatches at most one final batch obeying limits.
+   */
+  close(): void {
     this.closed = true;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    if (this.ackFallbackTimer) {
-      clearTimeout(this.ackFallbackTimer);
-      this.ackFallbackTimer = null;
+
+    if (!this.inFlightBatch && this.queue.length > 0) {
+      this.dispatchBatch();
     }
 
+    // Drop remaining queued entries with accounting
     if (this.queue.length > 0) {
-      const win = this.targetWindowProvider();
-      safeSend(win, "game:logBatch", {
-        entries: this.queue,
-        dropped: this.droppedCount,
-      });
+      for (const item of this.queue) {
+        this.droppedCount++;
+        this.droppedBytes += item.bytes;
+        this.metrics.droppedCount++;
+        this.metrics.droppedBytes += item.bytes;
+      }
       this.queue = [];
-      this.droppedCount = 0;
+      this.queueBytes = 0;
     }
+  }
+
+  flushAndClose(): void {
+    this.close();
   }
 
   getPendingCount(): number {
     return this.queue.length;
   }
 
+  getPendingBytes(): number {
+    return this.queueBytes;
+  }
+
   getDroppedCount(): number {
-    return this.droppedCount;
+    return this.metrics.droppedCount;
+  }
+
+  getMetrics(): TransportMetrics {
+    return { ...this.metrics };
+  }
+
+  resetForTesting(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.queue = [];
+    this.queueBytes = 0;
+    this.droppedCount = 0;
+    this.droppedBytes = 0;
+    this.inFlightBatch = null;
+    this.closed = false;
+    this.nextBatchId = 1;
+    this.metrics = {
+      producedCount: 0,
+      producedBytes: 0,
+      dispatchedCount: 0,
+      dispatchedBytes: 0,
+      acknowledgedCount: 0,
+      acknowledgedBytes: 0,
+      droppedCount: 0,
+      droppedBytes: 0,
+    };
   }
 }

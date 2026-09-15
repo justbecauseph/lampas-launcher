@@ -2,6 +2,94 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { app } from "electron";
 
+export interface LoggerMetrics {
+  producedCount: number;
+  producedBytes: number;
+  writtenCount: number;
+  writtenBytes: number;
+  droppedCount: number;
+  droppedBytes: number;
+  errorCount: number;
+}
+
+export const MAX_LOG_RECORD_BYTES = 16_384; // 16 KB record budget
+
+export function safeBoundedClone(
+  data: any,
+  depth = 0,
+  seen = new WeakSet(),
+  maxDepth = 3,
+  maxKeys = 15,
+  maxArrayItems = 15
+): any {
+  if (data === null || data === undefined) return data;
+  if (typeof data === "string") {
+    return LauncherLoggerService.sanitize(data);
+  }
+  if (typeof data === "number" || typeof data === "boolean") {
+    return data;
+  }
+  if (typeof data === "bigint" || typeof data === "symbol") {
+    return data.toString();
+  }
+  if (typeof data === "function") {
+    return "[Function]";
+  }
+  if (Buffer.isBuffer(data)) {
+    const preview = data.toString("utf-8", 0, Math.min(data.length, 1024));
+    return LauncherLoggerService.sanitize(preview);
+  }
+  if (data instanceof Error) {
+    return {
+      name: data.name,
+      message: LauncherLoggerService.sanitize(data.message),
+      stack: LauncherLoggerService.sanitize(data.stack || ""),
+    };
+  }
+
+  if (typeof data === "object") {
+    if (seen.has(data)) {
+      return "[Circular]";
+    }
+    seen.add(data);
+
+    if (depth >= maxDepth) {
+      return "[Object (max depth)]";
+    }
+
+    if (Array.isArray(data)) {
+      const arr = [];
+      const len = Math.min(data.length, maxArrayItems);
+      for (let i = 0; i < len; i++) {
+        arr.push(safeBoundedClone(data[i], depth + 1, seen, maxDepth, maxKeys, maxArrayItems));
+      }
+      if (data.length > maxArrayItems) {
+        arr.push(`[... ${data.length - maxArrayItems} more items]`);
+      }
+      return arr;
+    }
+
+    const obj: Record<string, any> = {};
+    const keys = Object.keys(data);
+    const keyCount = Math.min(keys.length, maxKeys);
+
+    for (let i = 0; i < keyCount; i++) {
+      const key = keys[i];
+      if (/^(token|refreshtoken|minecraftaccesstoken|publishsecret|secret|password|code_verifier|code|authorization|auth|cookie|key)$/i.test(key)) {
+        obj[key] = "[REDACTED]";
+      } else {
+        obj[key] = safeBoundedClone(data[key], depth + 1, seen, maxDepth, maxKeys, maxArrayItems);
+      }
+    }
+    if (keys.length > maxKeys) {
+      obj["..."] = `[${keys.length - maxKeys} more keys]`;
+    }
+    return obj;
+  }
+
+  return String(data);
+}
+
 export class LauncherLoggerService {
   private logsDir = "";
   private logFilePath = "";
@@ -16,11 +104,27 @@ export class LauncherLoggerService {
   private waitingForDrain = false;
   private flushResolvers: Array<() => void> = [];
 
+  // Lifecycle state
+  private isClosing = false;
+  private isClosed = false;
+  private closePromise: Promise<void> | null = null;
+
   // Overload limits & accounting
   public MAX_PENDING_BYTES = 5 * 1024 * 1024; // 5 MB
   public MAX_PENDING_RECORDS = 10_000;
   private droppedRecords = 0;
   private overflowNotified = false;
+
+  // Cumulative metrics
+  private metrics: LoggerMetrics = {
+    producedCount: 0,
+    producedBytes: 0,
+    writtenCount: 0,
+    writtenBytes: 0,
+    droppedCount: 0,
+    droppedBytes: 0,
+    errorCount: 0,
+  };
 
   init(customLogsDir?: string): void {
     if (this.initialized) return;
@@ -73,8 +177,10 @@ export class LauncherLoggerService {
       });
 
       this.writeStream.on("error", (err) => {
+        this.metrics.errorCount++;
         // Defensive: do not recursively log through LauncherLogger
         process.stderr.write(`[LauncherLogger Stream Error] ${err?.message || err}\n`);
+        this.settleFlushResolvers();
       });
 
       // Write session start header
@@ -87,6 +193,7 @@ export class LauncherLoggerService {
       this.enqueueLine(header);
       this.initialized = true;
     } catch (err) {
+      this.metrics.errorCount++;
       console.error("[Logger Init Error]", err);
     }
   }
@@ -102,24 +209,50 @@ export class LauncherLoggerService {
   }
 
   getDroppedRecordsCount(): number {
-    return this.droppedRecords;
+    return this.metrics.droppedCount;
+  }
+
+  getMetrics(): LoggerMetrics {
+    return { ...this.metrics };
   }
 
   log(level: "INFO" | "WARN" | "ERROR" | "CHAT" | string, message: string): void {
-    if (!this.initialized) this.init();
-
-    const timestamp = new Date().toISOString();
     const sanitizedMessage = LauncherLoggerService.sanitize(message);
-    const line = `[${timestamp}] [${level}] ${sanitizedMessage}\n`;
+    const timestamp = new Date().toISOString();
+
+    // Bound single record size to prevent unbounded memory allocation
+    let processedMessage = sanitizedMessage;
+    if (Buffer.byteLength(processedMessage, "utf-8") > MAX_LOG_RECORD_BYTES) {
+      processedMessage = processedMessage.slice(0, MAX_LOG_RECORD_BYTES) + " ...[TRUNCATED]";
+    }
+
+    const line = `[${timestamp}] [${level}] ${processedMessage}\n`;
+    const lineBytes = Buffer.byteLength(line, "utf-8");
+
+    // Check if shutdown is in progress or completed
+    if (this.isClosing || this.isClosed) {
+      this.metrics.producedCount++;
+      this.metrics.producedBytes += lineBytes;
+      this.metrics.droppedCount++;
+      this.metrics.droppedBytes += lineBytes;
+      if (level === "ERROR") {
+        process.stderr.write(`[POST-CLOSE ERROR] ${processedMessage}\n`);
+      } else {
+        process.stdout.write(`[POST-CLOSE LOG] ${processedMessage}\n`);
+      }
+      return;
+    }
+
+    if (!this.initialized) this.init();
 
     this.enqueueLine(line);
 
     if (level === "ERROR") {
-      console.error(`[${level}]`, sanitizedMessage);
+      console.error(`[${level}]`, processedMessage);
     } else if (level === "WARN") {
-      console.warn(`[${level}]`, sanitizedMessage);
+      console.warn(`[${level}]`, processedMessage);
     } else {
-      console.log(`[${level}]`, sanitizedMessage);
+      console.log(`[${level}]`, processedMessage);
     }
   }
 
@@ -137,6 +270,8 @@ export class LauncherLoggerService {
 
   private enqueueLine(line: string): void {
     const lineBytes = Buffer.byteLength(line, "utf-8");
+    this.metrics.producedCount++;
+    this.metrics.producedBytes += lineBytes;
 
     // Enforce memory and record bounds under disk backpressure / saturation
     while (
@@ -146,7 +281,10 @@ export class LauncherLoggerService {
     ) {
       this.droppedRecords++;
       const dropped = this.pendingQueue.shift()!;
-      this.pendingBytes -= Buffer.byteLength(dropped, "utf-8");
+      const droppedBytes = Buffer.byteLength(dropped, "utf-8");
+      this.pendingBytes -= droppedBytes;
+      this.metrics.droppedCount++;
+      this.metrics.droppedBytes += droppedBytes;
     }
 
     this.pendingQueue.push(line);
@@ -164,20 +302,26 @@ export class LauncherLoggerService {
       const count = this.droppedRecords;
       this.droppedRecords = 0;
       const notice = `[${new Date().toISOString()}] [WARN] [Logger] Logging overload: dropped ${count} records due to write saturation\n`;
+      const noticeBytes = Buffer.byteLength(notice, "utf-8");
       this.inFlightWrites++;
       this.writeStream.write(notice, () => {
         this.inFlightWrites--;
+        this.metrics.writtenCount++;
+        this.metrics.writtenBytes += noticeBytes;
         this.checkFlush();
       });
     }
 
     while (this.pendingQueue.length > 0) {
       const chunk = this.pendingQueue.shift()!;
-      this.pendingBytes -= Buffer.byteLength(chunk, "utf-8");
+      const chunkBytes = Buffer.byteLength(chunk, "utf-8");
+      this.pendingBytes -= chunkBytes;
       this.inFlightWrites++;
 
       const ok = this.writeStream.write(chunk, () => {
         this.inFlightWrites--;
+        this.metrics.writtenCount++;
+        this.metrics.writtenBytes += chunkBytes;
         this.checkFlush();
       });
 
@@ -201,15 +345,25 @@ export class LauncherLoggerService {
       !this.waitingForDrain &&
       this.flushResolvers.length > 0
     ) {
-      const resolvers = this.flushResolvers;
-      this.flushResolvers = [];
-      for (const resolve of resolvers) {
+      this.settleFlushResolvers();
+    }
+  }
+
+  private settleFlushResolvers(): void {
+    const resolvers = this.flushResolvers;
+    this.flushResolvers = [];
+    for (const resolve of resolvers) {
+      try {
         resolve();
-      }
+      } catch {}
     }
   }
 
   async flush(): Promise<void> {
+    if (this.isClosed) {
+      return;
+    }
+
     if (
       !this.initialized ||
       (this.pendingQueue.length === 0 && this.inFlightWrites === 0 && !this.waitingForDrain)
@@ -223,16 +377,45 @@ export class LauncherLoggerService {
     });
   }
 
-  async close(): Promise<void> {
-    await this.flush();
+  close(): Promise<void> {
+    if (this.isClosed) return Promise.resolve();
+    if (this.closePromise) return this.closePromise;
 
-    if (this.writeStream && !this.writeStream.destroyed) {
-      const stream = this.writeStream;
-      this.writeStream = null;
-      await new Promise<void>((resolve) => {
-        stream.end(() => resolve());
-      });
-    }
+    this.isClosing = true;
+    this.closePromise = (async () => {
+      try {
+        await Promise.race([
+          this.flush(),
+          new Promise((resolve) => setTimeout(resolve, 3000)),
+        ]);
+      } catch {
+        // Proceed on flush error
+      } finally {
+        this.settleFlushResolvers();
+      }
+
+      if (this.writeStream) {
+        const stream = this.writeStream;
+        this.writeStream = null;
+        await new Promise<void>((resolve) => {
+          try {
+            stream.removeAllListeners();
+            if (!stream.destroyed && !stream.closed) {
+              stream.end(() => resolve());
+            } else {
+              resolve();
+            }
+          } catch {
+            resolve();
+          }
+        });
+      }
+
+      this.isClosing = false;
+      this.isClosed = true;
+    })();
+
+    return this.closePromise;
   }
 
   logApiRequest(method: string, url: string, payload?: any): void {
@@ -270,24 +453,23 @@ export class LauncherLoggerService {
     if (data === undefined || data === null) return "";
 
     try {
-      let raw: string;
+      let text: string;
       if (typeof data === "string") {
-        raw = data.length > maxLen * 2 ? data.slice(0, maxLen * 2) : data;
+        // Redaction is ALWAYS performed BEFORE truncation!
+        const sanitized = LauncherLoggerService.sanitize(data);
+        return sanitized.length > maxLen ? `${sanitized.slice(0, maxLen)}...` : sanitized;
       } else if (Buffer.isBuffer(data)) {
-        raw = data.toString("utf-8", 0, Math.min(data.length, maxLen * 2));
+        const sanitized = LauncherLoggerService.sanitize(data.toString("utf-8"));
+        return sanitized.length > maxLen ? `${sanitized.slice(0, maxLen)}...` : sanitized;
       } else if (typeof data === "object") {
-        // Truncate serialization before unbounded depth traversal
-        const json = JSON.stringify(data);
-        raw = json.length > maxLen * 2 ? json.slice(0, maxLen * 2) : json;
+        const bounded = safeBoundedClone(data);
+        const json = JSON.stringify(bounded);
+        const sanitized = LauncherLoggerService.sanitize(json);
+        return sanitized.length > maxLen ? `${sanitized.slice(0, maxLen)}...` : sanitized;
       } else {
-        raw = String(data);
+        const sanitized = LauncherLoggerService.sanitize(String(data));
+        return sanitized.length > maxLen ? `${sanitized.slice(0, maxLen)}...` : sanitized;
       }
-
-      const masked = LauncherLoggerService.sanitize(raw);
-      if (masked.length > maxLen) {
-        return `${masked.slice(0, maxLen)}...`;
-      }
-      return masked;
     } catch {
       return "[Unserializable]";
     }
@@ -322,11 +504,23 @@ export class LauncherLoggerService {
     this.waitingForDrain = false;
     this.flushResolvers = [];
     this.initialized = false;
+    this.isClosing = false;
+    this.isClosed = false;
+    this.closePromise = null;
     this.logsDir = "";
     this.logFilePath = "";
     this.previousLogFilePath = "";
     this.droppedRecords = 0;
     this.overflowNotified = false;
+    this.metrics = {
+      producedCount: 0,
+      producedBytes: 0,
+      writtenCount: 0,
+      writtenBytes: 0,
+      droppedCount: 0,
+      droppedBytes: 0,
+      errorCount: 0,
+    };
   }
 }
 
@@ -361,6 +555,10 @@ export class LauncherLogger {
 
   static getDroppedRecordsCount(): number {
     return defaultInstance.getDroppedRecordsCount();
+  }
+
+  static getMetrics(): LoggerMetrics {
+    return defaultInstance.getMetrics();
   }
 
   static log(level: "INFO" | "WARN" | "ERROR" | "CHAT" | string, message: string): void {

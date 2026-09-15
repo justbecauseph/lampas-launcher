@@ -55,10 +55,10 @@ contextBridge.exposeInMainWorld("lampas", {
       ipcRenderer.on("game:log", handler);
       return () => ipcRenderer.removeListener("game:log", handler);
     },
-    onLogBatch: (callback: (batch: { entries: GameLogEntry[]; dropped: number }) => void) => {
-      const handler = (_: any, data: { entries: GameLogEntry[]; dropped: number }) => {
+    onLogBatch: (callback: (batch: { batchId: number; entries: GameLogEntry[]; dropped: number; bytes?: number }) => void) => {
+      const handler = (_: any, data: { batchId: number; entries: GameLogEntry[]; dropped: number; bytes?: number }) => {
         callback(data);
-        ipcRenderer.send("game:logAck");
+        ipcRenderer.send("game:logAck", { batchId: data.batchId });
       };
       ipcRenderer.on("game:logBatch", handler);
       return () => ipcRenderer.removeListener("game:logBatch", handler);

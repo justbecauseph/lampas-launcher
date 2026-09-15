@@ -350,10 +350,12 @@ if (ramSlider) {
 // Console Logging
 // ========================================================
 const MAX_DISPLAY_LINES = 1000;
+const MAX_DISPLAY_BYTES = 512 * 1024; // 512 KB
 const MAX_PENDING_QUEUE = 2000;
 let pendingLogQueue = [];
 let renderRafId = null;
 let clientDroppedLines = 0;
+let retainedDisplayBytes = 0;
 
 function flushLogQueueToDOM() {
   renderRafId = null;
@@ -367,18 +369,28 @@ function flushLogQueueToDOM() {
     const line = document.createElement("div");
     const lvl = (entry.level || "INFO").toUpperCase();
     const time = entry.timestamp || new Date().toLocaleTimeString();
+    const text = `[${time}] [${lvl}] ${entry.message}`;
+    const byteLen = typeof TextEncoder !== "undefined" ? new TextEncoder().encode(text).length : text.length;
 
     line.className = `console-line console-line-${lvl.toLowerCase()}`;
-    line.innerText = `[${time}] [${lvl}] ${entry.message}`;
+    line.innerText = text;
+    line._byteLen = byteLen;
     fragment.appendChild(line);
+    retainedDisplayBytes += byteLen;
     logLineCount++;
   }
 
   consoleOutput.appendChild(fragment);
 
-  // Strictly bound DOM node count to MAX_DISPLAY_LINES
-  while (consoleOutput.childElementCount > MAX_DISPLAY_LINES) {
-    consoleOutput.removeChild(consoleOutput.firstElementChild);
+  // Strictly bound DOM node count to MAX_DISPLAY_LINES and byte size to MAX_DISPLAY_BYTES
+  while (
+    (consoleOutput.childElementCount > MAX_DISPLAY_LINES || retainedDisplayBytes > MAX_DISPLAY_BYTES) &&
+    consoleOutput.firstElementChild
+  ) {
+    const first = consoleOutput.firstElementChild;
+    const len = first._byteLen || 0;
+    retainedDisplayBytes = Math.max(0, retainedDisplayBytes - len);
+    consoleOutput.removeChild(first);
   }
 
   if (consoleCount) {
@@ -442,6 +454,7 @@ function clearConsoleLogs(notify = false) {
   }
   pendingLogQueue = [];
   clientDroppedLines = 0;
+  retainedDisplayBytes = 0;
 
   if (consoleOutput) {
     consoleOutput.innerHTML = "";
