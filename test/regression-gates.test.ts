@@ -96,7 +96,7 @@ describe("Phase 1 Regression Gate — Guarded Mod Mutators (F08)", () => {
 });
 
 describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06)", () => {
-  test.skip("[Phase 3 Gate] Full repair replaces existing asset index if its SHA-1 hash is corrupt", async () => {
+  test("[Phase 3 Gate] Full repair replaces existing asset index if its SHA-1 hash is corrupt", async () => {
     const assetsDir = path.join(gameDir, "assets");
     const indexDir = path.join(assetsDir, "indexes");
     fs.mkdirSync(indexDir, { recursive: true });
@@ -104,12 +104,22 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
     const assetIndexPath = path.join(indexDir, "26.2.json");
     fs.writeFileSync(assetIndexPath, JSON.stringify({ objects: {} })); // corrupt hash
 
+    // Pre-create the asset object with matching SHA-1 and size so full repair verifies it without downloading
+    const assetContent = Buffer.from("test-asset-data");
+    const assetHash = require("node:crypto").createHash("sha1").update(assetContent).digest("hex");
+    const objPath = path.join(assetsDir, "objects", assetHash.substring(0, 2), assetHash);
+    fs.mkdirSync(path.dirname(objPath), { recursive: true });
+    fs.writeFileSync(objPath, assetContent);
+
+    const responseBody = JSON.stringify({ objects: { "test.png": { hash: assetHash, size: assetContent.length } } });
+    const correctSha1 = require("node:crypto").createHash("sha1").update(responseBody).digest("hex");
+
     let redownloaded = false;
     const server = Bun.serve({
       port: 0,
       fetch(req) {
         redownloaded = true;
-        return Response.json({ objects: { "test.png": { hash: "1234", size: 10 } } });
+        return new Response(responseBody, { headers: { "Content-Type": "application/json" } });
       },
     });
 
@@ -118,9 +128,9 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
         assetsDir,
         {
           id: "26.2",
-          sha1: "correctsha1",
+          sha1: correctSha1,
           url: `http://127.0.0.1:${server.port}/index.json`,
-          size: 100,
+          size: Buffer.byteLength(responseBody),
         },
         () => {},
         "full"
@@ -131,16 +141,33 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
     }
   });
 
-  test.skip("[Phase 3 Gate] Full repair re-extracts missing natives even if native marker file exists", async () => {
-    const nativesDir = path.join(gameDir, "bin", "natives");
+  test("[Phase 3 Gate] Full repair re-extracts missing natives even if native marker file exists", async () => {
+    const nativesDir = path.join(gameDir, "natives");
     fs.mkdirSync(nativesDir, { recursive: true });
 
     const markerPath = path.join(gameDir, ".lampas", "natives-26.2-" + process.platform + ".complete");
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, new Date().toISOString(), "utf-8");
 
-    // In Phase 3: full repair must inspect native directory contents or re-extract
+    // Create a mock native jar with a native dll
+    const { zipSync } = await import("fflate");
+    const mockNativeJar = path.join(testRoot, "mock-native.jar");
+    const nativeBytes = zipSync({
+      "lwjgl.dll": new Uint8Array(Buffer.from("mock native binary")),
+    });
+    fs.writeFileSync(mockNativeJar, Buffer.from(nativeBytes));
+
+    // Full repair must inspect native directory contents or re-extract
     // rather than skipping because of the marker.
+    await (MinecraftBootstrap as any).ensureNatives(
+      gameDir,
+      "26.2",
+      [{ path: mockNativeJar, changed: false }],
+      () => {},
+      "full"
+    );
+
     expect(fs.readdirSync(nativesDir).length).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(nativesDir, "lwjgl.dll"))).toBe(true);
   });
 });

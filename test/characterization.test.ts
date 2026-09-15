@@ -231,7 +231,7 @@ describe("Phase 0 Characterization — Move Recovery Semantics (F01)", () => {
 });
 
 describe("Phase 0 Characterization — Full Repair Gaps in MinecraftBootstrap (F06)", () => {
-  test("Asset index hash is not checked if file exists and parses as valid JSON (Baseline F06)", async () => {
+  test("Asset index hash is verified in full repair mode and corrupt index is replaced (Phase 3 Fix F06)", async () => {
     const assetsDir = path.join(gameDir, "assets");
     const indexDir = path.join(assetsDir, "indexes");
     fs.mkdirSync(indexDir, { recursive: true });
@@ -241,21 +241,35 @@ describe("Phase 0 Characterization — Full Repair Gaps in MinecraftBootstrap (F
     const bogusJson = JSON.stringify({ objects: {} });
     fs.writeFileSync(assetIndexPath, bogusJson, "utf-8");
 
-    const actualHash = await hashFile(assetIndexPath, "sha1");
-    const trustedSha1 = "deadbeefcafebabe0123456789abcdef01234567"; // intentionally different
-    expect(actualHash).not.toBe(trustedSha1);
+    const healthyJson = JSON.stringify({ objects: {} });
+    const healthySha1 = crypto.createHash("sha1").update(healthyJson).digest("hex");
 
-    // Call private ensureAssets via reflection / invocation to characterize baseline behavior
-    const logged: string[] = [];
-    await (MinecraftBootstrap as any).ensureAssets(
-      assetsDir,
-      { id: "26.2", sha1: trustedSha1, url: "http://invalid-url-should-not-fetch", size: 999999 },
-      (msg: string) => logged.push(msg),
-      "full"
-    );
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(healthyJson);
+      },
+    });
 
-    // In baseline, because assetIndexPath exists and is valid JSON, it did NOT attempt to re-download or check sha1
-    expect(fs.readFileSync(assetIndexPath, "utf-8")).toBe(bogusJson);
+    try {
+      const logged: string[] = [];
+      await (MinecraftBootstrap as any).ensureAssets(
+        assetsDir,
+        {
+          id: "26.2",
+          sha1: healthySha1,
+          url: `http://127.0.0.1:${server.port}/index.json`,
+          size: Buffer.byteLength(healthyJson),
+        },
+        (msg: string) => logged.push(msg),
+        "full"
+      );
+
+      // In Phase 3, full repair verifies sha1 and re-downloads when corrupt
+      expect(await hashFile(assetIndexPath, "sha1")).toBe(healthySha1);
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("Native extraction is skipped during repair if complete marker exists (Baseline F06)", async () => {

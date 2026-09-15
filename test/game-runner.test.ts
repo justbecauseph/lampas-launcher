@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -58,27 +58,20 @@ mock.module("../src/auth", () => ({
   },
 }));
 
-mock.module("../src/java-runtime", () => ({
-  JavaRuntimeManager: {
-    ensureJava25: async () => "C:\\Java25\\bin\\java.exe",
-  },
-}));
-
-mock.module("../src/minecraft-bootstrap", () => ({
-  MinecraftBootstrap: {
-    prepareGameEnvironment: async (targetDir: string, runtime: any) => {
-      bootstrapCalls.push({ gameDir: targetDir, runtime });
-      return {
-        classpath: ["C:\\Game\\libraries\\fabric.jar"],
-        mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
-        assetIndex: "26.2",
-      };
-    },
-  },
-}));
-
+const { JavaRuntimeManager } = await import("../src/java-runtime");
+const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { ConfigManager } = await import("../src/config");
 const { GameRunner } = await import("../src/game-runner");
+
+const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(async () => "C:\\Java25\\bin\\java.exe");
+const bootstrapSpy = spyOn(MinecraftBootstrap, "prepareGameEnvironment").mockImplementation(async (targetDir: string, runtime: any) => {
+  bootstrapCalls.push({ gameDir: targetDir, runtime });
+  return {
+    classpath: ["C:\\Game\\libraries\\fabric.jar"],
+    mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+    assetIndex: "26.2",
+  };
+});
 
 beforeAll(() => {
   fs.mkdirSync(gameDir, { recursive: true });
@@ -112,6 +105,8 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  javaSpy.mockRestore();
+  bootstrapSpy.mockRestore();
   GameRunner.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });

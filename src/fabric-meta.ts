@@ -272,16 +272,22 @@ export class FabricMetaResolver {
     if (data) {
       const rawMetadata = this.transformRawResponse(data, runtime);
 
-      // Resolve sidecar checksums (SHA-256 / SHA-1) from Maven repository
+      // Resolve sidecar checksums (SHA-256 / SHA-1) from Maven repository with bounded concurrency
       if (resolveSidecars) {
+        const sidecarLibs = rawMetadata.libraries.filter((lib) => !lib.sha256 && !lib.sha1);
+        const concurrency = 6;
+        let nextSidecar = 0;
+        const sidecarWorker = async () => {
+          while (nextSidecar < sidecarLibs.length) {
+            const lib = sidecarLibs[nextSidecar++];
+            if (!lib) break;
+            const checksums = await this.fetchSidecarChecksum(lib, customFetch, timeoutMs);
+            if (checksums.sha256) lib.sha256 = checksums.sha256;
+            if (checksums.sha1) lib.sha1 = checksums.sha1;
+          }
+        };
         await Promise.all(
-          rawMetadata.libraries.map(async (lib) => {
-            if (!lib.sha256 && !lib.sha1) {
-              const checksums = await this.fetchSidecarChecksum(lib, customFetch, timeoutMs);
-              if (checksums.sha256) lib.sha256 = checksums.sha256;
-              if (checksums.sha1) lib.sha1 = checksums.sha1;
-            }
-          })
+          Array.from({ length: Math.min(concurrency, sidecarLibs.length) }, () => sidecarWorker())
         );
       }
 

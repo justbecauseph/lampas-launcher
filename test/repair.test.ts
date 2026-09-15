@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,38 +22,36 @@ let bootstrapCalls: Array<{
   verificationMode?: string;
 }> = [];
 
-mock.module("../src/minecraft-bootstrap", () => ({
-  MinecraftBootstrap: {
-    prepareGameEnvironment: async (
-      targetDir: string,
-      runtime: any,
-      _onLog: any,
-      verificationMode?: string
-    ) => {
-      bootstrapCalls.push({ gameDir: targetDir, runtime, verificationMode });
-      return {
-        classpath: ["C:\\Game\\libraries\\fabric.jar"],
-        mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
-        assetIndex: "26.2",
-      };
-    },
-  },
-}));
-
 let javaCalls: Array<{ gameDir: string; mode?: string }> = [];
-
-mock.module("../src/java-runtime", () => ({
-  JavaRuntimeManager: {
-    ensureJava25: async (targetDir: string, _onLog: any, mode?: string) => {
-      javaCalls.push({ gameDir: targetDir, mode });
-      return "C:\\Java25\\bin\\java.exe";
-    },
-  },
-}));
 
 const { LauncherLogger } = await import("../src/logger");
 const { ConfigManager } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
+const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
+const { JavaRuntimeManager } = await import("../src/java-runtime");
+
+const bootstrapSpy = spyOn(MinecraftBootstrap, "prepareGameEnvironment").mockImplementation(async (
+  targetDir: string,
+  runtime: any,
+  _onLog: any,
+  verificationMode?: string
+) => {
+  bootstrapCalls.push({ gameDir: targetDir, runtime, verificationMode });
+  return {
+    classpath: ["C:\\Game\\libraries\\fabric.jar"],
+    mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+    assetIndex: "26.2",
+  };
+});
+
+const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(async (
+  targetDir: string,
+  _onLog: any,
+  mode?: string
+) => {
+  javaCalls.push({ gameDir: targetDir, mode });
+  return "C:\\Java25\\bin\\java.exe";
+});
 
 beforeAll(() => {
   fs.mkdirSync(userDataDir, { recursive: true });
@@ -79,6 +77,8 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  bootstrapSpy.mockRestore();
+  javaSpy.mockRestore();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
