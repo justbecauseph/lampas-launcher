@@ -21,7 +21,7 @@ Welcome to the **Lampas Launcher**! It is our custom-built desktop app that hand
 * 🧩 **Add Your Own Mods**: Want your favorite zoom mod, shader pack, or HUD tweaks? Just drag and drop them into the **Client Mods** tab!
 * 👀 **Live Server Status**: Check if the server is online and see who's currently playing before you even launch the game.
 * 💽 **Ran out of C: Drive space?**: You can move your entire game folder to your D: drive (or anywhere else) right from the settings without breaking anything.
-* 🔧 **Big Red "Repair" Button**: Game acting weird? Press **Repair** and the launcher will scan, verify, and fix every file in seconds.
+* 🔧 **Repair Button**: Game acting weird? Press **Repair** to run a full cryptographic SHA-256 verification of every managed mod, configuration, asset index, and Fabric runtime library, replacing any corrupt files.
 
 ---
 
@@ -84,33 +84,86 @@ Lampas uses a 3-tier ownership model for mod configurations:
 
 If you want to build or tinker with the launcher code locally:
 
-### Requirements
-* [Bun](https://bun.sh) (v1.0+)
-* [Node.js](https://nodejs.org) (v20+)
+### Supported Platforms & Runtime Requirements
+* **Supported Target Platforms:**
+  * **Windows (x64):** Windows 10, Windows 11 (NSIS installer & portable `.exe`).
+  * **Linux (x64):** Modern glibc distributions (AppImage & `.tar.gz`).
+* **Tooling Requirements:**
+  * **Bun:** `v1.4.0` (pinned in CI) / `1.0+`
+  * **Node.js:** `v20+` (Node 24 LTS recommended)
+  * **Electron:** `44.0.0`
+  * **Vite:** `^6.2.0` (renderer bundler)
+  * **TypeScript:** `^5.8.2`
 
-### Quick Commands
+### Developer Commands
 ```bash
 # 1. Install dependencies
-bun install
+bun install --frozen-lockfile
 
-# 2. Run in development mode (TypeScript watch + Electron)
-bun run dev
+# 2. Typecheck main/preload (tsconfig.json) and renderer (tsconfig.renderer.json)
+bun run typecheck
 
-# 3. Run all tests
+# 3. Run full unit & integration test suite (233 tests across 29 files)
 bun test
 
-# 4. Package for your OS
+# 4. Run real Electron smoke test harness (verifies assets, fonts, preload, & execution)
+bun run smoke
+
+# 5. Run performance benchmark suite (warm sync, repair, move, logging, catalog search)
+bun run benchmark
+
+# 6. Run in development mode (TypeScript watch + Vite HMR + Electron)
+bun run dev
+
+# 7. Production build (compiles main/preload CJS and bundles modular renderer)
+bun run build
+
+# 8. Package unpacked distribution directory (testing packaged paths without installers)
+bun run package:dir
+
+# 9. Package production distribution artifacts
 bun run package:win    # Windows installer & portable exe
 bun run package:linux  # Linux AppImage & tar.gz
+bun run package:all    # Multi-platform distribution build
 ```
 
+---
+
+## 🏗️ Architecture & Operational Invariants
+
+### ⚡ Verification Modes: Fast-Mode Sync vs Full Repair
+* **Fast-Mode Sync (Pre-Launch Default):**
+  * Validates files against client manifest using a cached metadata shortcut: file size, modification timestamp (`mtimeMs`), and expected SHA-256 registered in `installation.json`.
+  * Untouched files require zero disk hashing before launch.
+  * Files requiring download or replacement are verified via in-flight SHA-256 streaming before atomic placement into the game directory.
+* **Full Repair (Explicit User Action):**
+  * Performs an exhaustive cryptographic SHA-256 hash calculation of every managed mod, configuration, and asset file.
+  * Independently re-validates `version-meta-26.2.json` and `assetIndex.json` against trusted Mojang SHA-1 digests before parsing objects.
+  * Re-validates all extracted native binaries and Fabric Loader libraries against authoritative upstream Maven sidecar digests, replacing any tampered or corrupted files.
+
+### 💽 Directory Relocation & Resilient Crash Recovery
+* **Non-Blocking Streaming Architecture:** Relocating the game directory uses an asynchronous streaming pipeline (`scanDirectoryAsync` -> `streamCopyAndHash` -> destination readback verification) bounded to 6 concurrent streams. Empty directories are preserved; unsupported links (symlinks, junctions) fail closed immediately to prevent data loss.
+* **Pre-Promotion Drift Guard:** Before promoting the staging directory or deleting the original source, the launcher re-scans the source tree to ensure no external processes modified, added, or deleted files during copying.
+* **Atomic State Journaling & Startup Recovery:** Operations publish state atomically through journal phases (`preparing` -> `copying` -> `verifying` -> `finalizing` -> `cleaning`). If a move is interrupted by power failure or application termination:
+  * On next startup, `recoverInterruptedMove` inspects the journal before any new filesystem mutations are permitted.
+  * Incomplete staging directories are cleaned up safely, or verified staging is promoted to final target, leaving the user's data completely intact.
+
+### 📜 Logging, Console Virtual Windowing, & Overload Protection
+* **Bounded Asynchronous Sink (`src/logger.ts`):** Replaces blocking synchronous filesystem writes with an asynchronous ring buffer and stream writer with backpressure management (4 MB buffer cap) and session rotation.
+* **Credential Redaction:** Sensitive authentication tokens (`token`, `refreshToken`, `minecraftAccessToken`) are strictly redacted *before* payload serialization and live transport dispatch.
+* **UTF-8 Stream Framing (`src/game-log-stream.ts`):** Game stdout/stderr chunks are decoded using streaming UTF-8 decoders with 16 KiB per-line truncation protection. IPC batches are acknowledged via receiver-bound credit/ACK accounting to prevent memory backpressure when the renderer is hidden.
+* **Console Virtual Windowing (`ui/src/views/console-view.ts`):** The renderer console caps DOM elements at 1,000 lines (`MAX_CONSOLE_LINES`), pruning leading nodes via `DocumentFragment` batched updates. Auto-scroll is sticky: if the user scrolls upward to inspect logs, the viewport remains stationary without forced jumps.
+* **Dual Log-Source Buttons:**
+  * **Launcher Log**: Opens `launcher.log` containing launcher initialization, HTTP requests, sync steps, and process lifecycle events.
+  * **Minecraft Log**: Directly opens the active game directory's `logs/latest.log` generated by Minecraft itself.
+
 ### ⚙️ Manifest-Defined Fabric Runtime Contract
-- **Authoritative Release Ownership**: The Lampas Launcher does **not** choose or hardcode the Fabric Loader version. The active release descriptor and client manifest specify the exact required Minecraft and Fabric Loader versions (`runtime: { minecraft, loader: { type: "fabric", version } }`).
-- **Pre-Sync Cross-Validation**: The launcher validates exact Minecraft and Loader agreement between the release descriptor and client manifest before performing downloads, cache checks, or deletions.
-- **Dynamic Fabric Bootstrap**: `FabricMetaResolver` queries the official Fabric Meta API (`/v2/versions/loader/{minecraft}/{loaderVersion}`) for Loader and Intermediary Maven coordinates, support libraries, SHA-256 sidecar checksums, and the client main class.
-- **Isolated Classpath**: The launch classpath is assembled dynamically using only the libraries declared for the active Loader version. Coexisting older Loader versions on disk never enter the active classpath.
-- **Scope Boundary**: Client runtime bootstrap is currently scoped to Minecraft `26.2`.
-- **Consistent Operations**: GameRunner, Sync, and Repair share the exact same manifest-defined runtime. Repair in full verification mode re-validates and repairs all Fabric libraries against trusted sidecar checksums.
+* **Authoritative Release Ownership**: The Lampas Launcher does **not** choose or hardcode the Fabric Loader version. The active release descriptor and client manifest specify the exact required Minecraft and Fabric Loader versions (`runtime: { minecraft, loader: { type: "fabric", version } }`).
+* **Pre-Sync Cross-Validation**: The launcher validates exact Minecraft and Loader agreement between the release descriptor and client manifest before performing downloads, cache checks, or deletions.
+* **Dynamic Fabric Bootstrap**: `FabricMetaResolver` queries the official Fabric Meta API (`/v2/versions/loader/{minecraft}/{loaderVersion}`) for Loader and Intermediary Maven coordinates, support libraries, SHA-256 sidecar checksums, and the client main class.
+* **Isolated Classpath**: The launch classpath is assembled dynamically using only the libraries declared for the active Loader version. Coexisting older Loader versions on disk never enter the active classpath.
+* **Scope Boundary**: Client runtime bootstrap is currently scoped to Minecraft `26.2`.
+* **Consistent Operations**: GameRunner, Sync, and Repair share the exact same manifest-defined runtime. Repair in full verification mode re-validates and repairs all Fabric libraries against trusted sidecar checksums.
 
 ---
 

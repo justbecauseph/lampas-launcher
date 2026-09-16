@@ -14,6 +14,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "benchmark": "bun test/benchmark/benchmark-harness.ts",
+    "smoke": "bun test/smoke/electron-smoke.ts",
     "dev": "concurrently \"tsc -w\" \"vite\" \"electron .\"",
     "build": "tsc && vite build",
     "package:dir": "tsc && vite build && electron-builder --dir --publish never",
