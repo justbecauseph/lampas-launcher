@@ -108,13 +108,23 @@ app.whenReady().then(async () => {
     await GameDirectoryManager.recoverInterruptedMove();
   } catch (err: any) {
     LauncherLogger.error(`Failed to process move journal recovery: ${err.message}`);
+    OperationCoordinator.blockMutations(err.message);
   }
 
   createWindow();
 
   logTransport = new BoundedLogBatchTransport(() => mainWindow);
-  ipcMain.on("game:logAck", (_, data?: { batchId?: number }) => {
-    logTransport?.onRendererAck(data?.batchId);
+  ipcMain.on("game:logAck", (event, data?: { batchId?: number }) => {
+    const targetId = mainWindow?.webContents?.id;
+    if (targetId === undefined || event.sender.id !== targetId) {
+      LauncherLogger.warn(`[LogTransport] Ignored ACK from unauthorized sender ${event.sender.id} (expected ${targetId})`);
+      return;
+    }
+    if (typeof data?.batchId !== "number") {
+      LauncherLogger.warn(`[LogTransport] Ignored malformed ACK with invalid batchId: ${data?.batchId}`);
+      return;
+    }
+    logTransport?.onRendererAck(data.batchId, event.sender.id);
   });
 
   // IPC Handlers: Window Controls
@@ -352,17 +362,39 @@ app.whenReady().then(async () => {
       op.release();
     }
   });
-  ipcMain.handle("game:kill", () => {
+  ipcMain.handle("game:kill", async () => {
     LauncherLogger.warn("Game kill request received from user.");
-    GameRunner.killGame();
+    await GameRunner.killGame();
   });
   ipcMain.handle("game:isRunning", () => GameRunner.isGameRunning());
 
   if (process.argv.includes("--smoke-test")) {
-    LauncherLogger.info("[Smoke Test] All handlers registered; initiating graceful shutdown");
-    setTimeout(() => {
-      app.quit();
-    }, 200);
+    const runSmokeCheck = async () => {
+      try {
+        if (!mainWindow) throw new Error("Main window was not created");
+        if (mainWindow.webContents.isLoading()) {
+          await new Promise<void>((resolve) => {
+            mainWindow?.webContents.once("did-finish-load", () => resolve());
+          });
+        }
+        const hasBridge = await mainWindow.webContents.executeJavaScript(
+          "Boolean(window.lampas && window.lampas.utils && typeof window.lampas.utils.getAppVersion === 'function')"
+        );
+        if (!hasBridge) {
+          throw new Error("window.lampas or window.lampas.utils.getAppVersion is undefined in renderer context");
+        }
+        LauncherLogger.info("[Smoke Test] Renderer & preload verification round-trip passed");
+      } catch (smokeErr: any) {
+        LauncherLogger.error(`[Smoke Test] Verification failed: ${smokeErr?.message || smokeErr}`);
+        process.exitCode = 1;
+      } finally {
+        LauncherLogger.info("[Smoke Test] All handlers registered; initiating graceful shutdown");
+        setTimeout(() => {
+          app.quit();
+        }, 100);
+      }
+    };
+    setTimeout(runSmokeCheck, 400);
   }
 });
 

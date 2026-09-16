@@ -18,9 +18,12 @@ mock.module("electron", () => ({
   shell: { openExternal: async () => undefined },
 }));
 
+import * as actualChildProcess from "node:child_process";
+
 let mockSpawnHook: ((proc: any) => void) | null = null;
 
 mock.module("node:child_process", () => ({
+  ...actualChildProcess,
   spawn: (javaExe: string, jvmArgs: string[]) => {
     spawnedCalls.push({ javaExe, jvmArgs });
     const proc = new EventEmitter() as any;
@@ -481,6 +484,115 @@ describe("GameRunner launch flow & Quick Play", () => {
       expect(GameRunner.isGameRunning()).toBe(false);
     } finally {
       mockSpawnHook = null;
+    }
+  });
+
+  test("Phase 7: post-spawn runtime error does not clear runningProcess until exit or close", async () => {
+    let childProc: any = null;
+    mockSpawnHook = (proc) => {
+      childProc = proc;
+    };
+
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+      launch: {},
+    };
+
+    const errorLogs: string[] = [];
+    let exitReportedCode: number | null = null;
+
+    try {
+      await GameRunner.launchGame(
+        dummyUser,
+        (entry) => {
+          if (entry.level === "ERROR") errorLogs.push(entry.message);
+        },
+        (code) => {
+          exitReportedCode = code;
+        },
+        release
+      );
+
+      expect(GameRunner.isGameRunning()).toBe(true);
+
+      // Emit runtime post-spawn error (e.g. pipe error or signal error)
+      childProc.emit("error", new Error("EPIPE: write to closed pipe"));
+
+      // CRITICAL INVARIANT: runningProcess must NOT be cleared on child 'error'
+      // The OS process has not exited; clearing it would allow conflicting mutations!
+      expect(GameRunner.isGameRunning()).toBe(true);
+      expect(exitReportedCode).toBeNull();
+      expect(errorLogs.some((msg) => msg.includes("EPIPE: write to closed pipe"))).toBe(true);
+
+      // Now emit true exit event
+      childProc.emit("exit", 0);
+
+      // Now runningProcess is cleared and exit reported
+      expect(GameRunner.isGameRunning()).toBe(false);
+      expect(exitReportedCode).toBe(0);
+    } finally {
+      mockSpawnHook = null;
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("Phase 7: killGame is awaitable and waits for process exit/close resolution", async () => {
+    let childProc: any = null;
+    mockSpawnHook = (proc) => {
+      childProc = proc;
+      // Override kill to simulate delayed graceful termination
+      proc.kill = (signal: string) => {
+        proc.killed = true;
+        setTimeout(() => {
+          proc.emit("exit", signal === "SIGKILL" ? 137 : 0);
+        }, 50);
+      };
+    };
+
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+      launch: {},
+    };
+
+    try {
+      await GameRunner.launchGame(
+        dummyUser,
+        () => {},
+        () => {},
+        release
+      );
+
+      expect(GameRunner.isGameRunning()).toBe(true);
+
+      // Await killGame
+      const startKill = performance.now();
+      await GameRunner.killGame(2000);
+      const killDuration = performance.now() - startKill;
+
+      // Verified: killGame awaited the delayed exit
+      expect(killDuration).toBeGreaterThanOrEqual(40);
+      expect(GameRunner.isGameRunning()).toBe(false);
+    } finally {
+      mockSpawnHook = null;
+      GameRunner.resetForTesting();
     }
   });
 });

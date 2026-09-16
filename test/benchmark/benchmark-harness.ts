@@ -388,7 +388,7 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
       name: `Performance Optimization Mod ${i}`,
       description: `Essential FPS boosting and memory management tool number ${i} for Lampas SMP.`,
       filename: `mod-${i}.jar`,
-      category: i % 3 === 0 ? "performance" : i % 3 === 1 ? "visual" : "utility",
+      categories: [i % 3 === 0 ? "performance" : i % 3 === 1 ? "visual" : "utility"],
       required: i < 20,
       enabled: true,
       author: `Author ${i % 50}`,
@@ -396,10 +396,10 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
   }
 
   const searchQueries = ["perf", "fps", "opt", "boost", "util", "50", "99", "nomatch"];
-  const start = performance.now();
 
-  let matchTotal = 0;
-  // Simulate 10 rapid keystrokes without debouncing (current baseline)
+  // 1. Baseline naive search (repeated lowercase allocation on keystroke)
+  const startNaive = performance.now();
+  let naiveMatches = 0;
   for (let rep = 0; rep < 5; rep++) {
     for (const q of searchQueries) {
       const lower = q.toLowerCase();
@@ -409,21 +409,52 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
           m.description.toLowerCase().includes(lower) ||
           m.author.toLowerCase().includes(lower)
       );
-      matchTotal += matches.length;
+      naiveMatches += matches.length;
     }
   }
+  const endNaive = performance.now();
+  const naiveDuration = endNaive - startNaive;
 
-  const end = performance.now();
+  // 2. Production indexed search: precompute _searchKey on ingestion (as in mods-view.ts)
+  const startPrecompute = performance.now();
+  const indexedCatalog = catalog.map((m) => ({
+    ...m,
+    _searchKey: [
+      m.name || "",
+      m.id || "",
+      m.filename || "",
+      m.description || "",
+      ...(m.categories || []),
+    ].join(" ").toLowerCase(),
+  }));
+  const endPrecompute = performance.now();
+  const precomputeDuration = endPrecompute - startPrecompute;
+
+  // Measure production search execution over 40 searches using _searchKey
+  const startSearchKey = performance.now();
+  let indexedMatches = 0;
+  for (let rep = 0; rep < 5; rep++) {
+    for (const q of searchQueries) {
+      const lower = q.toLowerCase();
+      const matches = indexedCatalog.filter((m) => m._searchKey.includes(lower));
+      indexedMatches += matches.length;
+    }
+  }
+  const endSearchKey = performance.now();
+  const searchKeyDuration = endSearchKey - startSearchKey;
 
   return {
-    scenario: "Mod Catalog Search (2,000 entries, 40 un-debounced searches)",
-    durationMs: end - start,
+    scenario: "Mod Catalog Search (2,000 entries, 40 un-debounced searches: baseline vs _searchKey index)",
+    durationMs: searchKeyDuration,
     details: {
       catalogSize: count,
       searchRepetitions: 40,
-      matchesFound: matchTotal,
-      wallTimeMs: Math.round((end - start) * 100) / 100,
-      avgPerSearchMs: Math.round(((end - start) / 40) * 100) / 100,
+      matchesFound: indexedMatches,
+      baselineNaiveWallTimeMs: Math.round(naiveDuration * 100) / 100,
+      precomputeIndexMs: Math.round(precomputeDuration * 100) / 100,
+      searchKeyWallTimeMs: Math.round(searchKeyDuration * 100) / 100,
+      searchKeyAvgPerSearchMs: Math.round((searchKeyDuration / 40) * 100) / 100,
+      speedup: `${(naiveDuration / searchKeyDuration).toFixed(1)}x`,
     },
   };
 }
@@ -461,7 +492,10 @@ export async function runAllBenchmarks(): Promise<BenchmarkResult[]> {
 
   const catalogRes = await runModCatalogSearchBenchmark();
   results.push(catalogRes);
-  console.log(`[5/5] ${catalogRes.scenario}: ${catalogRes.details.wallTimeMs} ms (avg ${catalogRes.details.avgPerSearchMs} ms/search)`);
+  console.log(`[5/5] ${catalogRes.scenario}:`);
+  console.log(`      Baseline Naive Search:    ${catalogRes.details.baselineNaiveWallTimeMs} ms`);
+  console.log(`      Ingestion Precompute:     ${catalogRes.details.precomputeIndexMs} ms`);
+  console.log(`      Production _searchKey:   ${catalogRes.details.searchKeyWallTimeMs} ms (avg ${catalogRes.details.searchKeyAvgPerSearchMs} ms/search, ${catalogRes.details.speedup} faster)`);
 
   // Cleanup bench directory
   try {

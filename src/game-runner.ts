@@ -20,6 +20,7 @@ function generateOfflineUuid(username: string): string {
 
 export class GameRunner {
   private static runningProcess: ChildProcess | null = null;
+  private static exitPromise: Promise<number | null> | null = null;
   private static isStarting = false;
 
   static isGameRunning(): boolean {
@@ -212,13 +213,26 @@ export class GameRunner {
 
       this.runningProcess = proc;
 
-      // Wait for asynchronous spawn or error
+      // Set up exit promise to await actual process termination
+      this.exitPromise = new Promise<number | null>((resolve) => {
+        let resolved = false;
+        const settleExit = (code: number | null) => {
+          if (!resolved) {
+            resolved = true;
+            resolve(code);
+          }
+        };
+        proc.once?.("exit", settleExit);
+        proc.once?.("close", settleExit);
+      });
+
+      // Wait for asynchronous spawn or initial spawn error
       await new Promise<void>((resolve, reject) => {
         let settled = false;
 
         const cleanupSpawnListeners = () => {
           proc.removeListener?.("spawn", onSpawn);
-          proc.removeListener?.("error", onError);
+          proc.removeListener?.("error", onSpawnError);
         };
 
         const onSpawn = () => {
@@ -229,17 +243,18 @@ export class GameRunner {
           }
         };
 
-        const onError = (err: any) => {
+        const onSpawnError = (err: any) => {
           if (!settled) {
             settled = true;
             cleanupSpawnListeners();
             this.runningProcess = null;
+            this.exitPromise = null;
             reject(err);
           }
         };
 
         proc.once?.("spawn", onSpawn);
-        proc.once?.("error", onError);
+        proc.once?.("error", onSpawnError);
 
         // Fallback for mocks and synchronous child processes
         setTimeout(() => {
@@ -264,15 +279,18 @@ export class GameRunner {
         stdoutFramer.flush();
         stderrFramer.flush();
         this.runningProcess = null;
+        this.exitPromise = null;
         log(code === 0 ? "INFO" : "ERROR", `Minecraft exited with code ${code}`);
         onExit(code);
       };
 
       proc.once?.("exit", handleExit);
       proc.once?.("close", handleExit);
+
+      // Runtime post-spawn errors: log but DO NOT clear runningProcess!
+      // The child OS process has not exited unless 'exit' or 'close' fires.
       proc.on?.("error", (err: any) => {
-        log("ERROR", `Minecraft process error: ${err?.message || err}`);
-        handleExit(-1);
+        log("ERROR", `Minecraft process runtime error: ${err?.message || err}`);
       });
 
       return true;
@@ -284,14 +302,46 @@ export class GameRunner {
     }
   }
 
-  static killGame(): void {
-    if (this.runningProcess && !this.runningProcess.killed) {
-      this.runningProcess.kill("SIGTERM");
+  static async killGame(timeoutMs = 5000): Promise<void> {
+    const proc = this.runningProcess;
+    if (!proc || proc.killed) {
+      return;
+    }
+
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // Process may already have terminated
+    }
+
+    if (!this.exitPromise) {
+      return;
+    }
+
+    // Wait bounded time for SIGTERM exit
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), Math.min(timeoutMs, 2500));
+    });
+
+    const result = await Promise.race([this.exitPromise, timeoutPromise]);
+    if (timer) clearTimeout(timer);
+
+    // Escalate to SIGKILL if process did not exit within timeout window
+    if (result === "timeout" && this.runningProcess && !this.runningProcess.killed) {
+      try {
+        this.runningProcess.kill("SIGKILL");
+      } catch {}
+      const finalTimeout = new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.max(1000, timeoutMs - 2500));
+      });
+      await Promise.race([this.exitPromise, finalTimeout]);
     }
   }
 
   static resetForTesting(): void {
     this.runningProcess = null;
+    this.exitPromise = null;
     this.isStarting = false;
   }
 }

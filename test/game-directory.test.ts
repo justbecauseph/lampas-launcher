@@ -19,11 +19,13 @@ mock.module("electron", () => ({
 const { ConfigManager, getDefaultGameDir, getUserDataDir } = await import("../src/config");
 const { GameDirectoryManager } = await import("../src/game-directory");
 const { GameRunner } = await import("../src/game-runner");
+const { OperationCoordinator } = await import("../src/operations");
 
 beforeEach(() => {
   process.env.LAMPAS_DEFAULT_GAME_DIR = path.join(testRoot, "default-lampas-game");
   ConfigManager.resetForTesting();
   GameDirectoryManager.resetForTesting();
+  OperationCoordinator.resetForTesting();
   if (fs.existsSync(userDataDir)) {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
@@ -441,11 +443,26 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     fs.mkdirSync(newTarget, { recursive: true });
     fs.writeFileSync(path.join(newTarget, "options.txt"), "new-options");
+    fs.writeFileSync(
+      path.join(newTarget, ".lampas_move_receipt.json"),
+      JSON.stringify({
+        operationId: "clean-test-op",
+        source: oldSource,
+        target: newTarget,
+        staging: path.join(testRoot, ".lampas-moving-old"),
+        fileCount: 1,
+        totalBytes: 11,
+        stagingVerified: true,
+        timestamp: new Date().toISOString(),
+      })
+    );
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
+        version: 2,
+        operationId: "clean-test-op",
         source: oldSource,
         target: newTarget,
         staging: path.join(testRoot, ".lampas-moving-old"),
@@ -688,6 +705,19 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     fs.mkdirSync(stagingDir, { recursive: true });
     fs.writeFileSync(path.join(stagingDir, "save.txt"), "verified-content");
+    fs.writeFileSync(
+      path.join(stagingDir, ".lampas_move_receipt.json"),
+      JSON.stringify({
+        operationId: "test-op",
+        source: sourceDir,
+        target: targetDir,
+        staging: stagingDir,
+        fileCount: 1,
+        totalBytes: 16,
+        stagingVerified: true,
+        timestamp: new Date().toISOString(),
+      })
+    );
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     fs.writeFileSync(
@@ -763,5 +793,137 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     } finally {
       GameDirectoryManager.resetForTesting();
     }
+  });
+
+  test("Phase 7: recovery aborts, preserves source, and leaves journal if target is missing during cleaning phase", async () => {
+    const sourceDir = path.join(testRoot, "missing-target-clean-source");
+    const targetDir = path.join(testRoot, "missing-target-clean-dest");
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "world-data.txt"), "precious-world");
+
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: "clean-missing-target-op",
+        source: sourceDir,
+        target: targetDir,
+        staging: path.join(testRoot, ".lampas-moving-missing-target"),
+        phase: "cleaning",
+      })
+    );
+
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
+    // Expect recovery to abort with an explicit error rather than silently deleting source
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /Recovery aborted: target directory .* is missing during cleaning phase/
+    );
+
+    // CRITICAL: Source MUST NOT be deleted!
+    expect(fs.existsSync(sourceDir)).toBe(true);
+    expect(fs.readFileSync(path.join(sourceDir, "world-data.txt"), "utf-8")).toBe("precious-world");
+    // Journal is preserved for diagnostics
+    expect(fs.existsSync(journalPath)).toBe(true);
+  });
+
+  test("Phase 7: recovery aborts and preserves source if target exists but lacks valid move receipt during cleaning phase", async () => {
+    const sourceDir = path.join(testRoot, "unverified-clean-source");
+    const targetDir = path.join(testRoot, "unverified-clean-dest");
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "save-data.txt"), "source-original");
+
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "unrelated.txt"), "unrelated-file");
+
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: "unverified-clean-op",
+        source: sourceDir,
+        target: targetDir,
+        staging: path.join(testRoot, ".lampas-moving-unverified"),
+        phase: "cleaning",
+      })
+    );
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /Recovery aborted: target directory .* does not contain a verified move receipt/
+    );
+
+    // Source is preserved
+    expect(fs.existsSync(sourceDir)).toBe(true);
+    expect(fs.readFileSync(path.join(sourceDir, "save-data.txt"), "utf-8")).toBe("source-original");
+  });
+
+  test("Phase 7: recovery aborts and preserves source if target already exists without move receipt during finalizing phase", async () => {
+    const sourceDir = path.join(testRoot, "unverified-fin-source");
+    const targetDir = path.join(testRoot, "unverified-fin-dest");
+    const stagingDir = path.join(testRoot, ".lampas-moving-unverified-fin");
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "player.dat"), "player-data");
+
+    // Target exists with unrelated content
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "existing-unrelated.txt"), "should-not-overwrite");
+
+    fs.mkdirSync(stagingDir, { recursive: true });
+    fs.writeFileSync(path.join(stagingDir, "player.dat"), "staged-data");
+
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: "unverified-fin-op",
+        source: sourceDir,
+        target: targetDir,
+        staging: stagingDir,
+        phase: "finalizing",
+        stagingVerified: true,
+      })
+    );
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /Recovery aborted: target directory .* exists without a matching move receipt/
+    );
+
+    // Source is preserved
+    expect(fs.existsSync(sourceDir)).toBe(true);
+    expect(fs.readFileSync(path.join(sourceDir, "player.dat"), "utf-8")).toBe("player-data");
+  });
+
+  test("Phase 7: startup recovery failure blocks launcher mutations via OperationCoordinator", async () => {
+    OperationCoordinator.resetForTesting();
+    expect(OperationCoordinator.isBlocked()).toBe(false);
+
+    // Simulate recovery error
+    OperationCoordinator.blockMutations("Target directory missing during cleaning recovery");
+
+    expect(OperationCoordinator.isBlocked()).toBe(true);
+    expect(OperationCoordinator.getBlockedReason()).toBe("Target directory missing during cleaning recovery");
+
+    // All mutator acquisitions and assertion guards fail
+    expect(() => OperationCoordinator.acquire("sync")).toThrow(
+      /Launcher operations are blocked due to an unresolved startup recovery failure/
+    );
+    expect(() => OperationCoordinator.acquire("repair")).toThrow(
+      /Launcher operations are blocked due to an unresolved startup recovery failure/
+    );
+    expect(() => OperationCoordinator.acquire("move")).toThrow(
+      /Launcher operations are blocked due to an unresolved startup recovery failure/
+    );
+    expect(() => OperationCoordinator.assertCanMutate("update configuration")).toThrow(
+      /Cannot perform 'update configuration': launcher operations are blocked/
+    );
+
+    OperationCoordinator.resetForTesting();
+    expect(OperationCoordinator.isBlocked()).toBe(false);
   });
 });

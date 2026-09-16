@@ -513,4 +513,81 @@ describe("Phase 2 — Minecraft Log & IPC Disposal", () => {
     unsubscribe();
     expect(listeners["game:logBatch"].length).toBe(0);
   });
+
+  test("Phase 7: onRendererAck strictly rejects undefined, null, NaN, and mismatched batch IDs", () => {
+    let dispatchedBatch: any = null;
+    const mockWin: any = {
+      isDestroyed: () => false,
+      webContents: {
+        id: 77,
+        isDestroyed: () => false,
+        send: (channel: string, payload: any) => {
+          if (channel === "game:logBatch") dispatchedBatch = payload;
+        },
+      },
+    };
+
+    const transport = new BoundedLogBatchTransport(() => mockWin, {
+      intervalMs: 10,
+      maxBatchSize: 2,
+    });
+
+    transport.push({ level: "INFO", message: "msg-1", timestamp: "12:00" });
+    transport.push({ level: "INFO", message: "msg-2", timestamp: "12:00" });
+
+    expect(dispatchedBatch).toBeDefined();
+    expect(dispatchedBatch.batchId).toBe(1);
+
+    // Try undefined bypass
+    transport.onRendererAck(undefined as any);
+    expect(transport.getMetrics().acknowledgedCount).toBe(0);
+
+    // Try null / NaN bypass
+    transport.onRendererAck(null as any);
+    expect(transport.getMetrics().acknowledgedCount).toBe(0);
+    transport.onRendererAck(NaN as any);
+    expect(transport.getMetrics().acknowledgedCount).toBe(0);
+
+    // Try mismatched batch ID
+    transport.onRendererAck(999);
+    expect(transport.getMetrics().acknowledgedCount).toBe(0);
+
+    // Provide exact matching batchId and matching receiverId
+    transport.onRendererAck(1, 77);
+    expect(transport.getMetrics().acknowledgedCount).toBe(2);
+
+    transport.close();
+  });
+
+  test("Phase 7: onRendererAck rejects ACKs from unauthorized or mismatched sender window IDs", () => {
+    let dispatchedBatch: any = null;
+    const mockWin: any = {
+      isDestroyed: () => false,
+      webContents: {
+        id: 42,
+        isDestroyed: () => false,
+        send: (channel: string, payload: any) => {
+          if (channel === "game:logBatch") dispatchedBatch = payload;
+        },
+      },
+    };
+
+    const transport = new BoundedLogBatchTransport(() => mockWin, {
+      intervalMs: 10,
+      maxBatchSize: 1,
+    });
+
+    transport.push({ level: "INFO", message: "target-42", timestamp: "12:00" });
+    expect(dispatchedBatch.batchId).toBe(1);
+
+    // Sender with wrong ID (e.g. devtools window or unauthorized webContents)
+    transport.onRendererAck(1, 999);
+    expect(transport.getMetrics().acknowledgedCount).toBe(0);
+
+    // Sender with expected ID
+    transport.onRendererAck(1, 42);
+    expect(transport.getMetrics().acknowledgedCount).toBe(1);
+
+    transport.close();
+  });
 });

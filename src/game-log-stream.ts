@@ -162,7 +162,12 @@ export class BoundedLogBatchTransport {
   private droppedCount = 0;
   private droppedBytes = 0;
   private nextBatchId = 1;
-  private inFlightBatch: { batchId: number; entries: GameLogEntry[]; bytes: number } | null = null;
+  private inFlightBatch: {
+    batchId: number;
+    receiverId?: number;
+    entries: GameLogEntry[];
+    bytes: number;
+  } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
 
@@ -227,12 +232,22 @@ export class BoundedLogBatchTransport {
     }
   }
 
-  onRendererAck(batchId?: number): void {
+  onRendererAck(batchId?: number, receiverId?: number): void {
     if (!this.inFlightBatch) return;
 
-    // Identified, receiver-bound ACK check
-    if (batchId !== undefined && batchId !== this.inFlightBatch.batchId) {
-      // Ignore mismatched or stale ACKs; do not grant credit
+    // Exact numeric batchId check: reject undefined, null, NaN, or mismatch
+    if (typeof batchId !== "number" || isNaN(batchId) || batchId !== this.inFlightBatch.batchId) {
+      // Reject unauthorized, undefined, or mismatched batch IDs
+      return;
+    }
+
+    // Identified, receiver-bound check: if receiverId is provided/bound, ensure exact match
+    if (
+      this.inFlightBatch.receiverId !== undefined &&
+      receiverId !== undefined &&
+      receiverId !== this.inFlightBatch.receiverId
+    ) {
+      // Reject ACKs sent from a window different than the dispatched receiver
       return;
     }
 
@@ -286,6 +301,7 @@ export class BoundedLogBatchTransport {
     this.metrics.dispatchedBytes += batchBytes;
 
     const win = this.targetWindowProvider();
+    const receiverId = win?.webContents?.id;
     const sent = safeSend(win, "game:logBatch", {
       batchId,
       entries: batchEntries,
@@ -294,7 +310,7 @@ export class BoundedLogBatchTransport {
     });
 
     if (sent) {
-      this.inFlightBatch = { batchId, entries: batchEntries, bytes: batchBytes };
+      this.inFlightBatch = { batchId, receiverId, entries: batchEntries, bytes: batchBytes };
     } else {
       // Window unavailable or destroyed: cannot deliver, reset inFlight and restore dropped count
       this.inFlightBatch = null;

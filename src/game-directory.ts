@@ -31,6 +31,38 @@ export interface ScannedDirectoryInventory {
   totalBytes: number;
 }
 
+export const MOVE_RECEIPT_FILENAME = ".lampas_move_receipt.json";
+
+export interface MoveReceipt {
+  operationId: string;
+  source: string;
+  target: string;
+  staging: string;
+  fileCount: number;
+  totalBytes: number;
+  stagingVerified: boolean;
+  timestamp: string;
+}
+
+export function readMoveReceipt(dir: string, expectedOpId?: string): MoveReceipt | null {
+  try {
+    const receiptPath = path.join(dir, MOVE_RECEIPT_FILENAME);
+    if (!fs.existsSync(receiptPath)) return null;
+    const data = JSON.parse(fs.readFileSync(receiptPath, "utf-8"));
+    if (
+      data &&
+      typeof data === "object" &&
+      data.stagingVerified === true &&
+      (!expectedOpId || data.operationId === expectedOpId)
+    ) {
+      return data as MoveReceipt;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export interface DirectoryMoveJournal {
   version: 2;
   operationId: string;
@@ -645,7 +677,21 @@ export class GameDirectoryManager {
         throw new Error("Source directory modified during move (source drift detected). Operation aborted to preserve data.");
       }
 
-      // 5. Finalize staging to target
+      // 5. Write receipt marker to staging before updating journal to finalizing
+      const receipt: MoveReceipt = {
+        operationId: operationNonce,
+        source,
+        target,
+        staging,
+        fileCount: totalFiles,
+        totalBytes,
+        stagingVerified: true,
+        timestamp: new Date().toISOString(),
+      };
+      const stagingReceiptPath = path.join(staging, MOVE_RECEIPT_FILENAME);
+      writeAtomicFileSync(stagingReceiptPath, JSON.stringify(receipt, null, 2));
+
+      // 6. Finalize staging to target
       journalData.phase = "finalizing";
       journalData.stagingVerified = true;
       journalData.stagingReceipt = { fileCount: totalFiles, totalBytes };
@@ -662,7 +708,13 @@ export class GameDirectoryManager {
 
       await fs.promises.rename(staging, target);
 
-      // 6. Update configuration. Failure here preserves the journal and source for recovery.
+      // Verify receipt exists in promoted target
+      const targetReceiptPath = path.join(target, MOVE_RECEIPT_FILENAME);
+      if (!fs.existsSync(targetReceiptPath)) {
+        throw new Error("Promotion verification failed: move receipt missing in target directory.");
+      }
+
+      // 7. Update configuration. Failure here preserves the journal and source for recovery.
       try {
         ConfigManager.set({ gameDir: target, gameDirConfigured: true });
       } catch (cfgErr: any) {
@@ -670,7 +722,7 @@ export class GameDirectoryManager {
         throw cfgErr;
       }
 
-      // 7. Clean old source
+      // 8. Clean old source
       journalData.phase = "cleaning";
       writeAtomicFileSync(journalPath, JSON.stringify(journalData, null, 2));
 
@@ -689,7 +741,13 @@ export class GameDirectoryManager {
         LauncherLogger.warn(`Failed to remove old game directory after move: ${cleanErr.message}`);
       }
 
-      // 8. Remove journal
+      // 9. Clean receipt from target and remove journal
+      try {
+        if (fs.existsSync(targetReceiptPath)) {
+          await fs.promises.unlink(targetReceiptPath);
+        }
+      } catch {}
+
       if (fs.existsSync(journalPath)) {
         try {
           await fs.promises.unlink(journalPath);
@@ -707,12 +765,12 @@ export class GameDirectoryManager {
 
       return { success: true, gameDir: target, previousGameDir: source };
     } catch (err: any) {
-      if (fs.existsSync(staging)) {
-        try {
-          await fs.promises.rm(staging, { recursive: true, force: true });
-        } catch {}
-      }
       if (journalData.phase !== "finalizing" && journalData.phase !== "cleaning") {
+        if (fs.existsSync(staging)) {
+          try {
+            await fs.promises.rm(staging, { recursive: true, force: true });
+          } catch {}
+        }
         if (fs.existsSync(journalPath)) {
           try {
             await fs.promises.unlink(journalPath);
@@ -728,30 +786,163 @@ export class GameDirectoryManager {
     const journalPath = path.join(userDataDir, "directory-move.json");
     if (!fs.existsSync(journalPath)) return;
 
+    let journal: AnyMoveJournal;
     try {
       const data = await fs.promises.readFile(journalPath, "utf-8");
-      const journal: AnyMoveJournal = JSON.parse(data);
-      LauncherLogger.warn(
-        `Found interrupted directory move journal (phase=${journal.phase}, source=${journal.source}, target=${journal.target})`
-      );
+      journal = JSON.parse(data);
+    } catch (err: any) {
+      LauncherLogger.error(`Failed to parse move journal: ${err.message}`);
+      throw new Error(`Corrupted move journal detected at ${journalPath}: ${err.message}`);
+    }
 
-      const sourceExists = journal.source && fs.existsSync(journal.source);
-      const targetExists = journal.target && fs.existsSync(journal.target);
-      const stagingExists = journal.staging && fs.existsSync(journal.staging);
+    LauncherLogger.warn(
+      `Found interrupted directory move journal (phase=${journal.phase}, opId=${journal.operationId}, source=${journal.source}, target=${journal.target})`
+    );
 
-      if (targetExists && !sourceExists) {
-        // Target was renamed/moved in place; finalize config and cleanup
-        ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
-        if (stagingExists) {
-          try {
-            await fs.promises.rm(journal.staging, { recursive: true, force: true });
-          } catch {}
-        }
+    if (!journal.source || !journal.target) {
+      throw new Error("Invalid move journal: missing source or target directory path.");
+    }
+
+    const sourceExists = journal.source && fs.existsSync(journal.source);
+    const targetExists = journal.target && fs.existsSync(journal.target);
+    const stagingExists = !!(journal.staging && fs.existsSync(journal.staging));
+
+    // Case 1: Target exists, but source does not exist
+    // This happens after a completed same-filesystem rename, or if source was already cleaned.
+    if (targetExists && !sourceExists) {
+      ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
+      if (stagingExists) {
         try {
-          await fs.promises.unlink(journalPath);
+          await fs.promises.rm(journal.staging, { recursive: true, force: true });
         } catch {}
-      } else if (journal.phase === "cleaning" || (journal.phase === "finalizing" && targetExists)) {
-        // Destination move finalized on disk; update config and clean up source/staging
+      }
+      try {
+        const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
+        if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+      } catch {}
+      try {
+        await fs.promises.unlink(journalPath);
+      } catch {}
+      LauncherLogger.info(`Move recovery: confirmed target in place without source; updated config to ${journal.target}`);
+      return;
+    }
+
+    // Case 2: Journal phase is "cleaning"
+    // In this phase, target was supposed to be fully verified and promoted before source is removed.
+    // Invariant: NEVER delete source unless target exists AND has a verified matching receipt!
+    if (journal.phase === "cleaning") {
+      if (!targetExists) {
+        LauncherLogger.error(
+          `Move recovery: phase is 'cleaning' but target directory '${journal.target}' does not exist! Aborting source deletion to preserve user data.`
+        );
+        throw new Error(
+          `Recovery aborted: target directory '${journal.target}' is missing during cleaning phase. Source directory '${journal.source}' has been preserved.`
+        );
+      }
+
+      const receipt = readMoveReceipt(journal.target, journal.operationId);
+      if (!receipt || (journal.source && receipt.source !== journal.source)) {
+        LauncherLogger.error(
+          `Move recovery: target directory '${journal.target}' exists but lacks verified move receipt for opId ${journal.operationId}. Aborting source deletion.`
+        );
+        throw new Error(
+          `Recovery aborted: target directory '${journal.target}' does not contain a verified move receipt for operation ${journal.operationId}. Source directory '${journal.source}' has been preserved.`
+        );
+      }
+
+      // Target exists and is verified with matching receipt
+      ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
+      if (sourceExists) {
+        try {
+          await fs.promises.rm(journal.source, { recursive: true, force: true });
+        } catch (err: any) {
+          LauncherLogger.warn(`Move recovery: failed to remove old source directory: ${err.message}`);
+        }
+      }
+      if (stagingExists) {
+        try {
+          await fs.promises.rm(journal.staging, { recursive: true, force: true });
+        } catch {}
+      }
+      try {
+        const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
+        if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+      } catch {}
+      try {
+        await fs.promises.unlink(journalPath);
+      } catch {}
+      LauncherLogger.info(`Move recovery: cleaning phase completed successfully; target verified at ${journal.target}`);
+      return;
+    }
+
+    // Case 3: Journal phase is "finalizing"
+    if (journal.phase === "finalizing") {
+      if (targetExists) {
+        // Destination directory exists; verify receipt before touching source!
+        const receipt = readMoveReceipt(journal.target, journal.operationId);
+        if (receipt && (!journal.source || receipt.source === journal.source)) {
+          // Target was already promoted and verified
+          ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
+          if (sourceExists) {
+            try {
+              await fs.promises.rm(journal.source, { recursive: true, force: true });
+            } catch (err: any) {
+              LauncherLogger.warn(`Move recovery: failed to remove old source: ${err.message}`);
+            }
+          }
+          if (stagingExists) {
+            try {
+              await fs.promises.rm(journal.staging, { recursive: true, force: true });
+            } catch {}
+          }
+          try {
+            const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
+            if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+          } catch {}
+          try {
+            await fs.promises.unlink(journalPath);
+          } catch {}
+          LauncherLogger.info(`Move recovery: finalizing phase completed for verified target at ${journal.target}`);
+          return;
+        }
+
+        // Target exists BUT lacks matching receipt! E.g. occupied or unrelated directory.
+        LauncherLogger.error(
+          `Move recovery: target directory '${journal.target}' exists but lacks a valid move receipt for operation ${journal.operationId}. Preserving source.`
+        );
+        throw new Error(
+          `Recovery aborted: target directory '${journal.target}' exists without a matching move receipt for operation ${journal.operationId}. Source directory '${journal.source}' has been preserved.`
+        );
+      }
+
+      // target does NOT exist. Can we promote staging?
+      if (stagingExists && journal.stagingVerified) {
+        const stagingReceipt = readMoveReceipt(journal.staging, journal.operationId);
+        if (!stagingReceipt) {
+          LauncherLogger.error(
+            `Move recovery: staging directory '${journal.staging}' lacks a valid move receipt. Preserving source.`
+          );
+          throw new Error(
+            `Recovery aborted: staging directory '${journal.staging}' lacks a verified move receipt for operation ${journal.operationId}. Source directory '${journal.source}' has been preserved.`
+          );
+        }
+
+        try {
+          await fs.promises.rename(journal.staging, journal.target);
+        } catch (renameErr: any) {
+          LauncherLogger.error(`Move recovery: failed to promote staging to target: ${renameErr.message}`);
+          throw new Error(
+            `Recovery failed during promotion of staging to target: ${renameErr.message}. Source directory '${journal.source}' has been preserved.`
+          );
+        }
+
+        const promotedReceipt = readMoveReceipt(journal.target, journal.operationId);
+        if (!promotedReceipt) {
+          throw new Error(
+            `Recovery failed: target directory does not contain verified move receipt after promotion. Source directory '${journal.source}' has been preserved.`
+          );
+        }
+
         ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
         if (sourceExists) {
           try {
@@ -760,44 +951,36 @@ export class GameDirectoryManager {
             LauncherLogger.warn(`Move recovery: failed to remove old source directory: ${err.message}`);
           }
         }
-        if (stagingExists) {
-          try {
-            await fs.promises.rm(journal.staging, { recursive: true, force: true });
-          } catch {}
-        }
+        try {
+          const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
+          if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+        } catch {}
         try {
           await fs.promises.unlink(journalPath);
         } catch {}
-      } else if (journal.phase === "finalizing" && !targetExists && stagingExists && journal.stagingVerified) {
-        // Verified staging was about to be renamed to target
-        try {
-          await fs.promises.rename(journal.staging, journal.target);
-          ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
-          if (sourceExists) {
-            try {
-              await fs.promises.rm(journal.source, { recursive: true, force: true });
-            } catch {}
-          }
-          await fs.promises.unlink(journalPath);
-        } catch (err: any) {
-          LauncherLogger.error(`Move recovery: failed to finalize verified staging: ${err.message}`);
-        }
-      } else {
-        // Move was interrupted during preparing, renaming (with source still intact), copying, or verifying;
-        // discard staging and preserve original source
-        if (stagingExists) {
-          try {
-            await fs.promises.rm(journal.staging, { recursive: true, force: true });
-          } catch (err: any) {
-            LauncherLogger.warn(`Move recovery: failed to purge staging: ${err.message}`);
-          }
-        }
-        try {
-          await fs.promises.unlink(journalPath);
-        } catch {}
+        LauncherLogger.info(`Move recovery: promoted staging to target and finalized at ${journal.target}`);
+        return;
       }
-    } catch (err: any) {
-      LauncherLogger.error(`Failed to process move journal recovery: ${err.message}`);
+
+      // Neither target with receipt nor staging with receipt exists!
+      LauncherLogger.error("Move recovery: finalizing phase has neither verified target nor verified staging. Preserving source.");
+      throw new Error(
+        `Recovery aborted: cannot finalize move for operation ${journal.operationId}; neither verified target nor verified staging exists. Source directory '${journal.source}' has been preserved.`
+      );
     }
+
+    // Case 4: Earlier phases ("preparing", "renaming", "copying", "verifying")
+    // Staging was not finalized or verified. Source is preserved intact.
+    if (stagingExists) {
+      try {
+        await fs.promises.rm(journal.staging, { recursive: true, force: true });
+      } catch (err: any) {
+        LauncherLogger.warn(`Move recovery: failed to purge staging directory: ${err.message}`);
+      }
+    }
+    try {
+      await fs.promises.unlink(journalPath);
+    } catch {}
+    LauncherLogger.info(`Move recovery: discarded incomplete move (${journal.phase}); original source preserved at ${journal.source}`);
   }
 }

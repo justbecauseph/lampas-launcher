@@ -141,6 +141,8 @@ async function main() {
     };
   });
 
+  const isStrict = process.argv.includes("--strict");
+
   // Check 5: Real Electron Unpacked Process Execution
   const electronBin = process.platform === "win32"
     ? path.join(rootDir, "node_modules/electron/dist/electron.exe")
@@ -152,12 +154,13 @@ async function main() {
     const combinedOutput = electronResult.stdout + "\n" + electronResult.stderr;
     const initialized = combinedOutput.includes("Lampas Launcher initialized");
     const handlersReady = combinedOutput.includes("[Smoke Test] All handlers registered; initiating graceful shutdown");
+    const roundTripPassed = combinedOutput.includes("[Smoke Test] Renderer & preload verification round-trip passed");
     const cleanExit = electronResult.code === 0 && !electronResult.timedOut;
 
     results.push({
       name: "Real Electron Execution: Unpacked dev/dist execution",
-      passed: cleanExit && initialized && handlersReady,
-      details: `Exit code: ${electronResult.code}, timedOut: ${electronResult.timedOut}, init: ${initialized}, handlers: ${handlersReady}`,
+      passed: cleanExit && initialized && handlersReady && roundTripPassed,
+      details: `Exit code: ${electronResult.code}, timedOut: ${electronResult.timedOut}, init: ${initialized}, handlers: ${handlersReady}, roundTrip: ${roundTripPassed}`,
     });
   } else {
     results.push({
@@ -167,7 +170,7 @@ async function main() {
     });
   }
 
-  // Check 6: Packaged Distribution (if exists)
+  // Check 6: Packaged Distribution (if exists, or required in strict mode)
   const packagedExe = process.platform === "win32"
     ? path.join(rootDir, "release/win-unpacked/Lampas Launcher.exe")
     : path.join(rootDir, "release/linux-unpacked/lampas-launcher");
@@ -183,18 +186,21 @@ async function main() {
     const combinedPkg = pkgResult.stdout + "\n" + pkgResult.stderr;
     const pkgInit = combinedPkg.includes("Lampas Launcher initialized");
     const pkgReady = combinedPkg.includes("[Smoke Test] All handlers registered; initiating graceful shutdown");
+    const pkgRoundTrip = combinedPkg.includes("[Smoke Test] Renderer & preload verification round-trip passed");
     const pkgClean = pkgResult.code === 0 && !pkgResult.timedOut;
 
     results.push({
       name: "Packaged Distribution: Execution & ASAR verification",
-      passed: asarValid && pkgClean && pkgInit && pkgReady,
-      details: `ASAR size: ${(fs.statSync(asarPath).size / (1024 * 1024)).toFixed(2)} MB, exit code: ${pkgResult.code}, init: ${pkgInit}, handlers: ${pkgReady}`,
+      passed: asarValid && pkgClean && pkgInit && pkgReady && pkgRoundTrip,
+      details: `ASAR size: ${(fs.statSync(asarPath).size / (1024 * 1024)).toFixed(2)} MB, exit code: ${pkgResult.code}, init: ${pkgInit}, handlers: ${pkgReady}, roundTrip: ${pkgRoundTrip}`,
     });
   } else {
     results.push({
       name: "Packaged Distribution: Execution & ASAR verification",
-      passed: true,
-      details: "Skipped: packaged binary not yet generated in release/win-unpacked (run bun run package:dir first)",
+      passed: !isStrict,
+      details: isStrict
+        ? `FAILURE: Packaged binary not found at ${packagedExe} (strict mode enabled)`
+        : "Skipped: packaged binary not yet generated in release/win-unpacked (run bun run package:dir first)",
     });
   }
 

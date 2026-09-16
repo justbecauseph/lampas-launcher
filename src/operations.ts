@@ -56,14 +56,35 @@ let activeOperation: {
 } | null = null;
 
 let opSeq = 0;
+let blockedReason: string | null = null;
 
 export class OperationCoordinator {
   /**
+   * Permanently blocks mutations if startup recovery encounters an unresolved state.
+   */
+  static blockMutations(reason: string): void {
+    blockedReason = reason;
+  }
+
+  static isBlocked(): boolean {
+    return blockedReason !== null;
+  }
+
+  static getBlockedReason(): string | null {
+    return blockedReason;
+  }
+
+  /**
    * Acquires the exclusive operation guard for an operation type.
+   * Throws Error if mutations are blocked due to recovery failure.
    * Throws OperationBusyError if another operation is active.
    * Throws GameRunningConflictError if Minecraft is running and operation affects installation.
    */
   static acquire(type: LauncherOperationType, description?: string): OperationScope {
+    if (blockedReason) {
+      throw new Error(`Launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`);
+    }
+
     if (activeOperation && !activeOperation.settled) {
       throw new OperationBusyError(
         {
@@ -165,6 +186,9 @@ export class OperationCoordinator {
    * Called by ClientModManager and settings modifiers.
    */
   static assertCanMutate(operationName = "modify installation"): void {
+    if (blockedReason) {
+      throw new Error(`Cannot perform '${operationName}': launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`);
+    }
     if (activeOperation && !activeOperation.settled) {
       throw new OperationBusyError(
         {
@@ -196,6 +220,7 @@ export class OperationCoordinator {
   }
 
   static resetForTesting(): void {
+    blockedReason = null;
     if (activeOperation) {
       activeOperation.settled = true;
       activeOperation = null;
