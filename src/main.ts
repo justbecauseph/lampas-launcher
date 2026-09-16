@@ -11,13 +11,51 @@ import { GameDirectoryManager } from "./game-directory";
 import { ServerStatusClient } from "./server-status";
 import { OperationCoordinator, safeSend as safeSendToWindow } from "./operations";
 import { BoundedLogBatchTransport } from "./game-log-stream";
-import type { DirectoryMoveProgress, SyncProgress, UserProfile } from "./types";
+import type {
+  DirectoryMoveProgress,
+  SyncProgress,
+  UserProfile,
+  LauncherConfig,
+  RendererUserProfile,
+  RendererSettingsDto,
+} from "./types";
 
 let mainWindow: BrowserWindow | null = null;
 let logTransport: BoundedLogBatchTransport | null = null;
 
 function safeSend(channel: string, ...args: any[]): void {
   safeSendToWindow(mainWindow, channel, ...args);
+}
+
+function toRendererSettingsDto(config: LauncherConfig): RendererSettingsDto {
+  return {
+    portalUrl: config.portalUrl,
+    selectedChannel: config.selectedChannel,
+    allocatedRamGb: config.allocatedRamGb,
+    gameDir: config.gameDir,
+    gameDirConfigured: config.gameDirConfigured,
+    javaPath: config.javaPath,
+    javaArgs: config.javaArgs,
+    disabledClientMods: config.disabledClientMods,
+    customClientMods: config.customClientMods,
+    noSync: config.noSync,
+  };
+}
+
+function toRendererUserProfile(user?: UserProfile): RendererUserProfile | undefined {
+  if (!user) return undefined;
+  return {
+    id: user.id,
+    name: user.name,
+    discordId: user.discordId,
+    discordTag: user.discordTag,
+    minecraftUuid: user.minecraftUuid,
+    minecraftUsername: user.minecraftUsername,
+    isAdmin: user.isAdmin,
+    isTech: user.isTech,
+    roles: user.roles,
+    allowedChannels: user.allowedChannels,
+  };
 }
 
 function createWindow() {
@@ -41,7 +79,17 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "../ui/index.html"));
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+  if (devServerUrl) {
+    mainWindow.loadURL(devServerUrl);
+  } else {
+    const prodPath = path.join(__dirname, "renderer/index.html");
+    if (fs.existsSync(prodPath)) {
+      mainWindow.loadFile(prodPath);
+    } else {
+      mainWindow.loadFile(path.join(__dirname, "../ui/index.html"));
+    }
+  }
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
@@ -115,14 +163,17 @@ app.whenReady().then(async () => {
   });
 
   // IPC Handlers: Config
-  ipcMain.handle("config:get", () => ConfigManager.get());
+  ipcMain.handle("config:get", () => toRendererSettingsDto(ConfigManager.get()));
   ipcMain.handle("config:set", (_, newConfig) => {
     OperationCoordinator.assertCanMutate("update configuration");
     const safeConfig = { ...newConfig };
-    delete safeConfig.gameDir; // Generic config updates cannot directly overwrite gameDir
-    delete safeConfig.gameDirConfigured; // Generic config updates cannot manipulate directory onboarding state
+    delete (safeConfig as any).gameDir; // Generic config updates cannot directly overwrite gameDir
+    delete (safeConfig as any).gameDirConfigured; // Generic config updates cannot manipulate directory onboarding state
+    delete (safeConfig as any).token;
+    delete (safeConfig as any).refreshToken;
+    delete (safeConfig as any).minecraftAccessToken;
     if (typeof safeConfig?.javaArgs === "string") parseJavaArgs(safeConfig.javaArgs);
-    return ConfigManager.set(safeConfig);
+    return toRendererSettingsDto(ConfigManager.set(safeConfig));
   });
 
   // IPC Handlers: Game Directory
@@ -137,9 +188,10 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("gameDir:validate", (_, targetPath: string, currentPath?: string) =>
     GameDirectoryManager.validateTarget(targetPath, currentPath));
-  ipcMain.handle("gameDir:configure", (_, targetPath: string) => {
+  ipcMain.handle("gameDir:configure", async (_, targetPath: string) => {
     OperationCoordinator.assertCanMutate("configure game directory");
-    return GameDirectoryManager.configureInitial(targetPath);
+    const updated = await GameDirectoryManager.configureInitial(targetPath);
+    return toRendererSettingsDto(updated);
   });
   ipcMain.handle("gameDir:move", async (_, targetPath: string) => {
     const op = OperationCoordinator.acquire("move", `Move installation to ${targetPath}`);
@@ -159,10 +211,19 @@ app.whenReady().then(async () => {
   });
 
   // IPC Handlers: Auth
-  ipcMain.handle("auth:login", (_, portalUrl) => LauncherAuth.loginWithPortal(portalUrl));
+  ipcMain.handle("auth:login", async (_, portalUrl) => {
+    const res = await LauncherAuth.loginWithPortal(portalUrl);
+    return { user: toRendererUserProfile(res.user)! };
+  });
   ipcMain.handle("auth:logout", () => LauncherAuth.logout());
-  ipcMain.handle("auth:verify", (_, portalUrl) => LauncherAuth.verifySession(portalUrl));
-  ipcMain.handle("auth:refresh", (_, portalUrl) => LauncherAuth.refreshSession(portalUrl));
+  ipcMain.handle("auth:verify", async (_, portalUrl) => {
+    const res = await LauncherAuth.verifySession(portalUrl);
+    return { valid: res.valid, user: toRendererUserProfile(res.user) };
+  });
+  ipcMain.handle("auth:refresh", async (_, portalUrl) => {
+    const res = await LauncherAuth.refreshSession(portalUrl);
+    return { valid: res.valid, user: toRendererUserProfile(res.user) };
+  });
 
   // IPC Handlers: Server presence. Portal credentials stay in the main process.
   ipcMain.handle("server:getStatus", () => ServerStatusClient.getStatus());

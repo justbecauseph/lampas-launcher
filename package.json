@@ -12,14 +12,14 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "benchmark": "bun test/benchmark/benchmark-harness.ts",
-    "dev": "concurrently \"tsc -w\" \"electron .\"",
-    "build": "tsc",
-    "package:dir": "tsc && electron-builder --dir --publish never",
-    "package:win": "tsc && electron-builder --win --publish never",
-    "package:linux": "tsc && electron-builder --linux --publish never",
-    "package:all": "tsc && electron-builder -mwl --publish never",
+    "dev": "concurrently \"tsc -w\" \"vite\" \"electron .\"",
+    "build": "tsc && vite build",
+    "package:dir": "tsc && vite build && electron-builder --dir --publish never",
+    "package:win": "tsc && vite build && electron-builder --win --publish never",
+    "package:linux": "tsc && vite build && electron-builder --linux --publish never",
+    "package:all": "tsc && vite build && electron-builder -mwl --publish never",
     "start": "electron ."
   },
   "dependencies": {
@@ -29,12 +29,13 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^24.9.0",
     "@types/bun": "^1.4.0",
+    "@types/node": "^24.9.0",
     "concurrently": "^9.1.2",
     "electron": "44.0.0",
     "electron-builder": "^26.15.3",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0"
   },
   "build": {
     "appId": "town.lampas.launcher",
