@@ -317,9 +317,13 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       },
     };
 
+    const toasts: Array<{ message: string; type: string }> = [];
+
     try {
       const settings = initSettingsView({
-        showToast: () => {},
+        showToast: (message, type) => {
+          toasts.push({ message, type });
+        },
         onConfigChanged: () => {},
         switchToTab: (tabId) => {
           switchedToTab = tabId;
@@ -348,11 +352,15 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       // Verify Move Installation button is wired
       expect(typeof moveDirBtn.onclick).toBe("function");
 
-      // Verify Repair Game Files redirects to Console & Logs tab
+      // Verify Repair Game Files redirects to Console & Logs tab and shows completion toast
       expect(typeof repairBtn.onclick).toBe("function");
       await repairBtn.onclick();
       expect(switchedToTab).toBe("tab-console");
       expect(repairCalled).toBe(true);
+
+      // Verify toasts: initial info toast followed by success completion toast
+      expect(toasts.some((t) => t.type === "info" && t.message.includes("Verifying"))).toBe(true);
+      expect(toasts.some((t) => t.type === "success" && (t.message.includes("repaired") || t.message.includes("Repair complete")))).toBe(true);
     } finally {
       (globalThis as any).document = prevDoc;
       (globalThis as any).window = prevWin;

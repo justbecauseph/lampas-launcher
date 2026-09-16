@@ -452,9 +452,10 @@ export function initSettingsView(options: SettingsViewOptions): {
         btnRepairSettings.disabled = true;
         showToast("Verifying and repairing game files...", "info");
         const res = await window.lampas.sync.repair();
-        showToast(res?.message || "Game files verified and repaired.", "success");
+        const completionMsg = res?.message || "Repair complete! All game files, assets, and libraries verified.";
+        showToast(completionMsg, "success", 4500);
       } catch (err: any) {
-        showToast(`Repair error: ${err.message}`, "error");
+        showToast(`Repair error: ${err.message}`, "error", 6000);
       } finally {
         btnRepairSettings.disabled = false;
       }
