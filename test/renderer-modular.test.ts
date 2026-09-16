@@ -91,7 +91,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       "utf-8"
     );
     expect(modsViewSource).not.toContain("onerror=");
-    expect(modsViewSource).toContain('.addEventListener(\n      "error"');
+    expect(modsViewSource).toMatch(/\.addEventListener\(\s*["']error["']/);
   });
 
   test("server status view model preserves 8-player cap and guidance labels", () => {
