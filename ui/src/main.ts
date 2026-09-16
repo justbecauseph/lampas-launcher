@@ -141,6 +141,8 @@ async function startApp(): Promise<void> {
     onModsChanged: () => {
       // Refresh runtime or catalog if needed
     },
+    getGameDir: () => activeConfig.gameDir,
+    switchToTab,
   });
 
   // Initialize Server Status View

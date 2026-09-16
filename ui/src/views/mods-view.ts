@@ -7,6 +7,8 @@ interface NormalizedMod extends ModCatalogEntry {
 export interface ModsViewOptions {
   showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
   onModsChanged?: () => void;
+  getGameDir?: () => string;
+  switchToTab?: (tabId: string) => void;
 }
 
 function formatBytes(bytes?: number): string {
@@ -27,7 +29,7 @@ function escapeHtml(value?: string | number): string {
 }
 
 export function initModsView(options: ModsViewOptions): () => void {
-  const { showToast, onModsChanged } = options;
+  const { showToast, onModsChanged, getGameDir, switchToTab } = options;
 
   const modsGrid = document.getElementById("mods-grid") as HTMLElement | null;
   const modsSearchInput = document.getElementById("mods-search-input") as HTMLInputElement | null;
@@ -36,8 +38,13 @@ export function initModsView(options: ModsViewOptions): () => void {
   const optionalModCount = document.getElementById("optional-mod-count") as HTMLElement | null;
   const localModCount = document.getElementById("local-mod-count") as HTMLElement | null;
   const modFilterPills = document.querySelectorAll<HTMLElement>(".mod-filter-pill");
-  const btnBrowseMod = document.getElementById("btn-browse-mod") as HTMLButtonElement | null;
-  const modsDropZone = document.getElementById("tab-mods") as HTMLElement | null;
+
+  // Client Loadout Action Buttons
+  const btnAddMods = (document.getElementById("btn-add-mods") || document.getElementById("btn-browse-mod")) as HTMLButtonElement | null;
+  const btnRepairPack = document.getElementById("btn-repair-pack") as HTMLButtonElement | null;
+  const btnVerifyPack = document.getElementById("btn-verify-pack") as HTMLButtonElement | null;
+  const btnModsOpenDir = document.getElementById("btn-mods-open-dir") as HTMLButtonElement | null;
+  const modDropZone = (document.getElementById("mod-drop-zone") || document.getElementById("tab-mods")) as HTMLElement | null;
 
   let allMods: NormalizedMod[] = [];
   let activeModFilter = "all";
@@ -306,36 +313,114 @@ export function initModsView(options: ModsViewOptions): () => void {
     });
   });
 
-  // Browse local mod file
-  if (btnBrowseMod) {
-    btnBrowseMod.onclick = async () => {
+  const handleAddLocalMods = async () => {
+    try {
+      const res = await window.lampas.mods.browseAndAdd();
+      if (res.success && res.filesAdded?.length) {
+        showToast(`Imported: ${res.filesAdded.join(", ")}`, "success");
+        await loadCatalog();
+        onModsChanged?.();
+      } else if (res.error) {
+        showToast(`Import Failed: ${res.error}`, "error");
+      }
+    } catch (err: any) {
+      showToast(`Import Error: ${err.message}`, "error");
+    }
+  };
+
+  // Add Local Mods Button
+  if (btnAddMods) {
+    btnAddMods.onclick = handleAddLocalMods;
+  }
+
+  // Repair Pack Button
+  if (btnRepairPack) {
+    btnRepairPack.onclick = async () => {
+      if (switchToTab) {
+        switchToTab("tab-console");
+      } else {
+        const navConsole = document.getElementById("nav-console");
+        if (navConsole) navConsole.click();
+      }
+
+      if (!window.lampas?.sync?.repair) return;
       try {
-        const res = await window.lampas.mods.browseAndAdd();
-        if (res.success && res.filesAdded?.length) {
-          showToast(`Imported: ${res.filesAdded.join(", ")}`, "success");
-          await loadCatalog();
-          onModsChanged?.();
-        } else if (res.error) {
-          showToast(`Import Failed: ${res.error}`, "error");
-        }
+        btnRepairPack.disabled = true;
+        showToast("Verifying and repairing game files...", "info");
+        const res = await window.lampas.sync.repair();
+        const completionMsg = res?.message || "Repair complete! All game files, assets, and libraries verified.";
+        showToast(completionMsg, "success", 4500);
+        await loadCatalog();
+        onModsChanged?.();
       } catch (err: any) {
-        showToast(`Import Error: ${err.message}`, "error");
+        showToast(`Repair error: ${err.message}`, "error", 6000);
+      } finally {
+        btnRepairPack.disabled = false;
       }
     };
   }
 
-  // Drag & drop mods
-  if (modsDropZone) {
-    modsDropZone.addEventListener("dragover", (e) => {
+  // Verify Integrity Button
+  if (btnVerifyPack) {
+    btnVerifyPack.onclick = async () => {
+      if (switchToTab) {
+        switchToTab("tab-console");
+      } else {
+        const navConsole = document.getElementById("nav-console");
+        if (navConsole) navConsole.click();
+      }
+
+      if (!window.lampas?.sync?.start) return;
+      try {
+        btnVerifyPack.disabled = true;
+        showToast("Verifying modpack integrity...", "info");
+        const res = await window.lampas.sync.start();
+        const completionMsg = res?.message || `Modpack v${res.version} verified successfully.`;
+        showToast(completionMsg, "success", 4500);
+        await loadCatalog();
+        onModsChanged?.();
+      } catch (err: any) {
+        showToast(`Verification error: ${err.message}`, "error", 6000);
+      } finally {
+        btnVerifyPack.disabled = false;
+      }
+    };
+  }
+
+  // Open Pack Folder Button
+  if (btnModsOpenDir) {
+    btnModsOpenDir.onclick = async () => {
+      let dir = getGameDir?.();
+      if (!dir && window.lampas?.config?.get) {
+        try {
+          const cfg = await window.lampas.config.get();
+          dir = cfg?.gameDir;
+        } catch {}
+      }
+      if (dir && window.lampas?.utils?.openPath) {
+        await window.lampas.utils.openPath(dir);
+      }
+    };
+  }
+
+  // Drag & drop mods and click drop zone
+  if (modDropZone) {
+    modDropZone.onclick = (e) => {
+      if ((e.target as HTMLElement)?.closest?.(".badge")) return;
+      if ((e.target as HTMLElement)?.closest?.("button")) return;
+      void handleAddLocalMods();
+    };
+
+    modDropZone.addEventListener("dragover", (e) => {
       e.preventDefault();
-      modsDropZone.classList.add("drag-over");
+      modDropZone.classList.add("drag-over");
     });
-    modsDropZone.addEventListener("dragleave", () => {
-      modsDropZone.classList.remove("drag-over");
+    modDropZone.addEventListener("dragleave", () => {
+      modDropZone.classList.remove("drag-over");
     });
-    modsDropZone.addEventListener("drop", async (e) => {
+    modDropZone.addEventListener("drop", async (e) => {
       e.preventDefault();
-      modsDropZone.classList.remove("drag-over");
+      modDropZone.classList.remove("drag-over");
       const files = Array.from(e.dataTransfer?.files || []).filter((f) =>
         f.name.toLowerCase().endsWith(".jar")
       );

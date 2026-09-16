@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { getServerStatusView } from "../ui/src/views/server-status-view";
 import { initAuthView } from "../ui/src/views/auth-view";
 import { initSettingsView } from "../ui/src/views/settings-view";
+import { initModsView } from "../ui/src/views/mods-view";
 import type { RendererSettingsDto, RendererUserProfile } from "../src/types";
 
 describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
@@ -361,6 +362,141 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       // Verify toasts: initial info toast followed by success completion toast
       expect(toasts.some((t) => t.type === "info" && t.message.includes("Verifying"))).toBe(true);
       expect(toasts.some((t) => t.type === "success" && (t.message.includes("repaired") || t.message.includes("Repair complete")))).toBe(true);
+    } finally {
+      (globalThis as any).document = prevDoc;
+      (globalThis as any).window = prevWin;
+    }
+  });
+
+  test("mods-view wires all Client Loadout header buttons (add, repair, verify, open folder)", async () => {
+    // Check source code requirements
+    const modsSource = fs.readFileSync(path.join(__dirname, "../ui/src/views/mods-view.ts"), "utf-8");
+    expect(modsSource).toContain("btn-add-mods");
+    expect(modsSource).toContain("btn-repair-pack");
+    expect(modsSource).toContain("btn-verify-pack");
+    expect(modsSource).toContain("btn-mods-open-dir");
+
+    const elements = new Map<string, any>();
+    class MockEl {
+      id: string;
+      innerText = "";
+      value = "";
+      disabled = false;
+      classList = {
+        add: () => {},
+        remove: () => {},
+      };
+      onclick: any = null;
+      onchange: any = null;
+      addEventListener: any = () => {};
+      removeEventListener: any = () => {};
+      constructor(id: string) {
+        this.id = id;
+      }
+    }
+
+    const reg = (id: string) => {
+      const el = new MockEl(id);
+      elements.set(id, el);
+      return el;
+    };
+
+    const addModsBtn = reg("btn-add-mods");
+    const repairPackBtn = reg("btn-repair-pack");
+    const verifyPackBtn = reg("btn-verify-pack");
+    const modsOpenDirBtn = reg("btn-mods-open-dir");
+    reg("mods-grid");
+    reg("mods-search-input");
+    reg("mods-filtered-count");
+    reg("managed-mod-count");
+    reg("optional-mod-count");
+    reg("local-mod-count");
+    reg("mod-drop-zone");
+
+    const prevDoc = (globalThis as any).document;
+    const prevWin = (globalThis as any).window;
+
+    let browseAndAddCalled = false;
+    let repairCalled = false;
+    let startCalled = false;
+    let openedPath = "";
+    let switchedToTab = "";
+    const toasts: Array<{ message: string; type: string }> = [];
+
+    (globalThis as any).document = {
+      getElementById: (id: string) => elements.get(id) || null,
+      querySelectorAll: () => [],
+      createElement: (tag: string) => new MockEl(""),
+    };
+
+    (globalThis as any).window = {
+      lampas: {
+        mods: {
+          browseAndAdd: async () => {
+            browseAndAddCalled = true;
+            return { success: true, filesAdded: ["custom-addon.jar"] };
+          },
+          addDropped: async () => ({ success: true }),
+          setOfficialEnabled: async () => {},
+          setCustomEnabled: async () => {},
+          removeCustom: async () => {},
+        },
+        sync: {
+          getModCatalog: async () => [],
+          repair: async () => {
+            repairCalled = true;
+            return { message: "All components repaired." };
+          },
+          start: async () => {
+            startCalled = true;
+            return { version: "2.0.0", message: "Synchronized." };
+          },
+        },
+        utils: {
+          openPath: async (p: string) => {
+            openedPath = p;
+          },
+        },
+        config: {
+          get: async () => ({ gameDir: "C:/LampasPack" }),
+        },
+      },
+    };
+
+    try {
+      const dispose = initModsView({
+        showToast: (message, type) => {
+          toasts.push({ message, type });
+        },
+        onModsChanged: () => {},
+        getGameDir: () => "C:/LampasPack",
+        switchToTab: (tabId) => {
+          switchedToTab = tabId;
+        },
+      });
+
+      // 1. Test Add Local Mods button
+      expect(typeof addModsBtn.onclick).toBe("function");
+      await addModsBtn.onclick();
+      expect(browseAndAddCalled).toBe(true);
+
+      // 2. Test Repair Pack button
+      expect(typeof repairPackBtn.onclick).toBe("function");
+      await repairPackBtn.onclick();
+      expect(switchedToTab).toBe("tab-console");
+      expect(repairCalled).toBe(true);
+
+      // 3. Test Verify Integrity button
+      expect(typeof verifyPackBtn.onclick).toBe("function");
+      await verifyPackBtn.onclick();
+      expect(startCalled).toBe(true);
+
+      // 4. Test Open Pack Folder button
+      expect(typeof modsOpenDirBtn.onclick).toBe("function");
+      await modsOpenDirBtn.onclick();
+      expect(openedPath).toBe("C:/LampasPack");
+
+      dispose();
     } finally {
       (globalThis as any).document = prevDoc;
       (globalThis as any).window = prevWin;
