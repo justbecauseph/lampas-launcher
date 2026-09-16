@@ -63,9 +63,9 @@ function createWindow() {
   const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined;
 
   mainWindow = new BrowserWindow({
-    width: 1080,
+    width: 1180,
     height: 800,
-    minWidth: 1000,
+    minWidth: 1100,
     minHeight: 600,
     frame: false,
     titleBarStyle: "hidden",
