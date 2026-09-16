@@ -111,9 +111,15 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
   });
 
   test("Vite production build emits dist/renderer without destroying dist/main.js", () => {
-    const prodIndex = path.join(__dirname, "../dist/renderer/index.html");
-    const mainJs = path.join(__dirname, "../dist/main.js");
-    const preloadJs = path.join(__dirname, "../dist/preload.js");
+    const rootDir = path.join(__dirname, "..");
+    const prodIndex = path.join(rootDir, "dist/renderer/index.html");
+    const mainJs = path.join(rootDir, "dist/main.js");
+    const preloadJs = path.join(rootDir, "dist/preload.js");
+
+    if (!fs.existsSync(prodIndex) || !fs.existsSync(mainJs) || !fs.existsSync(preloadJs)) {
+      const { execSync } = require("node:child_process");
+      execSync("bun run build", { cwd: rootDir, stdio: "pipe" });
+    }
 
     expect(fs.existsSync(prodIndex)).toBe(true);
     expect(fs.existsSync(mainJs)).toBe(true);
