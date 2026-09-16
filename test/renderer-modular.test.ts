@@ -265,6 +265,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     const gamedirInput = reg("setting-gamedir-input");
     const openDirBtn = reg("btn-settings-open-dir");
     const moveDirBtn = reg("btn-settings-move-dir");
+    const repairBtn = reg("btn-repair-settings");
     reg("ram-slider");
     reg("setting-ram-val");
     reg("setting-portal");
@@ -282,6 +283,9 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     const prevWin = (globalThis as any).window;
 
     let openedPath = "";
+    let switchedToTab = "";
+    let repairCalled = false;
+
     (globalThis as any).document = {
       getElementById: (id: string) => elements.get(id) || null,
       querySelectorAll: () => [],
@@ -298,6 +302,12 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
             openedPath = p;
           },
         },
+        sync: {
+          repair: async () => {
+            repairCalled = true;
+            return { message: "All components repaired." };
+          },
+        },
         gameDirectory: {
           browse: async () => ({ canceled: false, filePaths: ["D:/NewMinecraft"] }),
           validate: async () => ({ valid: true }),
@@ -311,6 +321,9 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       const settings = initSettingsView({
         showToast: () => {},
         onConfigChanged: () => {},
+        switchToTab: (tabId) => {
+          switchedToTab = tabId;
+        },
       });
 
       // Initially input is blank
@@ -334,6 +347,12 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
 
       // Verify Move Installation button is wired
       expect(typeof moveDirBtn.onclick).toBe("function");
+
+      // Verify Repair Game Files redirects to Console & Logs tab
+      expect(typeof repairBtn.onclick).toBe("function");
+      await repairBtn.onclick();
+      expect(switchedToTab).toBe("tab-console");
+      expect(repairCalled).toBe(true);
     } finally {
       (globalThis as any).document = prevDoc;
       (globalThis as any).window = prevWin;

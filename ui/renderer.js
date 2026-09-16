@@ -959,6 +959,8 @@ if (btnSaveSettings) {
 // Installation Repair & Integrity Recovery
 // ========================================================
 async function handleRepair() {
+  switchTab(navConsole, tabConsole);
+
   if (isLaunching) {
     showToast("Cannot repair while game or launch is in progress.", "info");
     return;

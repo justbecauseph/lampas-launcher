@@ -143,10 +143,18 @@ async function main() {
 
   const isStrict = process.argv.includes("--strict");
 
-  // Check 5: Real Electron Unpacked Process Execution
-  const electronBin = process.platform === "win32"
+  let electronBin = process.platform === "win32"
     ? path.join(rootDir, "node_modules/electron/dist/electron.exe")
     : path.join(rootDir, "node_modules/.bin/electron");
+
+  if (!fs.existsSync(electronBin)) {
+    try {
+      const resolved = require("electron");
+      if (typeof resolved === "string" && fs.existsSync(resolved)) {
+        electronBin = resolved;
+      }
+    } catch {}
+  }
 
   if (fs.existsSync(electronBin)) {
     console.log(`[Executing Real Electron Smoke Test via ${path.basename(electronBin)}...]`);

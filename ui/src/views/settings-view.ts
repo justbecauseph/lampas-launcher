@@ -7,6 +7,7 @@ import type {
 export interface SettingsViewOptions {
   showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
   onConfigChanged: (config: RendererSettingsDto) => void;
+  switchToTab?: (tabId: string) => void;
 }
 
 function formatBytes(bytes?: number): string {
@@ -21,7 +22,7 @@ export function initSettingsView(options: SettingsViewOptions): {
   checkInitialGameDir: (status: DirectoryStatus) => Promise<void>;
   dispose: () => void;
 } {
-  const { showToast, onConfigChanged } = options;
+  const { showToast, onConfigChanged, switchToTab } = options;
 
   const ramSlider = document.getElementById("ram-slider") as HTMLInputElement | null;
   const ramDisplay = document.getElementById("ram-display") as HTMLElement | null;
@@ -439,6 +440,13 @@ export function initSettingsView(options: SettingsViewOptions): {
 
   if (btnRepairSettings) {
     btnRepairSettings.onclick = async () => {
+      if (switchToTab) {
+        switchToTab("tab-console");
+      } else {
+        const navConsole = document.getElementById("nav-console");
+        if (navConsole) navConsole.click();
+      }
+
       if (!window.lampas?.sync?.repair) return;
       try {
         btnRepairSettings.disabled = true;

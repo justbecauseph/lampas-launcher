@@ -132,6 +132,7 @@ async function startApp(): Promise<void> {
     onConfigChanged: (cfg: RendererSettingsDto) => {
       activeConfig = cfg;
     },
+    switchToTab,
   });
 
   // Initialize Mods View
