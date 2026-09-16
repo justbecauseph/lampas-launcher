@@ -3,6 +3,7 @@ import type {
   DirectoryMoveProgress,
   RendererSettingsDto,
 } from "../types";
+import { formatFriendlyError } from "../utils";
 
 export interface SettingsViewOptions {
   showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
@@ -206,7 +207,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         currentConfig = updated;
         onConfigChanged(updated);
       } catch (err: any) {
-        showToast(`Failed to update RAM: ${err.message}`, "error");
+        showToast(`Could not update RAM allocation: ${formatFriendlyError(err)}`, "error");
       }
     });
   }
@@ -220,9 +221,9 @@ export function initSettingsView(options: SettingsViewOptions): {
         applyChannel(channel);
         currentConfig = updated;
         onConfigChanged(updated);
-        showToast(`Channel switched to ${channel.toUpperCase()}`, "info");
+        showToast(`Release channel switched to ${channel.toUpperCase()}.`, "info");
       } catch (err: any) {
-        showToast(`Failed to switch channel: ${err.message}`, "error");
+        showToast(`Could not switch channel: ${formatFriendlyError(err)}`, "error");
       }
     };
   });
@@ -236,9 +237,9 @@ export function initSettingsView(options: SettingsViewOptions): {
         updateNoSyncUI(nextVal);
         currentConfig = updated;
         onConfigChanged(updated);
-        showToast(`No-Sync mode ${nextVal ? "enabled" : "disabled"}`, "info");
+        showToast(`No-Sync mode ${nextVal ? "enabled" : "disabled"}.`, "info");
       } catch (err: any) {
-        showToast(`Failed to toggle No-Sync: ${err.message}`, "error");
+        showToast(`Could not update No-Sync setting: ${formatFriendlyError(err)}`, "error");
         updateNoSyncUI(currentConfig?.noSync);
       }
     };
@@ -294,7 +295,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         if (moveModalProgressView) moveModalProgressView.classList.add("hidden");
         if (modalMoveDir) modalMoveDir.classList.remove("hidden");
       } catch (err: any) {
-        showToast(`Error choosing directory: ${err.message}`, "error");
+        showToast(`Could not select directory: ${formatFriendlyError(err)}`, "error");
       }
     };
   }
@@ -376,14 +377,14 @@ export function initSettingsView(options: SettingsViewOptions): {
           currentConfig = freshConfig;
           onConfigChanged(freshConfig);
         } else {
-          showToast(`Relocation failed: ${moveRes.error}`, "error");
+          showToast(`Relocation failed: ${formatFriendlyError(moveRes.error)}`, "error", 6000);
         }
       } catch (err: any) {
         unsub();
         if (modalMoveDir) modalMoveDir.classList.add("hidden");
         if (moveModalProgressView) moveModalProgressView.classList.add("hidden");
         pendingMoveTargetPath = "";
-        showToast(`Relocation error: ${err.message}`, "error", 6000);
+        showToast(`Relocation failed: ${formatFriendlyError(err)}`, "error", 6000);
       }
     };
   }
@@ -397,7 +398,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         onConfigChanged(updated);
         showToast("Portal URL updated.", "info");
       } catch (err: any) {
-        showToast(`Failed to save portal URL: ${err.message}`, "error");
+        showToast(`Could not save portal URL: ${formatFriendlyError(err)}`, "error");
       }
     };
   }
@@ -410,7 +411,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         onConfigChanged(updated);
         showToast("JVM arguments updated.", "info");
       } catch (err: any) {
-        showToast(`Invalid JVM arguments: ${err.message}`, "error");
+        showToast(`Could not save JVM arguments: ${formatFriendlyError(err)}`, "error");
       }
     };
   }
@@ -433,7 +434,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         onConfigChanged(updated);
         showToast("Settings saved successfully!", "success");
       } catch (err: any) {
-        showToast(`Failed to save settings: ${err.message}`, "error");
+        showToast(`Could not save settings: ${formatFriendlyError(err)}`, "error");
       }
     };
   }
@@ -455,7 +456,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         const completionMsg = res?.message || "Repair complete! All game files, assets, and libraries verified.";
         showToast(completionMsg, "success", 4500);
       } catch (err: any) {
-        showToast(`Repair error: ${err.message}`, "error", 6000);
+        showToast(`Repair failed: ${formatFriendlyError(err)}`, "error", 6000);
       } finally {
         btnRepairSettings.disabled = false;
       }

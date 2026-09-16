@@ -1,4 +1,5 @@
 import type { GameLogEntry } from "../types";
+import { formatFriendlyError } from "../utils";
 
 export interface ConsoleViewOptions {
   showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
@@ -148,7 +149,7 @@ export function initConsoleView(options: ConsoleViewOptions): () => void {
       try {
         await window.lampas.utils.openLogFile();
       } catch (err: any) {
-        showToast(`Failed to open log file: ${err.message}`, "error");
+        showToast(`Could not open log file: ${formatFriendlyError(err)}`, "error");
       }
     };
   }
@@ -158,7 +159,7 @@ export function initConsoleView(options: ConsoleViewOptions): () => void {
       try {
         await window.lampas.utils.openLogsDir();
       } catch (err: any) {
-        showToast(`Failed to open logs folder: ${err.message}`, "error");
+        showToast(`Could not open logs folder: ${formatFriendlyError(err)}`, "error");
       }
     };
   }
@@ -168,7 +169,7 @@ export function initConsoleView(options: ConsoleViewOptions): () => void {
       try {
         await window.lampas.utils.openMinecraftLog();
       } catch (err: any) {
-        showToast(`Cannot open Minecraft log: ${err.message}`, "error");
+        showToast(`Could not open Minecraft log: ${formatFriendlyError(err)}`, "error");
       }
     };
   }

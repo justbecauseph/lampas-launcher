@@ -1,4 +1,5 @@
 import type { RendererUserProfile } from "../types";
+import { formatFriendlyError } from "../utils";
 
 export interface AuthViewOptions {
   showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
@@ -81,7 +82,7 @@ export function initAuthView(options: AuthViewOptions): {
         updateUserUI(res.user);
         showToast(`Welcome, ${res.user.minecraftUsername || res.user.name}!`, "success");
       } catch (err: any) {
-        showToast(`Login failed: ${err.message}`, "error");
+        showToast(`Login failed: ${formatFriendlyError(err)}`, "error");
       } finally {
         if (btnLogin) {
           btnLogin.disabled = false;
@@ -98,7 +99,7 @@ export function initAuthView(options: AuthViewOptions): {
         updateUserUI(null);
         showToast("Logged out successfully.", "info");
       } catch (err: any) {
-        showToast(`Logout error: ${err.message}`, "error");
+        showToast(`Could not log out: ${formatFriendlyError(err)}`, "error");
       }
     };
   }

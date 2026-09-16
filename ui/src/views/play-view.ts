@@ -3,6 +3,7 @@ import type {
   InstalledRuntimeInfo,
   SyncProgress,
 } from "../types";
+import { formatFriendlyError } from "../utils";
 
 export interface PlayViewOptions {
   showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
@@ -87,7 +88,11 @@ export function initPlayView(options: PlayViewOptions): {
       if (progressContainer) progressContainer.classList.add("hidden");
 
       appendLog("INFO", `Minecraft process terminated (exit code ${code ?? 0})`);
-      showToast(`Game closed (Exit code: ${code ?? 0})`, "info");
+      if (code === 0 || code === null) {
+        showToast("Minecraft closed.", "info");
+      } else {
+        showToast(`Minecraft closed unexpectedly (exit code ${code}). Check Console for details.`, "error", 6000);
+      }
     });
     disposers.push(unsub);
   }
@@ -190,7 +195,7 @@ export function initPlayView(options: PlayViewOptions): {
         if (btnStop) btnStop.classList.add("hidden");
         if (progressContainer) progressContainer.classList.add("hidden");
 
-        showToast(`Launch Error: ${err.message}`, "error", 6000);
+        showToast(`Could not launch Minecraft: ${formatFriendlyError(err)}`, "error", 6000);
         appendLog("ERROR", err.message);
       }
     };
@@ -200,11 +205,11 @@ export function initPlayView(options: PlayViewOptions): {
     btnStop.onclick = async () => {
       try {
         btnStop.disabled = true;
-        btnStop.innerText = "KILLING...";
+        btnStop.innerText = "STOPPING...";
         await window.lampas.game.kill();
-        showToast("Minecraft termination requested.", "info");
+        showToast("Stopping Minecraft...", "info");
       } catch (err: any) {
-        showToast(`Kill error: ${err.message}`, "error");
+        showToast(`Could not stop Minecraft: ${formatFriendlyError(err)}`, "error");
       } finally {
         btnStop.disabled = false;
         btnStop.innerText = "STOP";

@@ -1,4 +1,5 @@
 import type { ModCatalogEntry } from "../types";
+import { cleanModDisplayName, formatFriendlyError } from "../utils";
 
 interface NormalizedMod extends ModCatalogEntry {
   _searchKey: string;
@@ -149,13 +150,13 @@ export function initModsView(options: ModsViewOptions): () => void {
 
         const toggle = mod.canDisable
           ? `<label class="mod-switch" title="${mod.enabled ? "Disable" : "Enable"} ${modName}">
-              <input class="js-mod-toggle" type="checkbox" data-id="${modId}" data-filename="${escapeHtml(mod.filename || "")}" data-source="${escapeHtml(mod.source)}" ${mod.enabled ? "checked" : ""}>
+              <input class="js-mod-toggle" type="checkbox" data-id="${modId}" data-name="${modName}" data-filename="${escapeHtml(mod.filename || "")}" data-source="${escapeHtml(mod.source)}" ${mod.enabled ? "checked" : ""}>
               <span></span>
             </label>`
           : "";
         const localBadge = mod.source === "custom" ? '<span class="local-mod-badge">LOCAL</span>' : "";
         const remove = mod.source === "custom"
-          ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" title="Remove this local mod">Remove</button>`
+          ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" data-name="${modName}" title="Remove this local mod">Remove</button>`
           : "";
 
         return `
@@ -230,15 +231,17 @@ export function initModsView(options: ModsViewOptions): () => void {
       const removeBtn = target.closest<HTMLButtonElement>(".js-mod-remove");
       if (removeBtn && removeBtn.dataset.filename && !isMutating) {
         const filename = removeBtn.dataset.filename;
+        const found = allMods.find((m) => m.filename === filename);
+        const displayName = found?.name || removeBtn.dataset.name || cleanModDisplayName(filename);
         isMutating = true;
         removeBtn.disabled = true;
         try {
           await window.lampas.mods.removeCustom(filename);
-          showToast(`Removed ${filename}`, "info");
+          showToast(`Removed ${displayName}.`, "info");
           await loadCatalog();
           onModsChanged?.();
         } catch (err: any) {
-          showToast(`Failed to remove mod: ${err.message}`, "error");
+          showToast(`Could not remove ${displayName}: ${formatFriendlyError(err)}`, "error");
         } finally {
           isMutating = false;
         }
@@ -255,6 +258,9 @@ export function initModsView(options: ModsViewOptions): () => void {
       const filename = target.dataset.filename || "";
       const enabled = target.checked;
 
+      const found = allMods.find((m) => (isOfficial ? m.id === modId : m.filename === filename));
+      const displayName = found?.name || target.dataset.name || cleanModDisplayName(filename) || modId;
+
       isMutating = true;
       target.disabled = true;
 
@@ -265,18 +271,17 @@ export function initModsView(options: ModsViewOptions): () => void {
           await window.lampas.mods.setCustomEnabled(filename, enabled);
         }
         // Update local state
-        const found = allMods.find((m) => (isOfficial ? m.id === modId : m.filename === filename));
         if (found) found.enabled = enabled;
         updateCounts();
         if (activeModFilter === "disabled") {
           renderMods();
         }
-        showToast(`${enabled ? "Enabled" : "Disabled"} ${filename || modId}`, "info", 1500);
+        showToast(`${enabled ? "Enabled" : "Disabled"} ${displayName}.`, "info", 1500);
         onModsChanged?.();
       } catch (err: any) {
         // Rollback checkbox
         target.checked = !enabled;
-        showToast(`Failed to toggle mod: ${err.message}`, "error");
+        showToast(`Could not ${enabled ? "enable" : "disable"} ${displayName}: ${formatFriendlyError(err)}`, "error");
       } finally {
         target.disabled = false;
         isMutating = false;
@@ -321,14 +326,18 @@ export function initModsView(options: ModsViewOptions): () => void {
     try {
       const res = await window.lampas.mods.browseAndAdd();
       if (res.success && res.filesAdded?.length) {
-        showToast(`Imported: ${res.filesAdded.join(", ")}`, "success");
+        const count = res.filesAdded.length;
+        const msg = count === 1
+          ? `Added ${cleanModDisplayName(res.filesAdded[0])}.`
+          : `Successfully added ${count} mods.`;
+        showToast(msg, "success");
         await loadCatalog();
         onModsChanged?.();
       } else if (res.error) {
-        showToast(`Import Failed: ${res.error}`, "error");
+        showToast(`Could not add mod: ${formatFriendlyError(res.error)}`, "error");
       }
     } catch (err: any) {
-      showToast(`Import Error: ${err.message}`, "error");
+      showToast(`Could not add mod: ${formatFriendlyError(err)}`, "error");
     }
   };
 
@@ -357,7 +366,7 @@ export function initModsView(options: ModsViewOptions): () => void {
         await loadCatalog();
         onModsChanged?.();
       } catch (err: any) {
-        showToast(`Repair error: ${err.message}`, "error", 6000);
+        showToast(`Repair failed: ${formatFriendlyError(err)}`, "error", 6000);
       } finally {
         btnRepairPack.disabled = false;
       }
@@ -384,7 +393,7 @@ export function initModsView(options: ModsViewOptions): () => void {
         await loadCatalog();
         onModsChanged?.();
       } catch (err: any) {
-        showToast(`Verification error: ${err.message}`, "error", 6000);
+        showToast(`Verification failed: ${formatFriendlyError(err)}`, "error", 6000);
       } finally {
         btnVerifyPack.disabled = false;
       }
@@ -433,14 +442,18 @@ export function initModsView(options: ModsViewOptions): () => void {
       try {
         const res = await window.lampas.mods.addDropped(files);
         if (res.success && res.filesAdded?.length) {
-          showToast(`Imported: ${res.filesAdded.join(", ")}`, "success");
+          const count = res.filesAdded.length;
+          const msg = count === 1
+            ? `Added ${cleanModDisplayName(res.filesAdded[0])}.`
+            : `Successfully added ${count} mods.`;
+          showToast(msg, "success");
           await loadCatalog();
           onModsChanged?.();
         } else if (res.error) {
-          showToast(`Import Failed: ${res.error}`, "error");
+          showToast(`Could not add mod: ${formatFriendlyError(res.error)}`, "error");
         }
       } catch (err: any) {
-        showToast(`Import Error: ${err.message}`, "error");
+        showToast(`Could not add mod: ${formatFriendlyError(err)}`, "error");
       }
     });
   }
