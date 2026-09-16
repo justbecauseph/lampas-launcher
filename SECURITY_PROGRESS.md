@@ -1,194 +1,178 @@
 # Lampas Launcher — Security Hardening Progress
 
-## Review Gate 0 — Baseline Characterization, Threat Inventory, and Finding Reproductions
+## Review Gate 0.1 — Corrected Baseline Characterization, Threat Inventory, and Finding Evidence
 
-- **Execution Date:** 16 September 2026
-- **Status:** Complete (Review Gate 0 reached; stopped before Phase 1)
+- **Execution Date:** 17 September 2026
+- **Status:** Complete (Review Gate 0.1 reached; Phase 0.1 evidence-and-test correction pass complete; stopped before Phase 1)
 - **Assessed Baseline Commit:** `3950e155a25c9effc004e2355dffa1722e46a6cc`
-- **Current HEAD:** `3950e155a25c9effc004e2355dffa1722e46a6cc`
-- **Branch:** `feat/security`
-- **Working Tree State:** Clean; baseline test suite and fixtures passing; packaging validated.
+- **Review Commit Target:** `8089c691d38513d804b0fabc7ebaee22685d6a3f`
+- **Current Branch:** `feat/security`
+- **Production Code Drift:** **Zero diff (`0 lines`)** against baseline commit `3950e15` across all production paths (`src/`, `ui/`). All modifications are strictly restricted to security characterization tests, regression gate specifications, and documentation.
 
 ---
 
-### 1. Code Drift & Baseline Comparison
+### 1. Code Drift, Commit Hierarchy & Baseline Verification
 
-A bit-for-bit comparison was performed between the current checkout and the assessed baseline commit `3950e155a25c9effc004e2355dffa1722e46a6cc`:
+A rigorous comparison was conducted distinguishing the starting baseline, the initial review commit, and the current working tree:
 
-| Metric | Assessed Baseline | Current Checkout | Drift |
-|---|---|---|---|
-| Commit SHA | `3950e155a25c9effc004e2355dffa1722e46a6cc` | `3950e155a25c9effc004e2355dffa1722e46a6cc` | **None (0 commits)** |
-| `git diff <baseline> HEAD` | — | Empty (no diff) | **None (0 lines)** |
-| Lockfile (`bun.lock`) SHA-256 | `51834981EAA1925B2234E14295E5B733BDEBC72697E575EFB2046479821E4B3A` | `51834981EAA1925B2234E14295E5B733BDEBC72697E575EFB2046479821E4B3A` | **Byte-identical** |
-| Lockfile Git Blob SHA | `540abf99f9323d25b8856fe88e611c887c0fa726` | `540abf99f9323d25b8856fe88e611c887c0fa726` | **Identical** |
-| Package Version | `1.3.0` | `1.3.0` | **Identical** |
+| Dimension | Assessed Baseline (`3950e15`) | Review Target (`8089c69`) | Current Working Tree (`HEAD`) | Drift Evaluation |
+|---|---|---|---|---|
+| **Production Code (`src/`, `ui/`)** | Pristine baseline | Pristine baseline | Pristine baseline | **0 lines modified (zero drift)** |
+| **Dependencies (`bun.lock`, `package.json`)** | Pinned | Pinned (identical) | Pinned (identical) | **Byte-identical lockfile & package versions** |
+| **Lockfile SHA-256** | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | **Byte-identical** |
+| **Package Version** | `1.3.0` | `1.3.0` | `1.3.0` | **Byte-identical** |
+| **Characterization Suite** | Absent | 17 tests (flawed harness / counts) | 23 tests (hardened harness, mock-cached safe) | **Reconciled & passing (23/23)** |
+| **Regression Gates** | Absent | 14 tests (`test.skip` with comment stubs) | 15 tests (6 runnable failing gates + 9 `test.todo`) | **Repaired specifications** |
 
-**Ignore Rules & Tracking Assessment:**
-`git check-ignore -v PLAN.md PROGRESS.md SECURITY_PLAN.md SECURITY_PROGRESS.md docs/` confirms:
+**Ignore Rules & Documentation Tracking:**
+Running `git check-ignore -v PLAN.md PROGRESS.md SECURITY_PLAN.md SECURITY_PROGRESS.md docs/` confirms:
 - `PLAN.md` is ignored by `.gitignore:6:PLAN.md`
 - `PROGRESS.md` is ignored by `.gitignore:7:PROGRESS.md`
 - `docs/` is ignored by `.gitignore:4:docs/`
-- `SECURITY_PLAN.md` and `SECURITY_PROGRESS.md` are **not ignored** and are tracked under git.
+- `SECURITY_PLAN.md` and `SECURITY_PROGRESS.md` are **tracked under git** (not ignored).
 
 ---
 
-### 2. Environment & Command Execution Results
+### 2. Dependency Lifecycle Scripts & Bun Trust Policy Audit
 
-The repository commands were executed on the supported development environment (Windows x64):
+A comprehensive audit of dependency lifecycle scripts was conducted across the dependency tree:
 
-| Command | Status | Exact Outcome / Metrics |
-|---|---|---|
-| `bun --version` | Passed | `1.4.2` (exact match with CI pin) |
-| `node --version` | Passed | `v24.9.0` (Electron bundled Node: `24.18.1`) |
-| `bun install --frozen-lockfile` | Passed | 15 packages installed cleanly in `1.62s` (0 script side effects) |
-| `bun run typecheck` | Passed | `tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit` exited `0` |
-| `bun run build` | Passed | `tsc && vite build` built renderer bundle in `140ms` (12 modules transformed) |
-| `bun run test` | Passed | **279 passed**, **14 skipped** (target security gates), **0 failed** across 34 files in `3.31s` |
-| `bun run smoke` | Passed | **7/7 passed**: main/preload JS, renderer bundle, fonts/license, font CDN isolation, unpacked Electron execution, packaged ASAR execution (`3.07 MB`), publishing safety |
-| `bun run benchmark` | Passed | All 5 scenarios benchmarked: Warm Sync `28.61ms`, Full Repair `34.20ms`, Relocation Rename `7.40ms` / Copy `109.12ms`, Log Storm `104.21ms` (`191,920` lines/s), Mod Search `1.59ms` |
-| `bun audit` | Passed | Checked 311 packages; 0 known vulnerabilities found |
-
-**Package Lifecycle Scripts Audit:**
-Inspected `package.json` scripts: no `preinstall`, `install`, `postinstall`, or `prepare` scripts exist. Running `bun install --frozen-lockfile` executes no untrusted code.
-
----
-
-### 3. Finding-by-Finding Reproduction & Characterization (SEC-01 to SEC-12)
-
-All twelve assessment findings were analyzed, characterized, and reproduced against the baseline code:
-
-| Finding ID | Priority | Description | Reproduction Status | Concrete Source Evidence & Root Cause |
-|---|---|---|---|---|
-| **SEC-01** | P0 / High | Credential destination controlled by caller | **Reproduced** | `preload.ts` exposes `auth.verify(portalUrl?)` and `auth.refresh(portalUrl?)`. `main.ts` forwards `portalUrl`. `normalizePortalUrl()` has 3 confirmed bypasses (`localhost.attacker.invalid`, embedded `127.0.0.1` in query, and uppercase `HTTP://`). |
-| **SEC-02** | P0 / High | Privileged IPC & generic OS opening too broad | **Reproduced** | `utils:openPath` calls `shell.openPath(targetPath)` for non-HTTP URLs; mod catalog `sourceUrl` clicks trigger `window.lampas.utils.openPath(mod.sourceUrl)`. All IPC channels except `game:logAck` lack sender validation. `config:set` permits setting `javaPath` and `javaArgs`. |
-| **SEC-03** | P1 / High | Credentials persist as plain JSON | **Reproduced** | `ConfigManager.set()` serializes `token`, `refreshToken`, and `minecraftAccessToken` into `userData/config.json` via plaintext `fs.writeFileSync`. |
-| **SEC-04** | P0 / High | Paths checked inconsistently across reads/writes/deletions | **Reproduced** | `isSafeRelativePath` normalizes `..` while `isPathProtected` does not, allowing `mods/../saves/world.txt` to bypass protection. Windows case variants (`Saves/`) bypass protection. `.lampas/` is not reserved. `sync.ts` obsolete deletion unlinks unvalidated `prevState.files` paths. |
-| **SEC-05** | P1 / Med-High | Recovery journal can authorize unrelated deletions | **Reproduced** | In `GameDirectoryManager.recoverInterruptedMove()`, journal phase `"preparing"` triggers recursive deletion of `journal.staging` with zero validation that `staging` is inside launcher control. |
-| **SEC-06** | P1 / High-Cond | Executable integrity checks fail open | **Reproduced** | `FabricMetaResolver.fetchSidecarChecksum` catches 404s and returns `{}`; `validateFabricRuntimeMetadata` accepts missing checksums. `downloadVerified` without `expectedHash` writes files without hash check. `checkJavaVersion` executes `-version` on local Java before full repair verifies hashes. |
-| **SEC-07** | P1 / High-Cond | Local fallback swallows REVOKED refusals | **Reproduced** | `syncClient()` wraps channel, release, and manifest retrieval in a broad catch; HTTP 410 ("REVOKED") is swallowed and attempts fallback to `manifest/client-manifest.json`. |
-| **SEC-08** | P1 / Medium | Auth lifecycle has races and cancellation gaps | **Reproduced** | Stray callback on loopback listener closes the server and terminates login. Unknown callback paths hang without response. 3-minute timeout is not cleared upon success. Browser renders success page before code exchange. No session epochs on logout. |
-| **SEC-09** | P1 / Medium | Logs retain secrets despite redaction | **Reproduced** | `LauncherLoggerService.sanitize` misses underscore fields (`refresh_token`, `access_token`), URL query codes (`?code=...`), and CLI args (`--accessToken`). `ProcessLogFramer` truncates before sanitizing, leaking split-quote token prefixes. |
-| **SEC-10** | P2 / Med-Priv | Avatars and images disclose identifiers | **Reproduced** | `ui/src/views/auth-view.ts` automatically requests `mc-heads.net/avatar/<identifier>/64` without consent. Mod catalog icons load arbitrary metadata URLs directly in `<img>` tags. |
-| **SEC-11** | P2 / Medium | Ingestion boundaries lack resource budgets | **Reproduced** | `asyncUnzip` in `ensureNatives` expands entire archives into memory with no decompression budget or entry count limit; duplicate native basenames overwrite silently. Provisioning workers use uncoordinated `Promise.all`. |
-| **SEC-12** | P2 / Medium | Release workflow has excessive build permissions | **Reproduced** | `.github/workflows/release-pack.yml` grants global `contents: write` to all jobs including build steps; uses unpinned action tags; lacks pre-release CI validation gates. |
+- **Root `package.json` Audit:**
+  The project root `package.json` contains no lifecycle scripts (`preinstall`, `install`, `postinstall`, `prepare`).
+- **Transitive Dependency Audit:**
+  Dependencies in `node_modules` contain native build/install lifecycle scripts:
+  - `electron-winstaller`: `"install": "node ./script/select-7z-arch.js"`
+  - `esbuild`: `"postinstall": "node install.js"`
+- **Bun Trust Policy & Execution Reality:**
+  Under Node/npm/yarn, these scripts would automatically execute during package installation. However, **Bun enforces a strict default trust policy**: lifecycle scripts for dependencies are blocked unless explicitly allowed in the `trustedDependencies` array in root `package.json`.
+  Executing `bun install --frozen-lockfile --verbose` explicitly confirms:
+  ```text
+  [0.00ms] "electron-winstaller" has an install script, but it was not run because it is not trusted.
+  [0.00ms] "esbuild" has an install script, but it was not run because it is not trusted.
+  ```
+  Because `trustedDependencies` is absent in `package.json`, Bun suppresses all dependency lifecycle scripts.
+  > **Assessment:** The absence of script execution during `bun install` is enforced by Bun's security policy, not because the dependency graph is devoid of install scripts.
 
 ---
 
-### 4. Threat & Data-Flow Inventory
+### 3. Environment & Test Suite Execution Results
 
-#### A. IPC Channels & Sender Policy
+All checks were executed on the supported development host (Windows x64):
 
-All 23 IPC channels exposed across `preload.ts` and registered in `main.ts`:
-
-| IPC Channel | Invocation | Sender Validation | Payload Shape | Main Process Side Effects | Sensitive Output / Response |
-|---|---|---|---|---|---|
-| `auth:login` | `invoke` | **None** | `portalUrl?: string` | Opens system browser to OAuth URL, spins up loopback HTTP listener on ephemeral port, exchanges token, writes plaintext to config | User profile (name, UUID) |
-| `auth:logout` | `invoke` | **None** | None | Clears in-memory and on-disk config credentials | None |
-| `auth:verify` | `invoke` | **None** | `portalUrl?: string` | Sends stored bearer token to caller-specified endpoint | User profile |
-| `auth:refresh` | `invoke` | **None** | `portalUrl?: string` | Sends stored refresh & bearer token to caller-specified endpoint | User profile |
-| `server:getStatus` | `invoke` | **None** | None | Fetches server presence from Portal | Player count, MOTD |
-| `sync:start` | `invoke` | **None** | None | Downloads and modifies game files under `gameDir`, updates `installation.json` | SyncResult |
-| `sync:repair` | `invoke` | **None** | None | Full SHA-256 verification and re-download of corrupted files | SyncResult |
-| `sync:getModCatalog` | `invoke` | **None** | None | Reads mod catalog from Portal or disk | Mod catalog array |
-| `sync:getInstalledRuntime` | `invoke` | **None** | None | Reads `.lampas/release.json` and `.lampas/installation.json` | Runtime info |
-| `mods:browseAndAdd` | `invoke` | **None** | None | Displays native open file dialog, copies selected JARs to `mods/` | Mod list |
-| `mods:addPaths` | `invoke` | **None** | `paths: string[]` | Copies arbitrary file paths to `mods/` | Mod list |
-| `mods:setOfficialEnabled` | `invoke` | **None** | `id: string, enabled: boolean` | Updates `disabledClientMods` in config | Updated mod list |
-| `mods:setCustomEnabled` | `invoke` | **None** | `filename: string, enabled: boolean` | Renames `.jar` to `.jar.disabled` | Updated mod list |
-| `mods:removeCustom` | `invoke` | **None** | `filename: string` | Deletes file from `mods/` directory | Updated mod list |
-| `game:launch` | `invoke` | **None** | `user, releaseOverride?` | Spawns Java process with command-line arguments including session tokens | Boolean |
-| `game:kill` | `invoke` | **None** | None | Sends SIGKILL / taskkill to running Minecraft child process | None |
-| `game:isRunning` | `invoke` | **None** | None | Probes internal process state | Boolean |
-| `gameDir:getStatus` | `invoke` | **None** | None | Inspects filesystem existence and `.lampas` metadata | Directory status |
-| `gameDir:browse` | `invoke` | **None** | `defaultPath?: string` | Shows native folder selection dialog | Chosen file paths |
-| `gameDir:validate` | `invoke` | **None** | `targetPath, currentPath?` | Checks path syntax, drive roots, and directory writability | Validation result |
-| `gameDir:configure` | `invoke` | **None** | `targetPath: string` | Creates target directory and sets `gameDir` in config | Settings DTO |
-| `gameDir:move` | `invoke` | **None** | `targetPath: string` | Moves or copies entire game directory; creates/cleans journals | Move result |
-| `config:get` | `invoke` | **None** | None | Reads `ConfigManager.get()`, filters out tokens | Settings DTO |
-| `config:set` | `invoke` | **None** | `newConfig: Partial<SettingsDto>` | Updates configuration; filters 5 keys but accepts `javaPath`, `javaArgs` | Settings DTO |
-| `window:*` | `invoke` | **None** | None | Minimizes, maximizes, or closes mainWindow | Window state |
-| `utils:getAppVersion` | `invoke` | **None** | None | Reads `app.getVersion()` | Version string |
-| `utils:openPath` | `invoke` | **None** | `targetPath: string` | If HTTP: `shell.openExternal`; **Else: `shell.openPath`** | None |
-| `utils:getLogPath` | `invoke` | **None** | None | Resolves current log file path | Log file path |
-| `utils:openLogsDir` | `invoke` | **None** | None | Opens log directory via `shell.openPath` | Logs directory |
-| `utils:openLogFile` | `invoke` | **None** | None | Opens log file via `shell.openPath` | Log file path |
-| `utils:getMinecraftLogPath` | `invoke` | **None** | None | Resolves `logs/latest.log` | Log file path |
-| `utils:openMinecraftLog` | `invoke` | **None** | None | Opens `logs/latest.log` via `shell.openPath` | Log file path |
-| `game:logAck` | `send` | **Validated** | `{ batchId: number }` | Checks `event.sender.id === targetId`; advances batch transport queue | None |
-
-#### B. Sinks & Trust Boundaries
-
-- **`fetch()` Sinks:**
-  - `src/auth.ts`: Exchanges PKCE code (`POST ${portalUrl}/api/v1/auth/exchange`); verifies session (`POST ${portalUrl}/api/v1/auth/verify`); refreshes session (`POST ${portalUrl}/api/v1/auth/refresh`).
-  - `src/sync.ts`: Fetches channel pointers, releases, client manifests, and blob downloads (`/api/v1/blobs/<sha256>`).
-  - `src/fabric-meta.ts`: Fetches loader metadata (`meta.fabricmc.net`) and Maven sidecar checksums (`maven.fabricmc.net`).
-  - `src/java-runtime.ts`: Fetches Mojang runtime manifests (`piston-meta.mojang.com`) and individual runtime files.
-- **`shell` Opener Sinks:**
-  - `src/main.ts` (`utils:openPath`): Generic sink calling `shell.openPath` for any non-HTTP string.
-  - `src/auth.ts`: Opens default system browser for OAuth PKCE login.
-- **Process Spawning Sinks:**
-  - `src/game-runner.ts`: Spawns Java process via `child_process.spawn` with argument array.
-  - `src/java-runtime.ts`: Probes Java version via `child_process.execFile(path, ["-version"])`.
-- **Filesystem Writes & Deletions:**
-  - `src/config.ts`: Serializes `config.json` via `writeAtomicFileSync`.
-  - `src/sync.ts`: Writes blobs to cache, copies to destination, unlinks obsolete files in `prevState.files`.
-  - `src/game-directory.ts`: Reads/writes `directory-move.json`, performs staged copy, recursively deletes staging on recovery.
-  - `src/logger.ts`: Appends log entries to `launcher.log`.
-- **Credential Storage:**
-  - Plaintext persistence in `userData/config.json`.
-- **Cosmetic Disclosures:**
-  - `ui/src/views/auth-view.ts`: Automatic avatar fetch from `https://mc-heads.net/avatar/<uuid>/64`.
-  - `ui/src/views/mods-view.ts`: Mod icons rendered directly from catalogue metadata.
-
----
-
-### 5. Test Files Added & Planned Test Locations
-
-#### A. Added in Phase 0
-
-1. [`test/security-characterization.test.ts`](file:///C:/Users/markj/source/repos/lampas-launcher/test/security-characterization.test.ts):
-   - 17 executable characterization tests reproducing SEC-01 through SEC-09 baseline behaviors.
-   - All 17 tests pass against the baseline code.
-2. [`test/security-regression-gates.test.ts`](file:///C:/Users/markj/source/repos/lampas-launcher/test/security-regression-gates.test.ts):
-   - 14 regression gate specifications for Phases 1 through 6.
-   - Marked `test.skip` during Phase 0 to keep the baseline test suite green.
-3. [`SECURITY_PLAN.md`](file:///C:/Users/markj/source/repos/lampas-launcher/SECURITY_PLAN.md):
-   - Tracked security hardening plan and assessment documentation.
-4. [`SECURITY_PROGRESS.md`](file:///C:/Users/markj/source/repos/lampas-launcher/SECURITY_PROGRESS.md):
-   - Tracked Phase 0 review gate and threat inventory artifact.
-
-#### B. Planned Future Phase Test Locations
-
-| Phase | Target Module | Planned Test File | Target Invariants |
+| Command / Suite | Status | Execution Count & Outcome | Notes |
 |---|---|---|---|
-| **Phase 1** | `src/config.ts`, `src/auth.ts`, `src/main.ts` | `test/url-policy.test.ts`, `test/web-sink.test.ts` | Parser-driven HTTPS enforcement, lookalike rejection, removal of renderer destination overrides, web sink path rejection. |
-| **Phase 2** | `src/main.ts`, `src/preload.ts`, `ui/` | `test/ipc-isolation.test.ts`, `test/csp-navigation.test.ts` | Sender frame/document validation, schema allowlisting on `config:set`, native user approval for JVM arguments. |
-| **Phase 3** | `src/auth.ts`, `src/config.ts`, credential store | `test/credential-store.test.ts`, `test/auth-lifecycle.test.ts` | OS-backed safeStorage, session-only memory fallback, session epochs, race-safe callback server. |
-| **Phase 4** | `src/sync.ts`, `src/game-directory.ts` | `test/path-containment.test.ts`, `test/recovery-safety.test.ts` | Canonical dot-alias normalization, Windows case insensitivity, `.lampas` reservation, validated recovery staging. |
-| **Phase 5** | `src/fabric-meta.ts`, `src/file-transfer.ts` | `test/integrity-fail-closed.test.ts`, `test/resource-limits.test.ts` | Sidecar 404 fail-closed, required expected hashes for executables, rejection of 410 REVOKED local fallback, unzip budgets. |
-| **Phase 6** | `src/logger.ts`, `src/game-log-stream.ts`, `ui/` | `test/log-redaction.test.ts`, `test/privacy-avatar.test.ts` | Redaction of underscore tokens/URL queries/CLI flags, redact-before-truncate in framer, local initials avatar default. |
-| **Phase 7** | `.github/workflows/` | CI workflow audit | Least-privilege workflow permissions, pinned action SHAs, exact-tag release gates. |
+| `bun --version` | Passed | `1.4.2` | Matches CI environment pin |
+| `node --version` | Passed | `v24.9.0` | Electron runtime bundled: `24.18.1` |
+| `bun install --frozen-lockfile` | Passed | 15 packages in `1.62s` | Zero script side-effects (Bun trust policy) |
+| `bun run typecheck` | Passed | 0 errors | TypeScript strict check on main & renderer |
+| `bun run build` | Passed | 12 modules transformed in `252ms` | Clean Vite production build |
+| `bun run smoke` | Passed | **7/7 checks passed** | Real unpacked Electron + packaged ASAR validated |
+| `bun run benchmark` | Passed | 5/5 scenarios passed | Warm Sync `28.6ms`, Log Storm `104.2ms` (191k lines/s) |
+| **Pre-Existing Test Suite** | Passed | **261 passed, 0 failed** across 32 files | Completely preserved; zero regression |
+| **Characterization Suite (`security-characterization.test.ts`)** | Passed | **23 passed, 0 failed, 60 expect() calls** | Isolated & full-suite safe; real IPC harness |
+| **Regression Gates (`security-regression-gates.test.ts`)** | Passed | **0 pass, 6 skipped, 9 todo, 0 failed** | Runnable failing gates if unskipped against baseline |
+| **Full Combined Suite (`bun test`)** | Passed | **284 passed, 6 skipped, 9 todo, 0 failed** (34 files, `3.43s`) | 1036 total assertions; 0 failures |
 
 ---
 
-### 6. Documented Unsupported / Pending Checks
+### 4. Granular Finding Reproduction & Evidence Classification (SEC-01 to SEC-12)
 
-The following checks could not be completed on the current environment and remain documented as pending or unverified:
+Every finding and architectural subclaim is classified under four strict categories:
+- **Implementation-Executed:** Dynamically asserted against live production classes, methods, or IPC handlers in test executions.
+- **Component / Partial Reproduction:** Exercised at component level (e.g. mock HTTP transport sink or synthetic sentinel traversal) without full GUI/end-to-end integration.
+- **Source-Inspected:** Verified through static source code analysis, AST parsing, or workflow file inspection.
+- **Pending:** Deferred to subsequent hardening phases (e.g. cross-platform Linux Secret Service validation).
 
-1. **Linux Keyring / Secret Service Acceptance:** Currently executing on a Windows x64 host. Verification of Linux `safeStorage` behavior (`basic_text` vs `libsecret`) is pending native Linux test execution.
-2. **Packaged Distribution Installers (`package:win` NSIS / `package:linux` AppImage):** Running full NSIS compressor packages was omitted during Phase 0 baseline to prevent multi-minute builds; `package:dir` verified the complete application bundle, ASAR archive, and binary smoke test.
-3. **Cross-Device EXDEV on Physical Partitions:** Executing on a single-volume local system. EXDEV cross-volume copy-and-verify fallback was verified via simulated EXDEV injection in benchmark and characterization tests.
-4. **Binary Code Signing & Provenance Attestation:** No external Windows Authenticode certificate is provisioned in the local environment; unsigned binary status is documented.
-5. **Dynamic Proxy Network Capture:** Dynamic proxy telemetry audit recorded as pending Phase 6 network verification.
+| Finding ID | Priority | Classification | Characterization & Reproduction Evidence |
+|---|---|---|---|
+| **SEC-01** | P0 / High | **Implementation-Executed** (URL bypasses & service/IPC credential routing) / **Source-Inspected** (GUI OAuth dance) | • `normalizePortalUrl` allows HTTP bypass when `localhost` is a subdomain (`http://localhost.attacker.invalid`), when `127.0.0.1` is in query/path, and on uppercase `HTTP://` (*Implementation-Executed*).<br>• `LauncherAuth.verifySession` routes bearer token to caller-supplied `portalUrl` override at transport sink (*Implementation-Executed*).<br>• `LauncherAuth.refreshSession` routes refresh token & bearer credentials to caller-supplied `portalUrl` override at transport sink (*Implementation-Executed*).<br>• Production `auth:verify` and `auth:refresh` IPC handlers forward caller-supplied overrides to transport sink (*Implementation-Executed*).<br>• Renderer GUI PKCE initiation exposing `portalUrl` to arbitrary remote browser navigations (*Source-Inspected* in `src/main.ts` & `src/auth.ts`). |
+| **SEC-02** | P0 / High | **Implementation-Executed** (Production `utils:openPath` & `config:set` handlers) / **Source-Inspected** (Renderer mod catalog sink) | • Production `utils:openPath` handler passes non-HTTP paths to `shell.openPath` via registration harness (*Implementation-Executed*).<br>• Production `utils:openPath` handler passes HTTP(S) paths to `shell.openExternal` via registration harness (*Implementation-Executed*).<br>• Production `config:set` handler permits unvalidated arbitrary fields (`javaPath`, `javaArgs`) into configuration (*Implementation-Executed*).<br>• Complete registration harness confirms exactly 35 `ipcMain.handle` and 1 `ipcMain.on` channels (*Implementation-Executed*).<br>• Renderer mod catalog `sourceUrl` clicks invoking `utils.openPath` without scheme check (*Source-Inspected* in `ui/src/views/mods-view.ts:144`). |
+| **SEC-03** | P1 / High | **Implementation-Executed** (Plaintext disk persistence) / **Source-Inspected** (Keyring absence) | • `ConfigManager.set` / `ConfigManager.save` writes `token`, `refreshToken`, and `minecraftAccessToken` in unencrypted cleartext JSON to `userData/config.json` (*Implementation-Executed*).<br>• Absence of Electron `safeStorage` or OS keyring integration (*Source-Inspected* in `src/config.ts`). |
+| **SEC-04** | P0 / High | **Implementation-Executed** (Dot-alias, Windows casing, `.lampas` reservation) / **Component Reproduction** (Obsolete deletion traversal) | • `isSafeRelativePath` normalizes `..` while `isPathProtected` does not, allowing `mods/../saves/world-data.txt` to pass containment but evade protection (*Implementation-Executed*).<br>• `isPathProtected` fails on Windows case variants `Saves/level.dat`, `SAVES/level.dat`, `Screenshots/1.png` (*Implementation-Executed*).<br>• Internal state directory `.lampas/` is unreserved and unprotected from pack manifests (*Implementation-Executed*).<br>• `sync.ts` obsolete deletion loop unlinks unvalidated relative keys in `prevState.files` that resolve outside `gameDir` (*Component Reproduction* via sentinel file traversal). |
+| **SEC-05** | P1 / Med-High | **Implementation-Executed** | • `GameDirectoryManager.recoverInterruptedMove()` recursively deletes arbitrary unvalidated filesystem paths specified in `journal.staging` during the `"preparing"` phase (*Implementation-Executed* against outside victim directory). |
+| **SEC-06** | P1 / High-Cond | **Implementation-Executed** (Sidecar 404 & missing hash) / **Source-Inspected** (Java version probe) | • `FabricMetaResolver` omits checksums when Maven `.sha256` / `.sha1` sidecars return 404 (*Implementation-Executed* via mock fetch).<br>• `downloadVerified` downloads and writes unverified payloads when `expectedHash` is undefined (*Implementation-Executed* via loopback HTTP server).<br>• `checkJavaVersion` runs `child_process.execFile` (`-version`) on local Java executables before full repair verifies checksums (*Source-Inspected* in `src/java-runtime.ts:86-98`). |
+| **SEC-07** | P1 / High-Cond | **Source-Inspected** | • `syncClient` wraps channel, release, and client manifest retrieval in broad `try/catch` blocks that catch HTTP 410 ("REVOKED") and fall back to local disk manifests without status code discrimination (*Source-Inspected* in `src/sync.ts:270-305`). |
+| **SEC-08** | P1 / Medium | **Source-Inspected** | • In `src/auth.ts`, any unauthenticated stray HTTP request to the loopback callback server terminates the server and fails the login.<br>• Unrecognized callback paths leave the browser connection hanging.<br>• 3-minute safety timeout is not cancelled on successful OAuth exchange.<br>• Browser displays success HTML before token exchange completes.<br>• Logout does not increment session epoch or cancel pending auth requests (*Source-Inspected* in `src/auth.ts:32-154`). |
+| **SEC-09** | P1 / Medium | **Implementation-Executed** | • `LauncherLoggerService.sanitize` redacts camelCase tokens but leaves underscore fields (`refresh_token`, `access_token`) intact (*Implementation-Executed*).<br>• `LauncherLoggerService.sanitize` does not redact OAuth authorization codes in URL query strings (*Implementation-Executed*).<br>• `LauncherLoggerService.sanitize` does not redact CLI command arguments like `--accessToken` (*Implementation-Executed*).<br>• `ProcessLogFramer` truncates lines before sanitization, breaking JSON quoting and leaking split token secrets (*Implementation-Executed*). |
+| **SEC-10** | P2 / Med-Priv | **Source-Inspected** | • `ui/src/views/auth-view.ts` automatically contacts third-party `mc-heads.net` with player UUID without user consent (*Source-Inspected* in `ui/src/views/auth-view.ts:124`).<br>• Mod catalog icons render unvalidated third-party image URLs directly (*Source-Inspected* in `ui/src/views/mods-view.ts`). |
+| **SEC-11** | P2 / Medium | **Source-Inspected** | • `asyncUnzip` in `ensureNatives` expands entire zip archives into memory buffers without decompression size budgets or entry count limits (*Source-Inspected* in `src/minecraft-bootstrap.ts:145-165`).<br>• Provisioning uses uncoordinated `Promise.all` without concurrency throttling (*Source-Inspected* in `src/minecraft-bootstrap.ts` & `src/sync.ts`). |
+| **SEC-12** | P2 / Medium | **Source-Inspected** | • `.github/workflows/release-pack.yml` assigns global `contents: write` permissions across all jobs.<br>• External actions (`actions/checkout@v4`, `softprops/action-gh-release@v2`) are pinned to mutable tags rather than immutable commit SHAs.<br>• CI workflow lacks pre-release gate validation (*Source-Inspected* in `.github/workflows/release-pack.yml`). |
 
 ---
 
-### 7. Review Gate 0 Decision & Conclusion
+### 5. Comprehensive Inbound IPC Channel Inventory
 
-- **Baseline Established:** Yes. The repository builds cleanly, all 279 baseline tests pass, smoke tests pass, and performance benchmarks are recorded.
-- **Drift from Baseline Commit:** Zero. HEAD matches `3950e155a25c9effc004e2355dffa1722e46a6cc` exactly.
-- **Finding Reproductions:** All 12 findings characterized and confirmed with source references; 17 executable reproduction tests added.
-- **Invariants Preserved:** Architecture, lockfile, existing optimization work, and supported platforms intact.
+Every IPC channel registered in `src/main.ts` was audited directly from source code and verified through the Electron registration harness:
+- **Total Registered Channels:** **36** (35 `ipcMain.handle` + 1 `ipcMain.on`)
+- **Sender ID Validation:** Only **1 channel** (`game:logAck`) checks sender process ID (`event.sender.id !== targetId`).
+- **Frame / Document Validation:** **Zero channels (0/36)** validate the top-level frame origin, `frame.url`, webContents loading state, or document navigation.
+
+| # | IPC Channel | Registration Type | Line | Sender ID Check | Frame / Doc Validation | Expected Payload | Side Effects in Main Process | Returned DTO |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `auth:login` | `handle` | 88 | None | None | `portalUrl?: string` | Launches OS browser to OAuth URL; binds loopback HTTP server; exchanges PKCE code; persists plaintext tokens to `config.json` | `UserProfile` |
+| 2 | `auth:logout` | `handle` | 96 | None | None | None | Clears in-memory auth state; removes tokens from `config.json` | `void` |
+| 3 | `auth:verify` | `handle` | 101 | None | None | `portalUrl?: string` | Issues POST with stored bearer token to caller-specified endpoint | `UserProfile \| null` |
+| 4 | `auth:refresh` | `handle` | 106 | None | None | `portalUrl?: string` | Issues POST with refresh token & bearer header to caller-specified endpoint; persists new tokens | `UserProfile \| null` |
+| 5 | `server:getStatus` | `handle` | 111 | None | None | None | Issues HTTP query to Portal server status endpoint via `ServerStatusClient` | `ServerStatus` |
+| 6 | `sync:start` | `handle` | 116 | None | None | None | Executes standard sync pipeline via `OperationCoordinator`; downloads blobs; updates `installation.json` | `SyncResult` |
+| 7 | `sync:repair` | `handle` | 125 | None | None | None | Executes full hash audit and redownload via `OperationCoordinator` | `SyncResult` |
+| 8 | `sync:getModCatalog` | `handle` | 134 | None | None | None | Reads mod catalog from Portal endpoint or cached release | `ModCatalogItem[]` |
+| 9 | `sync:getInstalledRuntime` | `handle` | 139 | None | None | None | Reads local `.lampas/release.json` and `.lampas/installation.json` | `InstalledRuntimeDto \| null` |
+| 10 | `mods:browseAndAdd` | `handle` | 144 | None | None | None | Opens native open-file dialog; copies selected `.jar` files into `gameDir/mods/` | `ClientModState[]` |
+| 11 | `mods:addPaths` | `handle` | 155 | None | None | `filePaths: string[]` | Copies arbitrary filesystem paths into `gameDir/mods/` | `ClientModState[]` |
+| 12 | `mods:setOfficialEnabled` | `handle` | 160 | None | None | `modId: string, enabled: boolean` | Updates `disabledClientMods` array in `config.json` | `ClientModState[]` |
+| 13 | `mods:setCustomEnabled` | `handle` | 165 | None | None | `filename: string, enabled: boolean` | Renames file between `.jar` and `.jar.disabled` on disk | `ClientModState[]` |
+| 14 | `mods:removeCustom` | `handle` | 170 | None | None | `filename: string` | Deletes file from `gameDir/mods/` | `ClientModState[]` |
+| 15 | `game:launch` | `handle` | 175 | None | None | `user: UserProfile, releaseOverride?: PackRelease` | Spawns Minecraft Java child process with JVM args (including tokens) via `OperationCoordinator`; attaches log stream | `boolean` |
+| 16 | `game:kill` | `handle` | 185 | None | None | None | Sends termination signal / taskkill to running Minecraft child process | `void` |
+| 17 | `game:isRunning` | `handle` | 190 | None | None | None | Queries internal running process reference | `boolean` |
+| 18 | `gameDir:getStatus` | `handle` | 195 | None | None | None | Queries filesystem existence and checks `.lampas` metadata | `GameDirStatusDto` |
+| 19 | `gameDir:browse` | `handle` | 200 | None | None | `defaultPath?: string` | Displays native folder picker dialog | `string \| null` |
+| 20 | `gameDir:validate` | `handle` | 209 | None | None | `targetPath: string, currentPath?: string` | Checks directory syntax, drive roots, existence, and filesystem writability | `GameDirValidationResult` |
+| 21 | `gameDir:configure` | `handle` | 214 | None | None | `targetPath: string` | Creates target directory; updates `gameDir` and `gameDirConfigured` in `config.json` | `RendererSettingsDto` |
+| 22 | `gameDir:move` | `handle` | 231 | None | None | `targetPath: string` | Moves or copies game files; manages migration journals | `DirectoryMoveResult` |
+| 23 | `config:get` | `handle` | 249 | None | None | None | Reads configuration from disk/cache; strips authentication tokens | `RendererSettingsDto` |
+| 24 | `config:set` | `handle` | 254 | None | None | `newConfig: Partial<SettingsDto>` | Filters out tokens, but permits arbitrary runtime settings (`javaPath`, `javaArgs`) to be written to `config.json` | `RendererSettingsDto` |
+| 25 | `window:minimize` | `handle` | 269 | None | None | None | Invokes `mainWindow.minimize()` | `void` |
+| 26 | `window:maximize` | `handle` | 273 | None | None | None | Toggles `mainWindow.maximize()` or `unmaximize()` | `void` |
+| 27 | `window:close` | `handle` | 281 | None | None | None | Destroys window and terminates application via `app.quit()` | `void` |
+| 28 | `window:isMaximized` | `handle` | 288 | None | None | None | Queries `mainWindow.isMaximized()` | `boolean` |
+| 29 | `utils:getAppVersion` | `handle` | 292 | None | None | None | Reads `app.getVersion()` | `string` |
+| 30 | `utils:openPath` | `handle` | 296 | None | None | `targetPath: string` | If HTTP/HTTPS: calls `shell.openExternal`; Otherwise: calls `shell.openPath` on arbitrary local path | `string` |
+| 31 | `utils:getLogPath` | `handle` | 304 | None | None | None | Resolves active `launcher.log` path | `string` |
+| 32 | `utils:openLogsDir` | `handle` | 308 | None | None | None | Invokes `shell.openPath` on log directory | `string` |
+| 33 | `utils:openLogFile` | `handle` | 312 | None | None | None | Invokes `shell.openPath` on `launcher.log` file | `string` |
+| 34 | `utils:getMinecraftLogPath` | `handle` | 316 | None | None | None | Resolves `gameDir/logs/latest.log` path | `string` |
+| 35 | `utils:openMinecraftLog` | `handle` | 321 | None | None | None | Invokes `shell.openPath` on `logs/latest.log` | `string` |
+| 36 | `game:logAck` | `on` | 386 | **Sender ID Checked** | None | `{ batchId: number }` | Validates `event.sender.id === targetId`; advances batch transport; emits next log batch | None (listener) |
+
+---
+
+### 6. Test Suite Architecture & Hardened Isolation
+
+To resolve Bun process-wide module-mock caching and prevent cross-suite contamination, the test harnesses were hardened:
+
+1. **Bun Module-Mock Caching Protection:**
+   - Pre-existing suites (`test/bootstrap.test.ts`, `test/game-runner.test.ts`) install persistent `mock.module` entries for `"electron"` and `"../src/auth"`.
+   - In Bun, once a module is mocked in a process, subsequent `mock.module` calls cannot add new named exports.
+   - `test/security-characterization.test.ts` loads `src/main.ts` and `src/auth.ts` via dedicated isolated runner files in disposable temporary directories with mapped mock harness bindings (`mock-electron-sec-harness`). This preserves genuine production execution while preventing static import failures (`BrowserWindow`, `dialog`, etc.) when running in a single process alongside the full test suite.
+2. **Mock Cleanup in Regression Gates:**
+   - Unnecessary mocks (`shell`, `dialog`) were excised from `test/security-regression-gates.test.ts`.
+   - Empty comment-only test callbacks were converted to explicit `test.todo(...)` specifications.
+   - Runnable gates (`test.skip`) make meaningful failing assertions if unskipped against baseline (e.g. establishing synthetic session and asserting absence of plaintext tokens, or testing dot-alias traversal authorization).
+3. **Transport Sink & Fixture Isolation:**
+   - All network test fixtures bind strictly to loopback (`127.0.0.1`) on ephemeral ports.
+   - HTTP servers are actively tracked and forcibly closed in `afterEach` and `afterAll`.
+   - `LauncherLogger` file streams and mock windows are safely closed before deleting temporary test directories, preventing Windows file-lock errors (`EBUSY` / `EPERM`).
+
+---
+
+### 7. Review Gate 0.1 Decision & Confirmation
+
+- **Evidence Base Corrected:** Yes. All metrics, tables, test counts, and finding classifications reflect genuine dynamic and source-audited reality.
+- **Production Code Drift:** **Zero lines (0 diff)** against baseline commit `3950e155a25c9effc004e2355dffa1722e46a6cc`.
+- **Pre-Existing Invariants:** All 261 pre-existing tests pass with zero regressions; full suite passes with 284 passed, 6 skipped, 9 todo, 0 failed.
+- **Packaging & Smoke Verification:** Clean build, typecheck, and binary smoke tests confirmed on Windows x64.
 - **Next Phase:** Phase 1 (Constrain credential destinations and web-link opening).
 
-**STOPPING AT REVIEW GATE 0.** No Phase 1 production changes have been applied. Awaiting human review before proceeding.
+**STOPPING AT REVIEW GATE 0.1.** No Phase 1 security fixes have been implemented. Ready for commit and push for review.

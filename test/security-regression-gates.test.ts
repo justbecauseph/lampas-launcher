@@ -7,8 +7,9 @@ import * as path from "node:path";
  * SECURITY REGRESSION GATES (Phases 1-7)
  *
  * These tests define the TARGET security invariants required by PLAN.md.
- * In Phase 0 (Baseline), these tests are marked `test.skip` so the baseline
- * test suite remains green while establishing exact specifications for future phases.
+ * In Phase 0 (Baseline), these tests are either marked `test.skip` (with runnable,
+ * failing assertions against baseline) or `test.todo` (for future implementation specifications),
+ * ensuring the baseline test suite remains green while establishing exact specifications.
  *
  * As each hardening phase is implemented, its corresponding gate tests will be
  * unskipped and become required passing criteria.
@@ -20,27 +21,29 @@ const gameDir = path.join(testRoot, "game");
 
 mock.module("electron", () => ({
   app: {
-    getPath: () => userDataDir,
+    getPath: (name: string) => (name === "userData" ? userDataDir : testRoot),
     getName: () => "Lampas Launcher",
     getVersion: () => "1.3.0",
   },
-  shell: {
-    openPath: async () => "",
-    openExternal: async () => undefined,
-  },
-  dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
 const { ConfigManager, normalizePortalUrl } = await import("../src/config");
-const { isPathProtected, isSafeRelativePath } = await import("../src/sync");
-const { LauncherLoggerService } = await import("../src/logger");
+const { isPathProtected } = await import("../src/sync");
+const { LauncherLogger, LauncherLoggerService } = await import("../src/logger");
 
 beforeAll(() => {
   fs.mkdirSync(userDataDir, { recursive: true });
   fs.mkdirSync(gameDir, { recursive: true });
 });
 
-afterAll(() => {
+beforeEach(() => {
+  ConfigManager.resetForTesting();
+});
+
+afterAll(async () => {
+  try {
+    await LauncherLogger.close();
+  } catch {}
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
@@ -56,82 +59,64 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
     expect(normalizePortalUrl("HTTP://portal.lampas.town")).toBe("https://portal.lampas.town");
   });
 
-  test.skip("[Phase 1 Gate] Web link sink rejects non-HTTP protocols and never passes them to shell.openPath", async () => {
-    // Target invariant:
-    // Opening web/source links must validate scheme and reject file://, UNC, or executable paths.
-    // Under no circumstances should an invalid web URL fall back to opening a local file or process.
-  });
+  test.todo("[Phase 1 Gate] Web link sink rejects non-HTTP protocols and never passes them to shell.openPath");
 });
 
 describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)", () => {
-  test.skip("[Phase 2 Gate] IPC handlers validate top-level sender frame and reject unauthorized callers", () => {
-    // Target invariant:
-    // Main process IPC handlers must verify sender webContents, top-level frame, and approved document URL.
-  });
-
-  test.skip("[Phase 2 Gate] config:set enforces strict allowlist schema rejecting unapproved runtime fields", () => {
-    // Target invariant:
-    // Generic config updates must validate keys against a strict schema.
-    // High-risk executable/argument paths cannot be set via renderer config:set without native user approval.
-  });
+  test.todo("[Phase 2 Gate] IPC handlers validate top-level sender frame and reject unauthorized callers");
+  test.todo("[Phase 2 Gate] config:set enforces strict allowlist schema rejecting unapproved runtime fields");
 });
 
 describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (SEC-03, SEC-08)", () => {
   test.skip("[Phase 3 Gate] config.json on disk contains no plaintext tokens or credentials", () => {
+    // Establish a synthetic session with sensitive tokens
+    ConfigManager.save({
+      token: "syn-test-bearer-token-12345",
+      refreshToken: "syn-test-refresh-token-67890",
+      minecraftAccessToken: "syn-test-mc-token-abcdef",
+    });
+
     // Target invariant:
     // Stored credentials must be encrypted via OS-backed storage (DPAPI on Windows / libsecret on Linux)
-    // or kept purely in-memory if a secure backend is unavailable.
+    // or kept purely in-memory if a secure backend is unavailable, never persisted as plaintext JSON.
     const configPath = path.join(userDataDir, "config.json");
-    if (fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, "utf-8");
-      expect(raw).not.toContain("syn-test-bearer-token");
-      expect(raw).not.toContain("syn-test-refresh-token");
-      expect(raw).not.toContain("syn-test-mc-token");
-    }
+    expect(fs.existsSync(configPath)).toBe(true);
+    const raw = fs.readFileSync(configPath, "utf-8");
+    expect(raw).not.toContain("syn-test-bearer-token-12345");
+    expect(raw).not.toContain("syn-test-refresh-token-67890");
+    expect(raw).not.toContain("syn-test-mc-token-abcdef");
   });
 
-  test.skip("[Phase 3 Gate] Authentication lifecycle uses session epochs and ignores late arrivals after logout", () => {
-    // Target invariant:
-    // Logout increments session epoch, clearing credentials and preventing in-flight auth responses from restoring session.
-  });
+  test.todo("[Phase 3 Gate] Authentication lifecycle uses session epochs and ignores late arrivals after logout");
 });
 
 describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recovery (SEC-04, SEC-05)", () => {
-  test.skip("[Phase 4 Gate] isPathProtected normalizes dot-aliases before checking protected namespaces", () => {
-    // Target invariant:
-    // 'mods/../saves/world.txt' must be canonicalized and identified as protected.
+  test.skip("[Phase 4 Gate] isPathProtected normalizes dot-aliases before checking protected namespaces to deny pack mutation", () => {
+    // Target invariant: Pack manifest operations must not be authorized to overwrite or delete
+    // user data via traversal aliases. 'mods/../saves/world.txt' must resolve into protected
+    // 'saves/' namespace and return true (protected / unauthorized for pack mutation).
     expect(isPathProtected("mods/../saves/world.txt")).toBe(true);
   });
 
-  test.skip("[Phase 4 Gate] isPathProtected is case-insensitive on Windows", () => {
-    // Target invariant:
-    // Windows path comparisons must be case-insensitive.
+  test.skip("[Phase 4 Gate] isPathProtected performs case-insensitive comparison on Windows to deny pack mutation", () => {
+    // Target invariant: On Windows, case variations of protected namespaces ('Saves/', 'SAVES/')
+    // must be recognized as protected to prevent pack-driven overwrite or deletion of user data.
     expect(isPathProtected("SAVES/world.txt")).toBe(true);
     expect(isPathProtected("Saves/world.txt")).toBe(true);
   });
 
-  test.skip("[Phase 4 Gate] Internal launcher namespaces (.lampas) are reserved from pack file mutations", () => {
-    // Target invariant:
-    // Pack manifests cannot claim paths in .lampas/ or other launcher-internal directories.
+  test.skip("[Phase 4 Gate] Internal launcher namespaces (.lampas) are reserved to deny pack file mutations", () => {
+    // Target invariant: The launcher internal state directory (.lampas/) must be protected from
+    // manifest-driven deletion or overwriting by remote pack files.
     expect(isPathProtected(".lampas/installation.json")).toBe(true);
   });
 
-  test.skip("[Phase 4 Gate] Move recovery rejects unverified staging paths outside approved launcher staging", async () => {
-    // Target invariant:
-    // Staging directories in move journals must be verified as launcher-owned before any deletion.
-  });
+  test.todo("[Phase 4 Gate] Move recovery rejects unverified staging paths outside approved launcher staging");
 });
 
 describe("Phase 5 Regression Gate — Integrity Checks Fail Closed & Fallback Policy (SEC-06, SEC-07, SEC-11)", () => {
-  test.skip("[Phase 5 Gate] FabricMetaResolver fails closed when sidecar checksum resolution fails", async () => {
-    // Target invariant:
-    // If sidecar checksums are missing or fail to download, library verification must fail closed.
-  });
-
-  test.skip("[Phase 5 Gate] syncClient does not swallow 410 REVOKED releases into local pipeline fallback", async () => {
-    // Target invariant:
-    // Definitive server refusals (410, 401, 403) must never fall back to local offline manifests.
-  });
+  test.todo("[Phase 5 Gate] FabricMetaResolver fails closed when sidecar checksum resolution fails");
+  test.todo("[Phase 5 Gate] syncClient does not swallow 410 REVOKED releases into local pipeline fallback");
 });
 
 describe("Phase 6 Regression Gate — Log Minimization & Redaction (SEC-09, SEC-10)", () => {
@@ -143,8 +128,9 @@ describe("Phase 6 Regression Gate — Log Minimization & Redaction (SEC-09, SEC-
     expect(LauncherLoggerService.sanitize('--accessToken secret123')).toContain("[REDACTED]");
   });
 
-  test.skip("[Phase 6 Gate] ProcessLogFramer sanitizes bounded records before truncation", () => {
-    // Target invariant:
-    // Log records must be assembled and redacted BEFORE truncation, preventing split-quote secret leakage.
-  });
+  test.todo("[Phase 6 Gate] ProcessLogFramer sanitizes bounded records before truncation");
+});
+
+describe("Phase 7 Regression Gate — Release Pipeline, Artifact Signing & CI Controls (SEC-12)", () => {
+  test.todo("[Phase 7 Gate] Production release workflow enforces signed checksum manifests and build provenance");
 });
