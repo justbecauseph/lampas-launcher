@@ -12,6 +12,7 @@ export interface PlayViewOptions {
   appendLog: (level: "INFO" | "WARN" | "ERROR", message: string) => void;
   switchToTab: (tabId: string) => void;
   isNoSync?: () => boolean;
+  onStatusChange?: (state: "idle" | "syncing" | "launching" | "running") => void;
 }
 
 export function initPlayView(options: PlayViewOptions): {
@@ -20,7 +21,7 @@ export function initPlayView(options: PlayViewOptions): {
   setGameStatus: (state: "idle" | "syncing" | "launching" | "running") => void;
   dispose: () => void;
 } {
-  const { showToast, getUser, clearConsole, appendLog, switchToTab, isNoSync } = options;
+  const { showToast, getUser, clearConsole, appendLog, switchToTab, isNoSync, onStatusChange } = options;
 
   const btnPlay = document.getElementById("btn-play") as HTMLButtonElement | null;
   const btnPlayText = document.getElementById("btn-play-text") as HTMLElement | null;
@@ -48,6 +49,9 @@ export function initPlayView(options: PlayViewOptions): {
     }
     if (titlebarStatusText) {
       titlebarStatusText.innerText = state.toUpperCase();
+    }
+    if (onStatusChange) {
+      onStatusChange(state);
     }
   }
 

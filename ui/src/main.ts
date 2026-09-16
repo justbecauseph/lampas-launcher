@@ -89,20 +89,7 @@ async function startApp(): Promise<void> {
   };
 
   // Initialize Console View
-  const disposeConsole = initConsoleView({ showToast });
-
-  function appendLog(level: "INFO" | "WARN" | "ERROR", message: string): void {
-    const timestamp = new Date().toLocaleTimeString("en-GB", { hour12: false });
-    const consoleOutput = document.getElementById("console-output");
-    if (!consoleOutput) return;
-
-    const line = document.createElement("div");
-    line.className = "console-line";
-    line.dataset.level = level;
-    line.innerHTML = `<span class="console-time">[${timestamp}]</span> <span class="console-level console-level-${level.toLowerCase()}">[${level}]</span> <span class="console-msg"> ${message}</span>`;
-    consoleOutput.appendChild(line);
-    consoleOutput.scrollTop = consoleOutput.scrollHeight;
-  }
+  const consoleView = initConsoleView({ showToast });
 
   // Initialize Auth View
   const authView = initAuthView({
@@ -123,9 +110,10 @@ async function startApp(): Promise<void> {
     clearConsole: () => {
       if ((window as any).clearConsoleLogs) (window as any).clearConsoleLogs();
     },
-    appendLog,
+    appendLog: consoleView.appendLog,
     switchToTab,
     isNoSync: () => Boolean(activeConfig.noSync),
+    onStatusChange: (status) => consoleView.setGameStatus(status),
   });
 
   // Initialize Settings View
@@ -199,7 +187,7 @@ async function startApp(): Promise<void> {
 
   // Handle HMR / cleanup if reloaded
   window.addEventListener("beforeunload", () => {
-    disposeConsole();
+    consoleView.dispose();
     disposeMods();
     disposeServerStatus();
     settingsView.dispose();
