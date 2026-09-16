@@ -1,36 +1,40 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
-  LauncherConfig,
   SyncProgress,
   GameLogEntry,
-  UserProfile,
   DirectoryStatus,
   DirectoryValidationResult,
   DirectoryMoveProgress,
   DirectoryMoveResult,
   ServerStatus,
+  RendererUserProfile,
+  RendererSettingsDto,
+  ModCatalogEntry,
+  InstalledRuntimeInfo,
+  SyncResult,
+  LampasApi,
 } from "./types";
 
-contextBridge.exposeInMainWorld("lampas", {
+const api: LampasApi = {
   auth: {
-    login: (portalUrl?: string): Promise<{ token: string; user: UserProfile }> =>
+    login: (portalUrl?: string): Promise<{ user: RendererUserProfile }> =>
       ipcRenderer.invoke("auth:login", portalUrl),
     logout: (): Promise<void> => ipcRenderer.invoke("auth:logout"),
-    verify: (portalUrl?: string): Promise<{ valid: boolean; user?: UserProfile }> =>
+    verify: (portalUrl?: string): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
       ipcRenderer.invoke("auth:verify", portalUrl),
-    refresh: (portalUrl?: string): Promise<{ valid: boolean; user?: UserProfile; token?: string }> =>
+    refresh: (portalUrl?: string): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
       ipcRenderer.invoke("auth:refresh", portalUrl),
   },
   server: {
     getStatus: (): Promise<ServerStatus> => ipcRenderer.invoke("server:getStatus"),
   },
   sync: {
-    start: (): Promise<{ success: boolean; version: string; packName: string }> =>
+    start: (): Promise<SyncResult> =>
       ipcRenderer.invoke("sync:start"),
-    repair: (): Promise<{ success: boolean; message: string; version: string; packName: string }> =>
+    repair: (): Promise<SyncResult> =>
       ipcRenderer.invoke("sync:repair"),
-    getModCatalog: (): Promise<any[]> => ipcRenderer.invoke("sync:getModCatalog"),
-    getInstalledRuntime: (): Promise<{ minecraft: string; loader: { type: string; version: string }; launch?: any } | null> =>
+    getModCatalog: (): Promise<ModCatalogEntry[]> => ipcRenderer.invoke("sync:getModCatalog"),
+    getInstalledRuntime: (): Promise<InstalledRuntimeInfo | null> =>
       ipcRenderer.invoke("sync:getInstalledRuntime"),
     onProgress: (callback: (progress: SyncProgress) => void) => {
       const handler = (_: any, data: SyncProgress) => callback(data);
@@ -40,13 +44,17 @@ contextBridge.exposeInMainWorld("lampas", {
   },
   mods: {
     browseAndAdd: () => ipcRenderer.invoke("mods:browseAndAdd"),
-    addDropped: (files: File[]) => ipcRenderer.invoke("mods:addPaths", files.map((file) => webUtils.getPathForFile(file))),
-    setOfficialEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke("mods:setOfficialEnabled", id, enabled),
-    setCustomEnabled: (filename: string, enabled: boolean) => ipcRenderer.invoke("mods:setCustomEnabled", filename, enabled),
-    removeCustom: (filename: string) => ipcRenderer.invoke("mods:removeCustom", filename),
+    addDropped: (files: File[]) =>
+      ipcRenderer.invoke("mods:addPaths", files.map((file) => webUtils.getPathForFile(file))),
+    setOfficialEnabled: (id: string, enabled: boolean) =>
+      ipcRenderer.invoke("mods:setOfficialEnabled", id, enabled),
+    setCustomEnabled: (filename: string, enabled: boolean) =>
+      ipcRenderer.invoke("mods:setCustomEnabled", filename, enabled),
+    removeCustom: (filename: string) =>
+      ipcRenderer.invoke("mods:removeCustom", filename),
   },
   game: {
-    launch: (user: UserProfile | null, releaseOverride?: any): Promise<boolean> =>
+    launch: (user: RendererUserProfile | null, releaseOverride?: any): Promise<boolean> =>
       ipcRenderer.invoke("game:launch", user, releaseOverride),
     kill: (): Promise<void> => ipcRenderer.invoke("game:kill"),
     isRunning: (): Promise<boolean> => ipcRenderer.invoke("game:isRunning"),
@@ -54,6 +62,14 @@ contextBridge.exposeInMainWorld("lampas", {
       const handler = (_: any, data: GameLogEntry) => callback(data);
       ipcRenderer.on("game:log", handler);
       return () => ipcRenderer.removeListener("game:log", handler);
+    },
+    onLogBatch: (callback: (batch: { batchId: number; entries: GameLogEntry[]; dropped: number; bytes?: number }) => void) => {
+      const handler = (_: any, data: { batchId: number; entries: GameLogEntry[]; dropped: number; bytes?: number }) => {
+        callback(data);
+        ipcRenderer.send("game:logAck", { batchId: data.batchId });
+      };
+      ipcRenderer.on("game:logBatch", handler);
+      return () => ipcRenderer.removeListener("game:logBatch", handler);
     },
     onExit: (callback: (code: number | null) => void) => {
       const handler = (_: any, code: number | null) => callback(code);
@@ -67,7 +83,7 @@ contextBridge.exposeInMainWorld("lampas", {
       ipcRenderer.invoke("gameDir:browse", defaultPath),
     validate: (targetPath: string, currentPath?: string): Promise<DirectoryValidationResult> =>
       ipcRenderer.invoke("gameDir:validate", targetPath, currentPath),
-    configure: (targetPath: string): Promise<LauncherConfig> =>
+    configure: (targetPath: string): Promise<RendererSettingsDto> =>
       ipcRenderer.invoke("gameDir:configure", targetPath),
     move: (targetPath: string): Promise<DirectoryMoveResult> =>
       ipcRenderer.invoke("gameDir:move", targetPath),
@@ -78,8 +94,8 @@ contextBridge.exposeInMainWorld("lampas", {
     },
   },
   config: {
-    get: (): Promise<LauncherConfig> => ipcRenderer.invoke("config:get"),
-    set: (newConfig: Partial<LauncherConfig>): Promise<LauncherConfig> =>
+    get: (): Promise<RendererSettingsDto> => ipcRenderer.invoke("config:get"),
+    set: (newConfig: Partial<RendererSettingsDto>): Promise<RendererSettingsDto> =>
       ipcRenderer.invoke("config:set", newConfig),
   },
   window: {
@@ -94,5 +110,9 @@ contextBridge.exposeInMainWorld("lampas", {
     getLogPath: (): Promise<string> => ipcRenderer.invoke("utils:getLogPath"),
     openLogsDir: (): Promise<string> => ipcRenderer.invoke("utils:openLogsDir"),
     openLogFile: (): Promise<string> => ipcRenderer.invoke("utils:openLogFile"),
+    getMinecraftLogPath: (): Promise<string> => ipcRenderer.invoke("utils:getMinecraftLogPath"),
+    openMinecraftLog: (): Promise<string> => ipcRenderer.invoke("utils:openMinecraftLog"),
   },
-});
+};
+
+contextBridge.exposeInMainWorld("lampas", api);

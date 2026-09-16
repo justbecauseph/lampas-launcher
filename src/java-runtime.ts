@@ -1,22 +1,90 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { ConfigManager } from "./config";
 import { downloadVerified, fetchJsonWithRetry, hashFile } from "./file-transfer";
 
 export class JavaRuntimeManager {
-  private static checkJavaVersion(javaPath: string): number | null {
-    try {
-      if (!fs.existsSync(javaPath)) return null;
-      const output = execSync(`"${javaPath}" -version 2>&1`, { encoding: "utf-8", timeout: 4000 });
-      const match = output.match(/version "(?:1\.)?(\d+)/i) || output.match(/build (\d+)/i);
-      if (match) {
-        return parseInt(match[1], 10);
-      }
-    } catch {
+  private static probeCache = new Map<string, number | null>();
+
+  static clearProbeCache(): void {
+    this.probeCache.clear();
+  }
+
+  /**
+   * Asynchronously probes a Java executable for its major specification version.
+   * Shell-free execution with argument arrays, bounded buffer, timeout, and Windows javaw detection.
+   */
+  static async checkJavaVersion(javaPath: string): Promise<number | null> {
+    const trimmed = javaPath.trim();
+    if (!trimmed) return null;
+
+    if (this.probeCache.has(trimmed)) {
+      return this.probeCache.get(trimmed)!;
+    }
+
+    const isBareCommand =
+      trimmed === "java" ||
+      trimmed === "javaw" ||
+      trimmed === "java.exe" ||
+      trimmed === "javaw.exe";
+
+    // For file paths, check existence on disk
+    if (!isBareCommand && !fs.existsSync(trimmed)) {
+      this.probeCache.set(trimmed, null);
       return null;
     }
-    return null;
+
+    // Windows javaw probing: javaw.exe suppresses console output.
+    // If probing javaw.exe, check for a sibling java.exe in the same directory.
+    let probeExecutable = trimmed;
+    if (process.platform === "win32") {
+      const lower = trimmed.toLowerCase();
+      if (lower.endsWith("javaw.exe")) {
+        const siblingJava = path.join(path.dirname(trimmed), "java.exe");
+        if (fs.existsSync(siblingJava)) {
+          probeExecutable = siblingJava;
+        }
+      } else if (lower === "javaw") {
+        probeExecutable = "java";
+      }
+    }
+
+    try {
+      const output = await new Promise<string>((resolve, reject) => {
+        execFile(
+          probeExecutable,
+          ["-version"],
+          {
+            timeout: 4000,
+            maxBuffer: 64 * 1024,
+            shell: false,
+            windowsHide: true,
+          },
+          (error, stdout, stderr) => {
+            const combined = `${stdout || ""}\n${stderr || ""}`;
+            if (combined.trim().length > 0) {
+              resolve(combined);
+            } else if (error) {
+              reject(error);
+            } else {
+              resolve("");
+            }
+          }
+        );
+      });
+
+      const match =
+        output.match(/version "(?:1\.)?(\d+)/i) ||
+        output.match(/build (\d+)/i) ||
+        output.match(/openjdk (\d+)/i);
+      const ver = match ? parseInt(match[1], 10) : null;
+      this.probeCache.set(trimmed, ver);
+      return ver;
+    } catch {
+      this.probeCache.set(trimmed, null);
+      return null;
+    }
   }
 
   static async ensureJava25(
@@ -28,7 +96,7 @@ export class JavaRuntimeManager {
 
     // 1. Check user configured Java path
     if (config.javaPath) {
-      const ver = this.checkJavaVersion(config.javaPath);
+      const ver = await this.checkJavaVersion(config.javaPath);
       if (ver && ver >= 25) {
         onLog(`[Java] Using configured Java ${ver}: ${config.javaPath}`);
         return config.javaPath;
@@ -44,7 +112,7 @@ export class JavaRuntimeManager {
       process.platform === "win32" ? "javaw.exe" : "java"
     );
     if (fs.existsSync(localRuntimeJava)) {
-      const ver = this.checkJavaVersion(localRuntimeJava);
+      const ver = await this.checkJavaVersion(localRuntimeJava);
       if (ver && ver >= 25) {
         if (verificationMode === "fast") {
           onLog(`[Java] Found local Java ${ver}: ${localRuntimeJava}`);
@@ -79,7 +147,7 @@ export class JavaRuntimeManager {
     }
 
     for (const p of verificationMode === "full" && fs.existsSync(localRuntimeJava) ? [] : searchPaths) {
-      const ver = this.checkJavaVersion(p);
+      const ver = await this.checkJavaVersion(p);
       if (ver && ver >= 25) {
         onLog(`[Java] Located system Java ${ver}: ${p}`);
         return p;
@@ -87,7 +155,10 @@ export class JavaRuntimeManager {
     }
 
     // 4. Check PATH 'java'
-    const systemJavaVer = verificationMode === "full" && fs.existsSync(localRuntimeJava) ? null : this.checkJavaVersion("java");
+    const systemJavaVer =
+      verificationMode === "full" && fs.existsSync(localRuntimeJava)
+        ? null
+        : await this.checkJavaVersion("java");
     if (systemJavaVer && systemJavaVer >= 25) {
       onLog(`[Java] Using PATH Java ${systemJavaVer}`);
       return "java";
@@ -96,11 +167,18 @@ export class JavaRuntimeManager {
     // 5. If not found on machine, download and provision OpenJDK 25 from Mojang runtime CDN
     onLog(`[Java] Java 25 not detected. Provisioning official OpenJDK 25 (java-runtime-epsilon)...`);
     const runtimeDest = path.join(gameDir, "runtime", "java-runtime-epsilon");
-    fs.mkdirSync(runtimeDest, { recursive: true });
+    await fs.promises.mkdir(runtimeDest, { recursive: true });
 
     try {
-      const platformKey = process.platform === "win32" ? "windows-x64" : process.platform === "darwin" ? "mac-os" : "linux";
-      const allRuntimes: any = await fetchJsonWithRetry("https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json");
+      const platformKey =
+        process.platform === "win32"
+          ? "windows-x64"
+          : process.platform === "darwin"
+          ? "mac-os"
+          : "linux";
+      const allRuntimes: any = await fetchJsonWithRetry(
+        "https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json"
+      );
       const epsilonEntries = allRuntimes[platformKey]?.["java-runtime-epsilon"];
 
       if (!epsilonEntries || epsilonEntries.length === 0) {
@@ -113,30 +191,41 @@ export class JavaRuntimeManager {
 
       let completed = 0;
       const total = Object.keys(files).length;
-
       const entries = Object.entries(files);
       let nextFile = 0;
+      const concurrency = 6;
+
       async function worker() {
         while (nextFile < entries.length) {
-          const [relPath, fileInfo] = entries[nextFile++];
+          const item = entries[nextFile++];
+          if (!item) break;
+          const [relPath, fileInfo] = item;
           const targetPath = path.join(runtimeDest, relPath);
           if (fileInfo.type === "directory") {
-            fs.mkdirSync(targetPath, { recursive: true });
+            await fs.promises.mkdir(targetPath, { recursive: true });
             completed++;
             continue;
           }
 
           if (fileInfo.type === "file" && fileInfo.downloads?.raw) {
-            if (!fs.existsSync(path.dirname(targetPath))) {
-              fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-            }
+            await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
 
             const raw = fileInfo.downloads.raw;
-            const isValid = fs.existsSync(targetPath) &&
-              (!raw.size || fs.statSync(targetPath).size === raw.size) &&
-              (!raw.sha1 || await hashFile(targetPath, "sha1") === raw.sha1);
+            let isValid = false;
+            if (fs.existsSync(targetPath)) {
+              try {
+                const stat = await fs.promises.stat(targetPath);
+                const sizeOk = raw.size === undefined || stat.size === raw.size;
+                if (sizeOk) {
+                  const actualSha1 = await hashFile(targetPath, "sha1");
+                  isValid = !raw.sha1 || actualSha1 === raw.sha1;
+                }
+              } catch {
+                isValid = false;
+              }
+            }
+
             if (!isValid) {
-              await fs.promises.rm(targetPath, { force: true });
               await downloadVerified(raw.url, targetPath, {
                 algorithm: "sha1",
                 expectedHash: raw.sha1,
@@ -148,7 +237,7 @@ export class JavaRuntimeManager {
 
             if (fileInfo.executable) {
               try {
-                fs.chmodSync(targetPath, 0o755);
+                await fs.promises.chmod(targetPath, 0o755);
               } catch {}
             }
           }
@@ -159,13 +248,26 @@ export class JavaRuntimeManager {
           }
         }
       }
-      await Promise.all(Array.from({ length: Math.min(8, entries.length) }, () => worker()));
 
-      onLog(`[Java] OpenJDK 25 successfully installed in: ${runtimeDest}`);
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, entries.length) }, () => worker())
+      );
+
+      // Validate the provisioned executable before announcing success
+      const provisionedVer = await this.checkJavaVersion(localRuntimeJava);
+      if (!provisionedVer || provisionedVer < 25) {
+        throw new Error(
+          `Provisioned Java at '${localRuntimeJava}' failed verification (detected: ${provisionedVer ?? "none"}).`
+        );
+      }
+
+      onLog(`[Java] OpenJDK 25 successfully installed and verified (${provisionedVer}) in: ${runtimeDest}`);
       return localRuntimeJava;
     } catch (err: any) {
       onLog(`[Java Error] Automatic Java 25 download failed: ${err.message}`);
-      throw new Error(`Minecraft 26.2 requires OpenJDK 25. Please install Java 25 or configure its path in settings.`);
+      throw new Error(
+        `Minecraft 26.2 requires OpenJDK 25. Please install Java 25 or configure its path in settings.`
+      );
     }
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "lampas-launcher",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "Deterministic, Standalone Modpack Launcher for Lampas SMP",
   "private": true,
   "main": "dist/main.js",
@@ -11,12 +11,16 @@
     "syncDesktopName": true
   },
   "scripts": {
-    "dev": "concurrently \"tsc -w\" \"electron .\"",
-    "build": "tsc",
-    "package:dir": "tsc && electron-builder --dir --publish never",
-    "package:win": "tsc && electron-builder --win --publish never",
-    "package:linux": "tsc && electron-builder --linux --publish never",
-    "package:all": "tsc && electron-builder -mwl --publish never",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "benchmark": "bun test/benchmark/benchmark-harness.ts",
+    "smoke": "bun test/smoke/electron-smoke.ts",
+    "dev": "concurrently \"tsc -w\" \"vite\" \"electron .\"",
+    "build": "tsc && vite build",
+    "package:dir": "tsc && vite build && electron-builder --dir --publish never",
+    "package:win": "tsc && vite build && electron-builder --win --publish never",
+    "package:linux": "tsc && vite build && electron-builder --linux --publish never",
+    "package:all": "tsc && vite build && electron-builder -mwl --publish never",
     "start": "electron ."
   },
   "dependencies": {
@@ -26,11 +30,13 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.2",
     "@types/node": "^24.9.0",
     "concurrently": "^9.1.2",
     "electron": "44.0.0",
     "electron-builder": "^26.15.3",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0"
   },
   "build": {
     "appId": "town.lampas.launcher",

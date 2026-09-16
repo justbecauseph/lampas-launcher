@@ -1,7 +1,5 @@
 /* Lampas Launcher Master Stylesheet - Standalone Vanilla CSS */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap');
-
 :root {
   --bg-main: #0b0f0e;
   --bg-sidebar: #101513;

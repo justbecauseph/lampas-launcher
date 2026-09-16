@@ -13,7 +13,7 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
-const { downloadVerified } = await import("../src/file-transfer");
+const { downloadVerified, fetchJsonWithRetry } = await import("../src/file-transfer");
 
 describe("Launcher file-transfer: 302 redirect regression tests", () => {
   test("downloadVerified() follows 302 redirect from blob URL to object storage and verifies hash & size", async () => {
@@ -142,6 +142,106 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
     } finally {
       server.stop(true);
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("downloadVerified() pre-aborted signal rejects immediately without network or disk writes", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("Pre-aborted download"));
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "launcher-download-abort-"));
+    const destination = path.join(tempDir, "file.jar");
+
+    try {
+      await expect(
+        downloadVerified("http://127.0.0.1:9999/non-existent", destination, {
+          signal: controller.signal,
+          attempts: 3,
+        })
+      ).rejects.toThrow("Pre-aborted download");
+
+      expect(fs.existsSync(destination)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("downloadVerified() signal aborted during retry backoff cancels immediately and stops further retries", async () => {
+    let requestsReceived = 0;
+    const controller = new AbortController();
+
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requestsReceived++;
+        // First attempt fails with 500
+        return new Response("Internal Server Error", { status: 500 });
+      },
+    });
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "launcher-download-retry-abort-"));
+    const destination = path.join(tempDir, "file.jar");
+
+    try {
+      const downloadPromise = downloadVerified(
+        `http://127.0.0.1:${server.port}/fail`,
+        destination,
+        {
+          attempts: 3,
+          signal: controller.signal,
+        }
+      );
+
+      // Wait 50ms (first request fails immediately, entering retry backoff of 250ms)
+      await new Promise((r) => setTimeout(r, 50));
+      expect(requestsReceived).toBe(1);
+
+      // Abort during backoff
+      controller.abort(new Error("Operation cancelled during retry"));
+
+      await expect(downloadPromise).rejects.toThrow("Operation cancelled during retry");
+
+      // Give extra time to ensure no second attempt was made
+      await new Promise((r) => setTimeout(r, 300));
+      expect(requestsReceived).toBe(1);
+    } finally {
+      server.stop(true);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("fetchJsonWithRetry() signal aborted during retry backoff cancels immediately", async () => {
+    let requestsReceived = 0;
+    const controller = new AbortController();
+
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requestsReceived++;
+        return new Response("Service Unavailable", { status: 503 });
+      },
+    });
+
+    try {
+      const fetchPromise = fetchJsonWithRetry(
+        `http://127.0.0.1:${server.port}/api/meta`,
+        undefined,
+        3,
+        60_000,
+        controller.signal
+      );
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(requestsReceived).toBe(1);
+
+      controller.abort(new Error("Fetch cancelled in retry delay"));
+
+      await expect(fetchPromise).rejects.toThrow("Fetch cancelled in retry delay");
+
+      await new Promise((r) => setTimeout(r, 300));
+      expect(requestsReceived).toBe(1);
+    } finally {
+      server.stop(true);
     }
   });
 });

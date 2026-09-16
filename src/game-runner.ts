@@ -8,6 +8,7 @@ import { MinecraftBootstrap } from "./minecraft-bootstrap";
 import { JavaRuntimeManager } from "./java-runtime";
 import { isValidServerAddress, verifyRequiredResourcePacks } from "./resource-packs";
 import { validateRuntimeDefinition } from "./runtime-definition";
+import { ProcessLogFramer } from "./game-log-stream";
 import type { GameLogEntry, ReleaseDescriptor, UserProfile } from "./types";
 
 function generateOfflineUuid(username: string): string {
@@ -19,9 +20,11 @@ function generateOfflineUuid(username: string): string {
 
 export class GameRunner {
   private static runningProcess: ChildProcess | null = null;
+  private static exitPromise: Promise<number | null> | null = null;
+  private static isStarting = false;
 
   static isGameRunning(): boolean {
-    return this.runningProcess !== null && !this.runningProcess.killed;
+    return this.isStarting || this.runningProcess !== null;
   }
 
   static async launchGame(
@@ -34,12 +37,9 @@ export class GameRunner {
       throw new Error("Minecraft is already running!");
     }
 
-    const config = ConfigManager.get();
-    if (!user || (!config.token && !config.refreshToken)) {
-      throw new Error("Authentication required: Please log in with your Lampas Portal account before playing.");
-    }
+    this.isStarting = true;
 
-    const log = (level: "INFO" | "WARN" | "ERROR", message: string) => {
+    const log = (level: GameLogEntry["level"], message: string) => {
       onLog({
         timestamp: new Date().toLocaleTimeString(),
         level,
@@ -47,52 +47,79 @@ export class GameRunner {
       });
     };
 
-    log("INFO", "Refreshing authentication tokens via Lampas Portal...");
-    const refreshed = await LauncherAuth.refreshSession(config.portalUrl);
-    if (!refreshed.valid || !refreshed.user) {
-      throw new Error("Session expired or invalid: Please log in with your Lampas Portal account.");
-    }
-
-    const activeUser = refreshed.user;
-    const activeConfig = ConfigManager.get();
-    const username = activeUser.minecraftUsername || activeUser.name;
-    const uuid = activeUser.minecraftUuid;
-    if (!username || !uuid || uuid === "00000000-0000-0000-0000-000000000000") {
-      throw new Error("Authentication error: No bound Minecraft account found in your profile. Please link your Minecraft account on the portal dashboard.");
-    }
-
-    const gameDir = activeConfig.gameDir;
-    const ramGb = activeConfig.allocatedRamGb || 4;
-    const rawUuid = uuid.replace(/-/g, "");
-    const mcToken = activeUser.minecraftAccessToken || activeConfig.minecraftAccessToken;
-    const isRealMsa = !!(mcToken && mcToken.startsWith("ey") && mcToken.length > 50);
-    const token = isRealMsa ? mcToken : "0";
-    const userType = isRealMsa ? "msa" : "legacy";
-
-    // Resolve active release descriptor for launch configuration
-    let release: ReleaseDescriptor | null = releaseOverride || null;
-    if (!release) {
-      const stateReleasePath = path.join(gameDir, ".lampas", "release.json");
-      if (fs.existsSync(stateReleasePath)) {
-        try {
-          release = JSON.parse(fs.readFileSync(stateReleasePath, "utf-8"));
-        } catch {}
+    try {
+      const config = ConfigManager.get();
+      if (!user || (!config.token && !config.refreshToken)) {
+        throw new Error("Authentication required: Please log in with your Lampas Portal account before playing.");
       }
+
+      log("INFO", "Refreshing authentication tokens via Lampas Portal...");
+      const refreshed = await LauncherAuth.refreshSession(config.portalUrl);
+      if (!refreshed.valid || !refreshed.user) {
+        throw new Error("Session expired or invalid: Please log in with your Lampas Portal account.");
+      }
+
+      const activeUser = refreshed.user;
+      const activeConfig = ConfigManager.get();
+      const username = activeUser.minecraftUsername || activeUser.name;
+      const uuid = activeUser.minecraftUuid;
+      if (!username || !uuid || uuid === "00000000-0000-0000-0000-000000000000") {
+        throw new Error("Authentication error: No bound Minecraft account found in your profile. Please link your Minecraft account on the portal dashboard.");
+      }
+
+      const gameDir = activeConfig.gameDir;
+      const ramGb = activeConfig.allocatedRamGb || 4;
+      const rawUuid = uuid.replace(/-/g, "");
+      const mcToken = activeUser.minecraftAccessToken || activeConfig.minecraftAccessToken;
+      const isRealMsa = !!(mcToken && mcToken.startsWith("ey") && mcToken.length > 50);
+      const token = isRealMsa ? mcToken : "0";
+      const userType = isRealMsa ? "msa" : "legacy";
+
+      // Resolve active release descriptor for launch configuration
+      let release: ReleaseDescriptor | null = releaseOverride || null;
       if (!release) {
-        const localReleasePath = path.join(__dirname, "../../manifest/release.json");
-        if (fs.existsSync(localReleasePath)) {
+        const stateReleasePath = path.join(gameDir, ".lampas", "release.json");
+        if (fs.existsSync(stateReleasePath)) {
           try {
-            release = JSON.parse(fs.readFileSync(localReleasePath, "utf-8"));
+            release = JSON.parse(fs.readFileSync(stateReleasePath, "utf-8"));
           } catch {}
         }
       }
-    }
 
-    if (!release) {
-      throw new Error(
-        "No installed Lampas release found. Please synchronize or repair your modpack installation first."
-      );
-    }
+      if (!release) {
+        throw new Error(
+          "No installed Lampas release found. Please synchronize or repair your modpack installation first."
+        );
+      }
+
+      // Cross-validate release descriptor with installation state to prevent launching incompatible states
+      if (!releaseOverride) {
+        const stateFilePath = path.join(gameDir, ".lampas", "installation.json");
+        if (fs.existsSync(stateFilePath)) {
+          let installedState: any;
+          try {
+            installedState = JSON.parse(fs.readFileSync(stateFilePath, "utf-8"));
+          } catch {
+            throw new Error(
+              "Installation state metadata is corrupted. Please synchronize or repair your modpack installation first."
+            );
+          }
+          if (installedState.version && release.version && installedState.version !== release.version) {
+            throw new Error(
+              `Incompatible installation state detected: installed version '${installedState.version}' does not match release descriptor '${release.version}'. Please synchronize or repair.`
+            );
+          }
+          if (
+            installedState.syncGeneration &&
+            release.syncGeneration &&
+            installedState.syncGeneration !== release.syncGeneration
+          ) {
+            throw new Error(
+              `Incompatible installation generation detected: installed generation '${installedState.syncGeneration}' does not match release descriptor '${release.syncGeneration}'. Please synchronize or repair.`
+            );
+          }
+        }
+      }
 
     const runtime = validateRuntimeDefinition(release);
 
@@ -178,52 +205,144 @@ export class GameRunner {
 
     log("INFO", `Starting Minecraft client via ${mainClass}...`);
 
-    try {
-      const proc = spawn(javaExe, jvmArgs, {
-        cwd: gameDir,
-        detached: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+    const proc = spawn(javaExe, jvmArgs, {
+      cwd: gameDir,
+      detached: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
 
       this.runningProcess = proc;
 
-      proc.stdout?.on("data", (data) => {
-        const text = data.toString().trim();
-        if (text) {
-          log("INFO", text);
-        }
+      // Set up exit promise to await actual process termination
+      this.exitPromise = new Promise<number | null>((resolve) => {
+        let resolved = false;
+        const settleExit = (code: number | null) => {
+          if (!resolved) {
+            resolved = true;
+            resolve(code);
+          }
+        };
+        proc.once?.("exit", settleExit);
+        proc.once?.("close", settleExit);
       });
 
-      proc.stderr?.on("data", (data) => {
-        const text = data.toString().trim();
-        if (text) {
-          const level = text.includes("ERROR") || text.includes("Exception") ? "ERROR" : "WARN";
-          log(level, text);
-        }
+      // Wait for asynchronous spawn or initial spawn error
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+
+        const cleanupSpawnListeners = () => {
+          proc.removeListener?.("spawn", onSpawn);
+          proc.removeListener?.("error", onSpawnError);
+        };
+
+        const onSpawn = () => {
+          if (!settled) {
+            settled = true;
+            cleanupSpawnListeners();
+            resolve();
+          }
+        };
+
+        const onSpawnError = (err: any) => {
+          if (!settled) {
+            settled = true;
+            cleanupSpawnListeners();
+            this.runningProcess = null;
+            this.exitPromise = null;
+            reject(err);
+          }
+        };
+
+        proc.once?.("spawn", onSpawn);
+        proc.once?.("error", onSpawnError);
+
+        // Fallback for mocks and synchronous child processes
+        setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            cleanupSpawnListeners();
+            resolve();
+          }
+        }, 10);
       });
 
-      proc.on("exit", (code) => {
+      const stdoutFramer = new ProcessLogFramer("INFO", onLog);
+      const stderrFramer = new ProcessLogFramer("WARN", onLog);
+
+      stdoutFramer.attach(proc.stdout);
+      stderrFramer.attach(proc.stderr);
+
+      let exitReported = false;
+      const handleExit = (code: number | null) => {
+        if (exitReported) return;
+        exitReported = true;
+        stdoutFramer.flush();
+        stderrFramer.flush();
         this.runningProcess = null;
+        this.exitPromise = null;
         log(code === 0 ? "INFO" : "ERROR", `Minecraft exited with code ${code}`);
         onExit(code);
+      };
+
+      proc.once?.("exit", handleExit);
+      proc.once?.("close", handleExit);
+
+      // Runtime post-spawn errors: log but DO NOT clear runningProcess!
+      // The child OS process has not exited unless 'exit' or 'close' fires.
+      proc.on?.("error", (err: any) => {
+        log("ERROR", `Minecraft process runtime error: ${err?.message || err}`);
       });
 
       return true;
     } catch (err: any) {
       log("ERROR", `Failed to launch Minecraft JVM: ${err.message}`);
       throw err;
+    } finally {
+      this.isStarting = false;
     }
   }
 
-  static killGame() {
-    if (this.runningProcess) {
-      this.runningProcess.kill("SIGTERM");
-      this.runningProcess = null;
+  static async killGame(timeoutMs = 5000): Promise<void> {
+    const proc = this.runningProcess;
+    if (!proc || proc.killed) {
+      return;
+    }
+
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // Process may already have terminated
+    }
+
+    if (!this.exitPromise) {
+      return;
+    }
+
+    // Wait bounded time for SIGTERM exit
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), Math.min(timeoutMs, 2500));
+    });
+
+    const result = await Promise.race([this.exitPromise, timeoutPromise]);
+    if (timer) clearTimeout(timer);
+
+    // Escalate to SIGKILL if process did not exit within timeout window
+    if (result === "timeout" && this.runningProcess && !this.runningProcess.killed) {
+      try {
+        this.runningProcess.kill("SIGKILL");
+      } catch {}
+      const finalTimeout = new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.max(1000, timeoutMs - 2500));
+      });
+      await Promise.race([this.exitPromise, finalTimeout]);
     }
   }
 
-  static resetForTesting() {
+  static resetForTesting(): void {
     this.runningProcess = null;
+    this.exitPromise = null;
+    this.isStarting = false;
   }
 }
 

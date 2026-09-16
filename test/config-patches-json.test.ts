@@ -25,12 +25,9 @@ describe("JSON and JSONC config patch adapter & reconciliation", () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-game-dir-"));
-    LauncherLogger.resetForTesting();
-    LauncherLogger.init();
   });
 
   afterEach(() => {
-    LauncherLogger.resetForTesting();
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

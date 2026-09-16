@@ -146,6 +146,7 @@ export interface ReleaseDescriptor extends MinecraftRuntimeDefinition {
   totalMods?: number;
   totalFiles?: number;
   launch?: ReleaseLaunchConfig;
+  syncGeneration?: string;
 }
 
 export type ConfigPatchMode = "enforce" | "once";
@@ -188,6 +189,8 @@ export interface InstallationState {
   pack: string;
   version: string;
   installedAt: string;
+  syncGeneration?: string;
+  releaseVersion?: string;
   managedResourcePacks?: string[];
   appliedConfigPatches?: Record<string, AppliedConfigPatchState>;
   files: Record<
@@ -202,3 +205,124 @@ export interface InstallationState {
   >;
   [key: string]: unknown;
 }
+
+export interface RendererUserProfile {
+  id: string;
+  name: string;
+  discordId?: string;
+  discordTag?: string;
+  minecraftUuid?: string;
+  minecraftUsername?: string;
+  isAdmin: boolean;
+  isTech: boolean;
+  roles: string[];
+  allowedChannels: string[];
+}
+
+export interface RendererSettingsDto {
+  portalUrl: string;
+  selectedChannel: "stable" | "beta" | "dev";
+  allocatedRamGb: number;
+  gameDir: string;
+  gameDirConfigured?: boolean;
+  javaPath?: string;
+  javaArgs?: string;
+  disabledClientMods?: string[];
+  customClientMods?: CustomClientMod[];
+  noSync?: boolean;
+}
+
+export interface ModCatalogEntry {
+  id: string;
+  name?: string;
+  filename?: string;
+  description?: string;
+  side: "client" | "server" | "both";
+  categories?: string[];
+  source: "official" | "custom";
+  enabled: boolean;
+  canDisable: boolean;
+  size?: number;
+  iconUrl?: string;
+  sourceUrl?: string;
+}
+
+export interface InstalledRuntimeInfo {
+  minecraft: string;
+  loader: {
+    type: string;
+    version: string;
+  };
+  launch?: ReleaseLaunchConfig;
+}
+
+export interface SyncResult {
+  success: boolean;
+  version: string;
+  packName: string;
+  message?: string;
+  release?: ReleaseDescriptor;
+  runtime?: InstalledRuntimeInfo;
+}
+
+export interface LampasApi {
+  auth: {
+    login: (portalUrl?: string) => Promise<{ user: RendererUserProfile }>;
+    logout: () => Promise<void>;
+    verify: (portalUrl?: string) => Promise<{ valid: boolean; user?: RendererUserProfile }>;
+    refresh: (portalUrl?: string) => Promise<{ valid: boolean; user?: RendererUserProfile }>;
+  };
+  server: {
+    getStatus: () => Promise<ServerStatus>;
+  };
+  sync: {
+    start: () => Promise<SyncResult>;
+    repair: () => Promise<SyncResult>;
+    getModCatalog: () => Promise<ModCatalogEntry[]>;
+    getInstalledRuntime: () => Promise<InstalledRuntimeInfo | null>;
+    onProgress: (callback: (progress: SyncProgress) => void) => () => void;
+  };
+  mods: {
+    browseAndAdd: () => Promise<{ success: boolean; filesAdded?: string[]; error?: string }>;
+    addDropped: (files: File[]) => Promise<{ success: boolean; filesAdded?: string[]; error?: string }>;
+    setOfficialEnabled: (id: string, enabled: boolean) => Promise<void>;
+    setCustomEnabled: (filename: string, enabled: boolean) => Promise<void>;
+    removeCustom: (filename: string) => Promise<void>;
+  };
+  game: {
+    launch: (user: RendererUserProfile | null, releaseOverride?: any) => Promise<boolean>;
+    kill: () => Promise<void>;
+    isRunning: () => Promise<boolean>;
+    onLog: (callback: (entry: GameLogEntry) => void) => () => void;
+    onLogBatch: (callback: (batch: { batchId: number; entries: GameLogEntry[]; dropped: number; bytes?: number }) => void) => () => void;
+    onExit: (callback: (code: number | null) => void) => () => void;
+  };
+  gameDirectory: {
+    getStatus: () => Promise<DirectoryStatus>;
+    browse: (defaultPath?: string) => Promise<{ canceled: boolean; filePaths: string[] }>;
+    validate: (targetPath: string, currentPath?: string) => Promise<DirectoryValidationResult>;
+    configure: (targetPath: string) => Promise<RendererSettingsDto>;
+    move: (targetPath: string) => Promise<DirectoryMoveResult>;
+    onMoveProgress: (callback: (progress: DirectoryMoveProgress) => void) => () => void;
+  };
+  config: {
+    get: () => Promise<RendererSettingsDto>;
+    set: (newConfig: Partial<RendererSettingsDto>) => Promise<RendererSettingsDto>;
+  };
+  window: {
+    minimize: () => Promise<void>;
+    maximize: () => Promise<void>;
+    isMaximized: () => Promise<boolean>;
+    close: () => Promise<void>;
+  };
+  utils: {
+    getAppVersion: () => Promise<string>;
+    openPath: (targetPath: string) => Promise<string>;
+    getLogPath: () => Promise<string>;
+    openLogsDir: () => Promise<string>;
+    openLogFile: () => Promise<string>;
+    getMinecraftLogPath: () => Promise<string>;
+    openMinecraftLog: () => Promise<string>;
+  };
+}
+

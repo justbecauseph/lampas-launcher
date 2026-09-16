@@ -28,12 +28,9 @@ describe("YAML, Properties, INI, and Text adapter preservation tests", () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-adapters-game-"));
-    LauncherLogger.resetForTesting();
-    LauncherLogger.init();
   });
 
   afterEach(() => {
-    LauncherLogger.resetForTesting();
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
