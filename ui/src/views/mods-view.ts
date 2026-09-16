@@ -267,6 +267,10 @@ export function initModsView(options: ModsViewOptions): () => void {
         // Update local state
         const found = allMods.find((m) => (isOfficial ? m.id === modId : m.filename === filename));
         if (found) found.enabled = enabled;
+        updateCounts();
+        if (activeModFilter === "disabled") {
+          renderMods();
+        }
         showToast(`${enabled ? "Enabled" : "Disabled"} ${filename || modId}`, "info", 1500);
         onModsChanged?.();
       } catch (err: any) {

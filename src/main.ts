@@ -68,7 +68,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 600,
     frame: false,
-    titleBarStyle: "hidden",
+    titleBarStyle: process.platform === "darwin" ? "hidden" : undefined,
     backgroundColor: "#0b0f0e",
     icon: appIcon,
     show: false,
@@ -90,6 +90,14 @@ function createWindow() {
       mainWindow.loadFile(path.join(__dirname, "../ui/index.html"));
     }
   }
+
+  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    LauncherLogger.info(`[Renderer Console] (level ${level}) ${message} (${sourceId}:${line})`);
+  });
+
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    LauncherLogger.error(`[Renderer Crash] Render process gone: ${JSON.stringify(details)}`);
+  });
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
@@ -396,6 +404,13 @@ app.whenReady().then(async () => {
     };
     setTimeout(runSmokeCheck, 400);
   }
+
+  app.on("child-process-gone", (_event, details) => {
+    LauncherLogger.error(`[Process Crash] ${details.type} process gone (${details.reason}, exitCode: ${details.exitCode})`);
+    if (details.type === "GPU" && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.invalidate();
+    }
+  });
 });
 
 app.on("window-all-closed", () => {
