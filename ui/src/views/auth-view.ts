@@ -18,7 +18,7 @@ export function initAuthView(options: AuthViewOptions): {
   const userCard = document.getElementById("user-card") as HTMLElement | null;
   const userName = document.getElementById("user-name") as HTMLElement | null;
   const userRole = document.getElementById("user-role") as HTMLElement | null;
-  const userAvatar = document.getElementById("user-avatar") as HTMLImageElement | null;
+  const userAvatar = document.getElementById("user-avatar") as HTMLElement | null;
 
   let currentUser: RendererUserProfile | null = null;
 
@@ -27,7 +27,8 @@ export function initAuthView(options: AuthViewOptions): {
     if (user) {
       if (btnLogin) btnLogin.classList.add("hidden");
       if (userCard) userCard.classList.remove("hidden");
-      if (userName) userName.innerText = user.minecraftUsername || user.name || "Lampas Player";
+      const displayName = user.minecraftUsername || user.name || (user as any).discordTag || "Lampas Player";
+      if (userName) userName.innerText = displayName;
       if (userRole) {
         if (user.isAdmin) {
           userRole.innerText = "ADMINISTRATOR";
@@ -41,14 +42,32 @@ export function initAuthView(options: AuthViewOptions): {
         }
       }
       if (userAvatar) {
-        const uuid = user.minecraftUuid?.replace(/-/g, "");
-        if (uuid) {
-          userAvatar.src = `https://crafatar.com/avatars/${uuid}?size=40&overlay`;
+        const fallbackInitial = displayName[0]?.toUpperCase() || "P";
+        const identifier = user.minecraftUuid && user.minecraftUuid !== "00000000-0000-0000-0000-000000000000"
+          ? user.minecraftUuid.replace(/-/g, "")
+          : (user.minecraftUsername || displayName);
+
+        userAvatar.replaceChildren();
+        if (identifier) {
+          const img = document.createElement("img");
+          img.src = `https://mc-heads.net/avatar/${encodeURIComponent(identifier)}/64`;
+          img.alt = `${displayName}'s avatar`;
+          img.onerror = () => {
+            userAvatar.replaceChildren();
+            userAvatar.innerText = fallbackInitial;
+          };
+          userAvatar.appendChild(img);
+        } else {
+          userAvatar.innerText = fallbackInitial;
         }
       }
     } else {
       if (btnLogin) btnLogin.classList.remove("hidden");
       if (userCard) userCard.classList.add("hidden");
+      if (userAvatar) {
+        userAvatar.replaceChildren();
+        userAvatar.innerText = "P";
+      }
     }
     onUserChanged(currentUser);
   }

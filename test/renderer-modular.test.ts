@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getServerStatusView } from "../ui/src/views/server-status-view";
+import { initAuthView } from "../ui/src/views/auth-view";
+import { initSettingsView } from "../ui/src/views/settings-view";
 import type { RendererSettingsDto, RendererUserProfile } from "../src/types";
 
 describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
@@ -129,5 +131,212 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     // Verify script tags in production build use relative paths suitable for loadFile
     expect(prodHtml).toMatch(/src="\.\/assets\/index-[^"]+\.js"/);
     expect(prodHtml).toMatch(/href="\.\/assets\/index-[^"]+\.css"/);
+  });
+
+  test("auth-view renders mc-heads.net avatar image, handles onerror fallback, and resets to 'P' on logout", () => {
+    // Check source code requirements
+    const authSource = fs.readFileSync(path.join(__dirname, "../ui/src/views/auth-view.ts"), "utf-8");
+    expect(authSource).not.toContain("crafatar.com");
+    expect(authSource).toContain("https://mc-heads.net/avatar/");
+
+    // Mock DOM elements
+    const elements = new Map<string, any>();
+    class MockEl {
+      id: string;
+      innerText = "";
+      src = "";
+      alt = "";
+      className = "";
+      disabled = false;
+      children: MockEl[] = [];
+      classList = {
+        add: () => {},
+        remove: () => {},
+      };
+      onclick: any = null;
+      onerror: any = null;
+      constructor(id: string) {
+        this.id = id;
+      }
+      appendChild(c: MockEl) {
+        this.children.push(c);
+      }
+      replaceChildren(...newChildren: MockEl[]) {
+        this.children = [...newChildren];
+        this.innerText = "";
+      }
+    }
+
+    const reg = (id: string) => {
+      const el = new MockEl(id);
+      elements.set(id, el);
+      return el;
+    };
+
+    const userAvatar = reg("user-avatar");
+    userAvatar.innerText = "P";
+    reg("btn-login");
+    reg("btn-logout");
+    reg("user-card");
+    reg("user-name");
+    reg("user-role");
+
+    const prevDoc = (globalThis as any).document;
+    (globalThis as any).document = {
+      getElementById: (id: string) => elements.get(id) || null,
+      createElement: (tag: string) => new MockEl(""),
+    };
+
+    try {
+      const auth = initAuthView({
+        showToast: () => {},
+        getPortalUrl: () => "https://dev.lampas.town",
+        onUserChanged: () => {},
+      });
+
+      // 1. Initial state
+      expect(userAvatar.innerText).toBe("P");
+
+      // 2. User logs in with UUID and username
+      const sampleUser: RendererUserProfile = {
+        id: "u-1",
+        name: "Steve",
+        minecraftUuid: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+        minecraftUsername: "Steve",
+        isAdmin: false,
+        isTech: false,
+        roles: ["member"],
+        allowedChannels: ["stable"],
+      };
+
+      auth.updateUserUI(sampleUser);
+
+      // Verify img element was added inside #user-avatar
+      expect(userAvatar.children.length).toBe(1);
+      const img = userAvatar.children[0];
+      expect(img.src).toBe("https://mc-heads.net/avatar/069a79f444e94726a5befca90e38aaf5/64");
+      expect(img.alt).toBe("Steve's avatar");
+
+      // 3. Test onerror fallback to initial
+      if (img.onerror) {
+        img.onerror();
+      }
+      expect(userAvatar.children.length).toBe(0);
+      expect(userAvatar.innerText).toBe("S");
+
+      // 4. Logout resets avatar to "P"
+      auth.updateUserUI(null);
+      expect(userAvatar.children.length).toBe(0);
+      expect(userAvatar.innerText).toBe("P");
+    } finally {
+      (globalThis as any).document = prevDoc;
+    }
+  });
+
+  test("settings-view populates #setting-gamedir-input and binds directory buttons", async () => {
+    // Check source code requirements
+    const settingsSource = fs.readFileSync(path.join(__dirname, "../ui/src/views/settings-view.ts"), "utf-8");
+    expect(settingsSource).toContain("setting-gamedir-input");
+
+    const elements = new Map<string, any>();
+    class MockEl {
+      id: string;
+      innerText = "";
+      value = "";
+      disabled = false;
+      classList = {
+        add: () => {},
+        remove: () => {},
+      };
+      onclick: any = null;
+      onchange: any = null;
+      addEventListener: any = () => {};
+      constructor(id: string) {
+        this.id = id;
+      }
+    }
+
+    const reg = (id: string) => {
+      const el = new MockEl(id);
+      elements.set(id, el);
+      return el;
+    };
+
+    const gamedirInput = reg("setting-gamedir-input");
+    const openDirBtn = reg("btn-settings-open-dir");
+    const moveDirBtn = reg("btn-settings-move-dir");
+    reg("ram-slider");
+    reg("setting-ram-val");
+    reg("setting-portal");
+    reg("setting-java-args");
+    reg("setting-nosync");
+    reg("modal-move-dir");
+    reg("move-modal-confirm-view");
+    reg("move-modal-progress-view");
+    reg("move-source-path");
+    reg("move-target-path");
+    reg("btn-confirm-move");
+    reg("btn-cancel-move");
+
+    const prevDoc = (globalThis as any).document;
+    const prevWin = (globalThis as any).window;
+
+    let openedPath = "";
+    (globalThis as any).document = {
+      getElementById: (id: string) => elements.get(id) || null,
+      querySelectorAll: () => [],
+      createElement: (tag: string) => new MockEl(""),
+    };
+    (globalThis as any).window = {
+      lampas: {
+        config: {
+          get: async () => ({}),
+          set: async (cfg: any) => cfg,
+        },
+        utils: {
+          openPath: async (p: string) => {
+            openedPath = p;
+          },
+        },
+        gameDirectory: {
+          browse: async () => ({ canceled: false, filePaths: ["D:/NewMinecraft"] }),
+          validate: async () => ({ valid: true }),
+          move: async () => ({ success: true, gameDir: "D:/NewMinecraft" }),
+          onMoveProgress: () => () => {},
+        },
+      },
+    };
+
+    try {
+      const settings = initSettingsView({
+        showToast: () => {},
+        onConfigChanged: () => {},
+      });
+
+      // Initially input is blank
+      expect(gamedirInput.value).toBe("");
+
+      // Initialize settings with a configured gameDir
+      await settings.initSettings({
+        gameDir: "C:/Users/markj/AppData/Roaming/.minecraft-lampas",
+        allocatedRamGb: 6,
+        portalUrl: "https://dev.lampas.town",
+        selectedChannel: "stable",
+      });
+
+      // Verify #setting-gamedir-input is populated
+      expect(gamedirInput.value).toBe("C:/Users/markj/AppData/Roaming/.minecraft-lampas");
+
+      // Verify Open Folder button works
+      expect(typeof openDirBtn.onclick).toBe("function");
+      await openDirBtn.onclick();
+      expect(openedPath).toBe("C:/Users/markj/AppData/Roaming/.minecraft-lampas");
+
+      // Verify Move Installation button is wired
+      expect(typeof moveDirBtn.onclick).toBe("function");
+    } finally {
+      (globalThis as any).document = prevDoc;
+      (globalThis as any).window = prevWin;
+    }
   });
 });
