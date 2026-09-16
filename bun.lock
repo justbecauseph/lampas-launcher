@@ -11,7 +11,7 @@
         "yaml": "^2.9.0",
       },
       "devDependencies": {
-        "@types/bun": "^1.4.0",
+        "@types/bun": "^1.4.2",
         "@types/node": "^24.9.0",
         "concurrently": "^9.1.2",
         "electron": "44.0.0",

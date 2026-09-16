@@ -89,7 +89,7 @@ If you want to build or tinker with the launcher code locally:
   * **Windows (x64):** Windows 10, Windows 11 (NSIS installer & portable `.exe`).
   * **Linux (x64):** Modern glibc distributions (AppImage & `.tar.gz`).
 * **Tooling Requirements:**
-  * **Bun:** `v1.4.0` (pinned in CI) / `1.0+`
+  * **Bun:** `v1.4.2` (pinned in CI) / `1.0+`
   * **Node.js:** `v20+` (Node 24 LTS recommended)
   * **Electron:** `44.0.0`
   * **Vite:** `^6.2.0` (renderer bundler)
