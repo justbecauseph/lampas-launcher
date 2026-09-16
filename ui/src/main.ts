@@ -85,6 +85,7 @@ async function startApp(): Promise<void> {
     selectedChannel: "stable",
     allocatedRamGb: 4,
     gameDir: "",
+    noSync: false,
   };
 
   // Initialize Console View
@@ -124,6 +125,7 @@ async function startApp(): Promise<void> {
     },
     appendLog,
     switchToTab,
+    isNoSync: () => Boolean(activeConfig.noSync),
   });
 
   // Initialize Settings View
