@@ -15,24 +15,28 @@ mock.module("electron", () => ({
 }));
 
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 
 describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
   beforeEach(() => {
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.mkdirSync(gameDir, { recursive: true });
+    PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
     ConfigManager.resetForTesting();
     ConfigManager.set({
-      token: "mock-token",
       portalUrl: "http://localhost:3000",
       selectedChannel: "stable",
       gameDir,
       customClientMods: [],
       disabledClientMods: [],
     });
+    ConfigManager.establishSession("http://localhost:3000", {
+      token: "mock-token",
+    });
   });
 
   afterAll(() => {
+    PortalPolicy.resetForTesting();
     if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
       fs.rmSync(testRoot, { recursive: true, force: true });
     }

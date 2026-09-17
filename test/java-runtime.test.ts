@@ -35,22 +35,32 @@ mock.module("node:child_process", () => ({
 }));
 
 const { JavaRuntimeManager } = await import("../src/java-runtime");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 
 describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
   beforeEach(() => {
     execFileCalls = [];
     mockExecFileHandler = null;
     JavaRuntimeManager.clearProbeCache();
+    PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
     ConfigManager.resetForTesting();
     ConfigManager.set({
-      token: "mock-token",
       portalUrl: "http://localhost:3000",
       selectedChannel: "stable",
       gameDir,
       customClientMods: [],
       disabledClientMods: [],
     });
+    ConfigManager.establishSession("http://localhost:3000", {
+      token: "mock-token",
+    });
+  });
+
+  afterAll(() => {
+    PortalPolicy.resetForTesting();
+    if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
   });
 
   test("returns null for empty or whitespace-only java paths", async () => {

@@ -30,7 +30,7 @@ mock.module("electron", () => ({
 }));
 
 const { LauncherLogger } = await import("../src/logger");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager } = await import("../src/client-mods");
 const { GameRunner } = await import("../src/game-runner");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
@@ -41,16 +41,19 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.resetForTesting();
   GameRunner.resetForTesting();
 
   ConfigManager.set({
-    token: "mock-token",
     portalUrl: "http://localhost:3000",
     selectedChannel: "stable",
     gameDir,
     customClientMods: [],
     disabledClientMods: [],
+  });
+  ConfigManager.establishSession("http://localhost:3000", {
+    token: "mock-token",
   });
 });
 
@@ -59,6 +62,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  PortalPolicy.resetForTesting();
   GameRunner.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });

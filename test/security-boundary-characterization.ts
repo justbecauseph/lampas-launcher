@@ -133,6 +133,71 @@ const readyPromise = new Promise<void>((resolve) => {
   readyResolver = resolve;
 });
 
+// Controlled file-access fixture for offline fallback (Requirement 2)
+// In production, sync.ts reads path.join(__dirname, "../../manifest/client-manifest.json") and release.json.
+// We intercept existsSync and readFileSync ONLY for these two paths, avoiding any creation or mutation of sibling directories.
+const expectedManifestPath = path.normalize(path.resolve(path.join(import.meta.dir, "../src", "../../manifest/client-manifest.json")));
+const expectedReleasePath = path.normalize(path.resolve(path.join(import.meta.dir, "../src", "../../manifest/release.json")));
+
+const fallbackManifestContent = JSON.stringify({
+  schemaVersion: 2,
+  pack: "Lampas Offline Fallback Pack",
+  version: "2.0.0-offline",
+  protocol: 3,
+  minecraft: "26.2",
+  loader: { type: "fabric", version: "0.19.3" },
+  manifestId: "offline-fallback-man-1",
+  files: [],
+  mods: [],
+});
+
+const fallbackReleaseContent = JSON.stringify({
+  pack: "Lampas Offline Fallback Pack",
+  version: "2.0.0-offline",
+  protocol: 3,
+  minecraft: "26.2",
+  loader: { type: "fabric", version: "0.19.3" },
+  manifestId: "offline-fallback-man-1",
+  minimumLauncherVersion: "1.0.0",
+  files: [],
+  mods: [],
+});
+
+let enableControlledFallbackFixture = true;
+const realExistsSync = fs.existsSync.bind(fs);
+const realReadFileSync = fs.readFileSync.bind(fs);
+
+mock.module("node:fs", () => ({
+  ...fs,
+  existsSync: (p: any) => {
+    if (enableControlledFallbackFixture) {
+      const norm = path.normalize(path.resolve(String(p)));
+      if (norm === expectedManifestPath || norm === expectedReleasePath) {
+        return true;
+      }
+    }
+    return realExistsSync(p);
+  },
+  readFileSync: ((p: any, ...args: any[]) => {
+    if (enableControlledFallbackFixture && typeof p === "string") {
+      const norm = path.normalize(path.resolve(p));
+      if (norm === expectedManifestPath) {
+        const opts = args[0];
+        return (opts === "utf-8" || opts?.encoding === "utf-8")
+          ? fallbackManifestContent
+          : Buffer.from(fallbackManifestContent, "utf-8");
+      }
+      if (norm === expectedReleasePath) {
+        const opts = args[0];
+        return (opts === "utf-8" || opts?.encoding === "utf-8")
+          ? fallbackReleaseContent
+          : Buffer.from(fallbackReleaseContent, "utf-8");
+      }
+    }
+    return (realReadFileSync as any)(p, ...args);
+  }) as any,
+}));
+
 // Mock Electron before any imports
 mock.module("electron", () => ({
   app: {
@@ -159,8 +224,16 @@ mock.module("electron", () => ({
 
 const results = {
   totalPassed: 0,
-  tests: [] as Array<{ name: string; passed: boolean; error?: string }>,
+  totalSkipped: 0,
+  skippedPlatformCoverage: [] as Array<{ name: string; reason: string }>,
+  tests: [] as Array<{ name: string; passed: boolean; skipped?: boolean; error?: string }>,
 };
+
+function skipPlatformCoverage(reason: string): never {
+  const err = new Error(reason);
+  (err as any)._skipped = true;
+  throw err;
+}
 
 function runTest(name: string, fn: () => void | Promise<void>) {
   return (async () => {
@@ -169,6 +242,12 @@ function runTest(name: string, fn: () => void | Promise<void>) {
       results.totalPassed++;
       results.tests.push({ name, passed: true });
     } catch (e: any) {
+      if (e?._skipped) {
+        results.totalSkipped++;
+        results.skippedPlatformCoverage.push({ name, reason: e.message });
+        results.tests.push({ name, passed: false, skipped: true, error: e.message });
+        return;
+      }
       results.tests.push({ name, passed: false, error: e?.message || String(e) });
     }
   })();
@@ -373,6 +452,7 @@ try {
   let serverARedirectReleaseToB = 0;
   let serverARedirectManifestToB = 0;
   let serverARedirectBlobUrl = "";
+  let serverAFailChannelWith500 = false;
   let attackerBlobContent: { path: string; content: Buffer } | null = null;
 
   server = http.createServer((req, res) => {
@@ -499,6 +579,11 @@ try {
 
       // 5. Channel endpoint
       if (req.url?.startsWith("/api/v1/channels/")) {
+        if (serverAFailChannelWith500) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Portal internal error" }));
+          return;
+        }
         if (serverARedirectChannelToB > 0) {
           const code = serverARedirectChannelToB;
           res.writeHead(code, { Location: `${attackerPortal}${req.url}` });
@@ -747,7 +832,9 @@ try {
     if (fs.existsSync(modsPath)) fs.rmSync(modsPath, { recursive: true, force: true });
     try {
       fs.symlinkSync(outsideSentinelDir, modsPath, process.platform === "win32" ? "junction" : "dir");
-    } catch {}
+    } catch (err: any) {
+      skipPlatformCoverage(`Unable to create modsDir junction: ${err?.message}`);
+    }
 
     if (fs.existsSync(modsPath)) {
       const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
@@ -780,7 +867,9 @@ try {
     fs.writeFileSync(outsideLatestLog, "minecraft log data");
     try {
       fs.symlinkSync(outsideSentinelDir, logsPath, process.platform === "win32" ? "junction" : "dir");
-    } catch {}
+    } catch (err: any) {
+      skipPlatformCoverage(`Unable to create gameDir/logs junction: ${err?.message}`);
+    }
 
     if (fs.existsSync(logsPath)) {
       const mcLogHandler = ipcHandlers.get("utils:openMinecraftLog")!;
@@ -831,7 +920,274 @@ try {
     openedPaths.length = 0;
   });
 
-  // 13. [Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B
+  // 13. [Opener: launcherLog] Normal launcher log opens successfully via registered handlers
+  await runTest("[Opener: launcherLog] Normal launcher log opens successfully via registered handlers", async () => {
+    const normalLogsDir = path.join(userDataDir, "logs");
+    fs.mkdirSync(normalLogsDir, { recursive: true });
+    const normalLogFile = path.join(normalLogsDir, "launcher.log");
+    fs.writeFileSync(normalLogFile, "=== Normal Session Log ===\n", "utf-8");
+    const expectedCanonical = fs.realpathSync(normalLogFile);
+
+    // utils:openLogFile
+    openedPaths.length = 0;
+    const logFileHandler = ipcHandlers.get("utils:openLogFile")!;
+    const res1 = await logFileHandler({});
+    if (openedPaths.length !== 1 || openedPaths[0] !== expectedCanonical || res1 !== expectedCanonical) {
+      throw new Error(`Expected utils:openLogFile to open ${expectedCanonical}, got: ${JSON.stringify(openedPaths)}`);
+    }
+
+    // utils:openKnownLocation("launcherLog")
+    openedPaths.length = 0;
+    const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+    const res2 = await knownHandler({}, "launcherLog");
+    if (openedPaths.length !== 1 || openedPaths[0] !== expectedCanonical || res2 !== expectedCanonical) {
+      throw new Error(`Expected utils:openKnownLocation(launcherLog) to open ${expectedCanonical}`);
+    }
+
+    // utils:openPath("launcherLog")
+    openedPaths.length = 0;
+    const pathHandler = ipcHandlers.get("utils:openPath")!;
+    const res3 = await pathHandler({}, "launcherLog");
+    if (openedPaths.length !== 1 || openedPaths[0] !== expectedCanonical || res3 !== expectedCanonical) {
+      throw new Error(`Expected utils:openPath(launcherLog) to open ${expectedCanonical}`);
+    }
+
+    // utils:openPath(normalLogFile)
+    openedPaths.length = 0;
+    const res4 = await pathHandler({}, normalLogFile);
+    if (openedPaths.length !== 1 || openedPaths[0] !== expectedCanonical || res4 !== expectedCanonical) {
+      throw new Error(`Expected utils:openPath(${normalLogFile}) to open ${expectedCanonical}`);
+    }
+    openedPaths.length = 0;
+  });
+
+  // 14. [Opener: launcherLog] userData/logs linked or junctioned to an outside directory is rejected across registered handlers
+  await runTest("[Opener: launcherLog] userData/logs linked or junctioned to an outside directory is rejected across registered handlers", async () => {
+    openedPaths.length = 0;
+    const outsideLogsDir = path.join(testRoot, "outside-logs-dir");
+    const outsideLogFile = path.join(outsideLogsDir, "launcher.log");
+    if (!fs.existsSync(outsideLogsDir)) fs.mkdirSync(outsideLogsDir, { recursive: true });
+    fs.writeFileSync(outsideLogFile, "malicious outside log data", "utf-8");
+
+    const userLogsDir = path.join(userDataDir, "logs");
+    if (fs.existsSync(userLogsDir)) {
+      fs.rmSync(userLogsDir, { recursive: true, force: true });
+    }
+
+    try {
+      fs.symlinkSync(outsideLogsDir, userLogsDir, process.platform === "win32" ? "junction" : "dir");
+    } catch (err: any) {
+      skipPlatformCoverage(`Unable to create directory junction for userData/logs: ${err?.message}`);
+    }
+
+    try {
+      // utils:openLogFile
+      openedPaths.length = 0;
+      const logFileHandler = ipcHandlers.get("utils:openLogFile")!;
+      let threw = false;
+      try {
+        await logFileHandler({});
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openLogFile to reject escaping userData/logs junction");
+      if (openedPaths.length !== 0) throw new Error("Junction escape triggered shell.openPath via openLogFile!");
+
+      // utils:openKnownLocation("launcherLog")
+      const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+      threw = false;
+      try {
+        await knownHandler({}, "launcherLog");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openKnownLocation(launcherLog) to reject escaping userData/logs junction");
+      if (openedPaths.length !== 0) throw new Error("Junction escape triggered shell.openPath via openKnownLocation!");
+
+      // utils:openLogsDir
+      const logsDirHandler = ipcHandlers.get("utils:openLogsDir")!;
+      threw = false;
+      try {
+        await logsDirHandler({});
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openLogsDir to reject escaping userData/logs junction");
+      if (openedPaths.length !== 0) throw new Error("Junction escape triggered shell.openPath via openLogsDir!");
+
+      // utils:openKnownLocation("logsDir")
+      threw = false;
+      try {
+        await knownHandler({}, "logsDir");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openKnownLocation(logsDir) to reject escaping userData/logs junction");
+      if (openedPaths.length !== 0) throw new Error("Junction escape triggered shell.openPath via openKnownLocation(logsDir)!");
+
+      // utils:openPath("launcherLog")
+      const pathHandler = ipcHandlers.get("utils:openPath")!;
+      threw = false;
+      try {
+        await pathHandler({}, "launcherLog");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openPath(launcherLog) to reject escaping userData/logs junction");
+      if (openedPaths.length !== 0) throw new Error("Junction escape triggered shell.openPath via openPath(launcherLog)!");
+
+      // utils:openPath(path.join(userLogsDir, "launcher.log"))
+      threw = false;
+      try {
+        await pathHandler({}, path.join(userLogsDir, "launcher.log"));
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openPath(direct) to reject escaping userData/logs junction");
+      if (openedPaths.length !== 0) throw new Error("Junction escape triggered shell.openPath via direct path!");
+    } finally {
+      fs.rmSync(userLogsDir, { recursive: true, force: true });
+    }
+  });
+
+  // 15. [Opener: launcherLog] launcher-log file linked outside authorized root is rejected across registered handlers
+  await runTest("[Opener: launcherLog] launcher-log file linked outside authorized root is rejected across registered handlers", async () => {
+    openedPaths.length = 0;
+    const userLogsDir = path.join(userDataDir, "logs");
+    fs.mkdirSync(userLogsDir, { recursive: true });
+
+    const outsideLogSentinel = path.join(testRoot, "outside-secret-log.txt");
+    fs.writeFileSync(outsideLogSentinel, "secret external log content", "utf-8");
+
+    const linkedLogFile = path.join(userLogsDir, "launcher.log");
+    if (fs.existsSync(linkedLogFile)) fs.rmSync(linkedLogFile, { force: true });
+
+    try {
+      fs.symlinkSync(outsideLogSentinel, linkedLogFile, "file");
+    } catch (err: any) {
+      skipPlatformCoverage(`Unable to create file symlink for launcher.log: ${err?.message}`);
+    }
+
+    try {
+      // utils:openLogFile
+      openedPaths.length = 0;
+      const logFileHandler = ipcHandlers.get("utils:openLogFile")!;
+      let threw = false;
+      try {
+        await logFileHandler({});
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openLogFile to reject escaping file symlink");
+      if (openedPaths.length !== 0) throw new Error("Symlink escape triggered shell.openPath via openLogFile!");
+
+      // utils:openKnownLocation("launcherLog")
+      const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+      threw = false;
+      try {
+        await knownHandler({}, "launcherLog");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openKnownLocation(launcherLog) to reject escaping file symlink");
+      if (openedPaths.length !== 0) throw new Error("Symlink escape triggered shell.openPath via openKnownLocation!");
+
+      // utils:openPath("launcherLog")
+      const pathHandler = ipcHandlers.get("utils:openPath")!;
+      threw = false;
+      try {
+        await pathHandler({}, "launcherLog");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openPath(launcherLog) to reject escaping file symlink");
+      if (openedPaths.length !== 0) throw new Error("Symlink escape triggered shell.openPath via openPath!");
+
+      // utils:openPath(linkedLogFile)
+      threw = false;
+      try {
+        await pathHandler({}, linkedLogFile);
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openPath(direct) to reject escaping file symlink");
+      if (openedPaths.length !== 0) throw new Error("Symlink escape triggered shell.openPath via direct path!");
+    } finally {
+      fs.rmSync(linkedLogFile, { force: true });
+    }
+  });
+
+  // 16. [Opener: launcherLog] Missing-target and wrong-file-type cases are rejected across registered handlers
+  await runTest("[Opener: launcherLog] Missing-target and wrong-file-type cases are rejected across registered handlers", async () => {
+    const userLogsDir = path.join(userDataDir, "logs");
+    fs.mkdirSync(userLogsDir, { recursive: true });
+    const logFile = path.join(userLogsDir, "launcher.log");
+    if (fs.existsSync(logFile)) fs.rmSync(logFile, { recursive: true, force: true });
+
+    // A. Missing launcher.log file
+    openedPaths.length = 0;
+    const logFileHandler = ipcHandlers.get("utils:openLogFile")!;
+    let threw = false;
+    try {
+      await logFileHandler({});
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("does not exist")) {
+        throw new Error(`Unexpected error message for missing log: ${e.message}`);
+      }
+    }
+    if (!threw) throw new Error("Expected utils:openLogFile to reject missing log file");
+    if (openedPaths.length !== 0) throw new Error("Missing log triggered shell.openPath!");
+
+    const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+    threw = false;
+    try {
+      await knownHandler({}, "launcherLog");
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openKnownLocation to reject missing log file");
+    if (openedPaths.length !== 0) throw new Error("Missing log triggered shell.openPath via openKnownLocation!");
+
+    // B. Wrong file type: launcher.log is a directory
+    fs.mkdirSync(logFile, { recursive: true });
+    threw = false;
+    try {
+      await logFileHandler({});
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("Expected file")) {
+        throw new Error(`Unexpected error for directory launcher.log: ${e.message}`);
+      }
+    }
+    if (!threw) throw new Error("Expected utils:openLogFile to reject directory target");
+    if (openedPaths.length !== 0) throw new Error("Directory target triggered shell.openPath!");
+    fs.rmSync(logFile, { recursive: true, force: true });
+
+    // C. Wrong file type: logsDir is a regular file
+    if (fs.existsSync(userLogsDir)) fs.rmSync(userLogsDir, { recursive: true, force: true });
+    fs.writeFileSync(userLogsDir, "I am a file, not a directory", "utf-8");
+
+    const logsDirHandler = ipcHandlers.get("utils:openLogsDir")!;
+    threw = false;
+    try {
+      await logsDirHandler({});
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("Expected directory")) {
+        throw new Error(`Unexpected error for file logsDir: ${e.message}`);
+      }
+    }
+    if (!threw) throw new Error("Expected utils:openLogsDir to reject file target");
+    if (openedPaths.length !== 0) throw new Error("File target triggered shell.openPath via openLogsDir!");
+
+    // Cleanup and restore valid directory and file
+    fs.rmSync(userLogsDir, { force: true });
+    fs.mkdirSync(userLogsDir, { recursive: true });
+    fs.writeFileSync(path.join(userLogsDir, "launcher.log"), "restored log session\n", "utf-8");
+  });
+
+  // 17. [Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B
   await runTest("[Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B", async () => {
     ConfigManager.establishSession(originAPortal, {
       token: "secret-token-origin-a-9999",
@@ -1399,24 +1755,52 @@ try {
     serverARedirectStatusToB = 0;
   });
 
-  // 29. [Regression Gate 1] Independent redirect: channel sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
+  // 33. [Regression Gate 1] Local fallback fixture: positive control proves fallback is valid, reachable, and succeeds on non-redirect error
+  await runTest("[Regression Gate 1] Local fallback fixture: positive control proves fallback is valid, reachable, and succeeds on non-redirect error", async () => {
+    ConfigManager.establishSession(originAPortal, { token: "fallback-pos-control-token" });
+    serverAFailChannelWith500 = true;
+    capturedRequests = [];
+    capturedRequestsA = [];
+
+    const stateDir = path.join(gameDir, ".lampas");
+    if (fs.existsSync(stateDir)) fs.rmSync(stateDir, { recursive: true, force: true });
+
+    enableControlledFallbackFixture = true;
+
+    try {
+      const result = await LauncherSync.syncClient(() => {});
+      if (!result || result.success !== true) {
+        throw new Error(`Expected syncClient to succeed via local fallback, got: ${JSON.stringify(result)}`);
+      }
+      if (result.version !== "2.0.0-offline") {
+        throw new Error(`Expected fallback version '2.0.0-offline', got: ${result.version}`);
+      }
+      const stateFile = path.join(gameDir, ".lampas", "installation.json");
+      if (!fs.existsSync(stateFile)) {
+        throw new Error("Installation state was not written by successful fallback sync");
+      }
+      const saved = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+      if (saved.version !== "2.0.0-offline") {
+        throw new Error(`Expected saved installation version '2.0.0-offline', got: ${saved.version}`);
+      }
+      if (capturedRequestsA.length !== 3) {
+        throw new Error(`Expected 3 retry channel requests to origin A, got ${capturedRequestsA.length}`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests reached B during fallback: ${JSON.stringify(capturedRequests)}`);
+      }
+    } finally {
+      serverAFailChannelWith500 = false;
+      if (fs.existsSync(stateDir)) fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  // 34. [Regression Gate 1] Independent redirect: channel sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
   await runTest("[Regression Gate 1] Independent redirect: channel sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present", async () => {
-    // Setup valid local fallback fixture on disk in gameDir
-    fs.mkdirSync(path.join(gameDir, ".lampas"), { recursive: true });
-    fs.writeFileSync(path.join(gameDir, ".lampas", "release.json"), JSON.stringify({
-      pack: "Lampas 2",
-      version: "2.0.0",
-      protocol: 3,
-      minecraft: "26.2",
-      loader: { type: "fabric", version: "0.19.3" },
-      manifestId: "fallback-man",
-      files: [],
-      mods: [],
-    }));
-    fs.writeFileSync(path.join(gameDir, ".lampas", "installation.json"), JSON.stringify({
-      version: "2.0.0",
-      completedAt: new Date().toISOString(),
-    }));
+    const stateDir = path.join(gameDir, ".lampas");
+    if (fs.existsSync(stateDir)) fs.rmSync(stateDir, { recursive: true, force: true });
+
+    enableControlledFallbackFixture = true;
 
     for (const code of [302, 307, 308]) {
       ConfigManager.establishSession(originAPortal, { token: `chan-tok-${code}` });
@@ -1424,68 +1808,108 @@ try {
       capturedRequests = [];
       capturedRequestsA = [];
 
-      let threw = false;
+      let policyErr: any = null;
       try {
         await LauncherSync.syncClient(() => {});
-      } catch {
-        threw = true;
+      } catch (err: any) {
+        policyErr = err;
       }
-      if (!threw) {
+
+      if (!policyErr) {
         throw new Error(`Expected syncClient to fail on channel ${code} redirect despite local fallback`);
       }
-      if (capturedRequestsA.length !== 1) {
-        throw new Error(`Expected 1 channel request at Origin A for ${code}, got ${capturedRequestsA.length}`);
+      if (policyErr.name !== "PortalRedirectPolicyError") {
+        throw new Error(`Expected PortalRedirectPolicyError, got: ${policyErr.name} (${policyErr.message})`);
+      }
+      if (!capturedRequestsA.some((r) => r.url?.startsWith("/api/v1/channels/"))) {
+        throw new Error(`Expected channel request at Origin A for ${code}`);
       }
       if (capturedRequests.length !== 0) {
         throw new Error(`Requests reached Destination B on channel ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+      const stateFile = path.join(gameDir, ".lampas", "installation.json");
+      if (fs.existsSync(stateFile)) {
+        throw new Error(`Installation state was mutated during rejected channel ${code} redirect!`);
       }
     }
     serverARedirectChannelToB = 0;
   });
 
-  // 30. [Regression Gate 1] Independent redirect: release sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
+  // 35. [Regression Gate 1] Independent redirect: release sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
   await runTest("[Regression Gate 1] Independent redirect: release sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present", async () => {
+    const stateDir = path.join(gameDir, ".lampas");
+    if (fs.existsSync(stateDir)) fs.rmSync(stateDir, { recursive: true, force: true });
+
+    enableControlledFallbackFixture = true;
+
     for (const code of [302, 307, 308]) {
       ConfigManager.establishSession(originAPortal, { token: `rel-tok-${code}` });
       serverARedirectReleaseToB = code;
       capturedRequests = [];
       capturedRequestsA = [];
 
-      let threw = false;
+      let policyErr: any = null;
       try {
         await LauncherSync.syncClient(() => {});
-      } catch {
-        threw = true;
+      } catch (err: any) {
+        policyErr = err;
       }
-      if (!threw) {
+
+      if (!policyErr) {
         throw new Error(`Expected syncClient to fail on release ${code} redirect despite local fallback`);
+      }
+      if (policyErr.name !== "PortalRedirectPolicyError") {
+        throw new Error(`Expected PortalRedirectPolicyError, got: ${policyErr.name} (${policyErr.message})`);
+      }
+      if (!capturedRequestsA.some((r) => r.url?.startsWith("/api/v1/releases/2.0.0") && !r.url?.includes("/client-manifest"))) {
+        throw new Error(`Expected release request at Origin A for ${code}`);
       }
       if (capturedRequests.length !== 0) {
         throw new Error(`Requests reached Destination B on release ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+      const stateFile = path.join(gameDir, ".lampas", "installation.json");
+      if (fs.existsSync(stateFile)) {
+        throw new Error(`Installation state was mutated during rejected release ${code} redirect!`);
       }
     }
     serverARedirectReleaseToB = 0;
   });
 
-  // 31. [Regression Gate 1] Independent redirect: manifest sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
+  // 36. [Regression Gate 1] Independent redirect: manifest sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
   await runTest("[Regression Gate 1] Independent redirect: manifest sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present", async () => {
+    const stateDir = path.join(gameDir, ".lampas");
+    if (fs.existsSync(stateDir)) fs.rmSync(stateDir, { recursive: true, force: true });
+
+    enableControlledFallbackFixture = true;
+
     for (const code of [302, 307, 308]) {
       ConfigManager.establishSession(originAPortal, { token: `man-tok-${code}` });
       serverARedirectManifestToB = code;
       capturedRequests = [];
       capturedRequestsA = [];
 
-      let threw = false;
+      let policyErr: any = null;
       try {
         await LauncherSync.syncClient(() => {});
-      } catch {
-        threw = true;
+      } catch (err: any) {
+        policyErr = err;
       }
-      if (!threw) {
+
+      if (!policyErr) {
         throw new Error(`Expected syncClient to fail on manifest ${code} redirect despite local fallback`);
+      }
+      if (policyErr.name !== "PortalRedirectPolicyError") {
+        throw new Error(`Expected PortalRedirectPolicyError, got: ${policyErr.name} (${policyErr.message})`);
+      }
+      if (!capturedRequestsA.some((r) => r.url?.includes("/client-manifest"))) {
+        throw new Error(`Expected manifest request at Origin A for ${code}`);
       }
       if (capturedRequests.length !== 0) {
         throw new Error(`Requests reached Destination B on manifest ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+      const stateFile = path.join(gameDir, ".lampas", "installation.json");
+      if (fs.existsSync(stateFile)) {
+        throw new Error(`Installation state was mutated during rejected manifest ${code} redirect!`);
       }
     }
     serverARedirectManifestToB = 0;

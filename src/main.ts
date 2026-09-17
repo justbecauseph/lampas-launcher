@@ -233,11 +233,21 @@ app.whenReady().then(async () => {
         break;
       }
       case "launcherLog": {
+        const rawUserData = path.resolve(getUserDataDir());
+        if (!fs.existsSync(rawUserData)) {
+          fs.mkdirSync(rawUserData, { recursive: true });
+        }
+        canonicalAuthorizedRoot = fs.realpathSync(rawUserData);
+
         const rawLogsDir = path.resolve(LauncherLogger.getLogsDir());
         if (!fs.existsSync(rawLogsDir)) {
           throw new Error("Launcher log file does not exist yet.");
         }
-        canonicalAuthorizedRoot = fs.realpathSync(rawLogsDir);
+        const canonicalLogsDir = fs.realpathSync(rawLogsDir);
+        if (!isPathWithinOrEqual(canonicalLogsDir, canonicalAuthorizedRoot)) {
+          throw new Error(`Refusing to authorize logs directory escaping userData: '${canonicalLogsDir}' is outside root '${canonicalAuthorizedRoot}'`);
+        }
+
         targetPath = path.resolve(LauncherLogger.getLogPath());
         expectedType = "file";
         missingErrorMessage = "Launcher log file does not exist yet.";

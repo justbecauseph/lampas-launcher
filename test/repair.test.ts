@@ -25,7 +25,7 @@ let bootstrapCalls: Array<{
 let javaCalls: Array<{ gameDir: string; mode?: string }> = [];
 
 const { LauncherLogger } = await import("../src/logger");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { JavaRuntimeManager } = await import("../src/java-runtime");
@@ -59,16 +59,19 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.resetForTesting();
   bootstrapCalls = [];
   javaCalls = [];
   ConfigManager.set({
-    token: "mock-token",
     portalUrl: "http://localhost:3000",
     selectedChannel: "stable",
     gameDir,
     customClientMods: [],
     disabledClientMods: [],
+  });
+  ConfigManager.establishSession("http://localhost:3000", {
+    token: "mock-token",
   });
   if (fs.existsSync(gameDir)) {
     fs.rmSync(gameDir, { recursive: true, force: true });
@@ -77,6 +80,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  PortalPolicy.resetForTesting();
   bootstrapSpy.mockRestore();
   javaSpy.mockRestore();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {

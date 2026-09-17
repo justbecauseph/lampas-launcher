@@ -136,8 +136,9 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
     expect(jsonStart).toBeGreaterThanOrEqual(0);
     const parsed = JSON.parse(stdout.slice(jsonStart + sentinel.length).trim().split("\n")[0]);
 
-    expect(parsed.totalPassed).toBe(33);
-    expect(parsed.tests.length).toBe(33);
+    expect(parsed.totalPassed).toBe(38);
+    expect(parsed.totalSkipped).toBe(0);
+    expect(parsed.tests.length).toBe(38);
     for (const t of parsed.tests) {
       expect(t.passed).toBe(true);
     }

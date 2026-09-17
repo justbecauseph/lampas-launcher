@@ -33,7 +33,7 @@ const spawnSpy = spyOn(childProcess, "spawn").mockImplementation(() => {
 });
 
 const { LauncherLogger } = await import("../src/logger");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 const { GameRunner } = await import("../src/game-runner");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
@@ -46,7 +46,7 @@ const authSpy = spyOn(LauncherAuth, "refreshSession").mockImplementation(async (
     id: "user-1",
     name: "Player",
     minecraftUsername: "Player",
-    minecraftUuid: "11111111-2222-3333-4444-555555555555",
+    minecraftUuid: "00000000-0000-0000-0000-000000000001",
     isAdmin: false,
     isTech: false,
     roles: [],
@@ -65,19 +65,23 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
   beforeEach(() => {
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.mkdirSync(gameDir, { recursive: true });
+    PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
     ConfigManager.resetForTesting();
     GameRunner.resetForTesting();
     ConfigManager.set({
-      token: "mock-token",
       portalUrl: "http://localhost:3000",
       selectedChannel: "stable",
       gameDir,
       customClientMods: [],
       disabledClientMods: [],
     });
+    ConfigManager.establishSession("http://localhost:3000", {
+      token: "mock-token",
+    });
   });
 
   afterAll(() => {
+    PortalPolicy.resetForTesting();
     authSpy.mockRestore();
     spawnSpy.mockRestore();
     javaSpy.mockRestore();
@@ -159,7 +163,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     let completeEmitted = false;
     try {
