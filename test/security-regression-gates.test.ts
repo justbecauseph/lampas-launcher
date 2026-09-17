@@ -232,11 +232,13 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     expect(() => IpcBoundary.validateIpcSender({} as any)).toThrow(IpcSecurityError);
 
     // 2. Setup mock main window
+    const mockMainFrame = { parent: null, url: "http://localhost:5173", isDestroyed: () => false };
     const mockWebContents = {
       id: 1,
       url: "http://localhost:5173",
       getURL: () => "http://localhost:5173",
       isDestroyed: () => false,
+      mainFrame: mockMainFrame,
       on: () => {},
     };
     const mockWin = {
@@ -271,27 +273,30 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     ).toThrow("child frames and subdocuments are not permitted");
 
     // 6. Blank / uninitialized document rejected
+    mockMainFrame.url = "about:blank";
     expect(() =>
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
-        senderFrame: { parent: null, url: "about:blank", isDestroyed: () => false },
+        senderFrame: mockMainFrame,
       } as any)
     ).toThrow("uninitialized or blank document");
 
     // 7. Unapproved document URL / origin rejected
+    mockMainFrame.url = "https://attacker.example.com";
     expect(() =>
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
-        senderFrame: { parent: null, url: "https://attacker.example.com", isDestroyed: () => false },
+        senderFrame: mockMainFrame,
       } as any)
     ).toThrow("not an approved application document");
+    mockMainFrame.url = "http://localhost:5173";
 
     // 8. In-window navigation desync rejected
     mockWebContents.getURL = () => "http://localhost:5173/navigated";
     expect(() =>
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
-        senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+        senderFrame: mockMainFrame,
       } as any)
     ).toThrow("document has navigated away from active frame URL");
     mockWebContents.getURL = () => "http://localhost:5173";
@@ -299,7 +304,7 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     // 9. Valid top-level frame accepted
     const valid = IpcBoundary.validateIpcSender({
       sender: mockWebContents,
-      senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+      senderFrame: mockMainFrame,
     } as any);
     expect(valid.sender).toBe(mockWebContents as any);
     expect(valid.frame.parent).toBeNull();
@@ -320,13 +325,13 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     expect(() => validateConfigSet([])).toThrow(IpcValidationError);
 
     // 2. Unapproved runtime fields rejected fail-closed (no blacklist leakage)
-    expect(() => validateConfigSet({ gameDir: "C:\\forbidden" })).toThrow("Unknown or unauthorized settings field: 'gameDir'");
-    expect(() => validateConfigSet({ gameDirConfigured: true })).toThrow("Unknown or unauthorized settings field: 'gameDirConfigured'");
-    expect(() => validateConfigSet({ token: "leaked_token" })).toThrow("Unknown or unauthorized settings field: 'token'");
-    expect(() => validateConfigSet({ refreshToken: "leaked_refresh" })).toThrow("Unknown or unauthorized settings field: 'refreshToken'");
-    expect(() => validateConfigSet({ minecraftAccessToken: "leaked_mc" })).toThrow("Unknown or unauthorized settings field: 'minecraftAccessToken'");
-    expect(() => validateConfigSet({ sessionPortalUrl: "https://evil.com" })).toThrow("Unknown or unauthorized settings field: 'sessionPortalUrl'");
-    expect(() => validateConfigSet({ unexpectedKey: "any" })).toThrow("Unknown or unauthorized settings field: 'unexpectedKey'");
+    expect(() => validateConfigSet({ gameDir: "C:\\forbidden" })).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ gameDirConfigured: true })).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ token: "leaked_token" })).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ refreshToken: "leaked_refresh" })).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ minecraftAccessToken: "leaked_mc" })).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ sessionPortalUrl: "https://evil.com" })).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ unexpectedKey: "any" })).toThrow("Unknown or unauthorized settings field");
 
     // 3. Schema types enforced
     expect(() => validateConfigSet({ portalUrl: "" })).toThrow("portalUrl must be a non-empty string");

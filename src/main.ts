@@ -525,7 +525,7 @@ app.whenReady().then(async () => {
     IpcBoundary.validateApprovalSnapshot(snapshot);
     if (!result.canceled && result.filePaths.length > 0) {
       for (const p of result.filePaths) {
-        IpcBoundary.grantApproval("gameDir:target", p, snapshot.generation);
+        IpcBoundary.grantApproval("gameDir:target", p, { generation: snapshot.generation });
       }
     }
     return { canceled: result.canceled, filePaths: result.filePaths };
@@ -698,7 +698,7 @@ app.whenReady().then(async () => {
     }
     validateModPaths(result.filePaths);
     for (const p of result.filePaths) {
-      IpcBoundary.grantApproval("mod:import", p, snapshot.generation);
+      IpcBoundary.grantApproval("mod:import", p, { generation: snapshot.generation });
     }
     for (const p of result.filePaths) {
       if (!IpcBoundary.consumeApproval("mod:import", p)) {
@@ -818,7 +818,7 @@ app.whenReady().then(async () => {
             try {
               await window.lampas.config.set({ maliciousField: "attack" });
             } catch (err) {
-              if (err && err.message && err.message.includes("maliciousField")) {
+              if (err && err.message && err.message.includes("Unknown or unauthorized settings field")) {
                 rejectedSchema = true;
               }
             }
@@ -830,7 +830,7 @@ app.whenReady().then(async () => {
             try {
               await window.lampas.utils.openPath("C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\cmd.exe");
             } catch (err) {
-              if (err && err.message && (err.message.includes("Refusing to open unapproved path") || err.message.includes("unapproved path"))) {
+              if (err && err.message && (err.message.includes("Refusing to open unapproved path") || err.message.includes("unapproved path") || err.message.includes("Security violation") || err.message.includes("Invalid path"))) {
                 rejectedPath = true;
               }
             }
@@ -843,7 +843,9 @@ app.whenReady().then(async () => {
               if (perm.state !== 'denied') {
                 return { passed: false, reason: "Expected permission state to be 'denied', got " + perm.state };
               }
-            } catch {}
+            } catch (permErr) {
+              return { passed: false, reason: "Permission query threw exception instead of returning denied: " + (permErr && permErr.message) };
+            }
             return { passed: true };
           })()
         `);

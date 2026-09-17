@@ -2403,7 +2403,7 @@ try {
 
     // 2. Native approval registry: target normalization and TTL
     const targetDir = path.join(testRoot, "custom-game-dir");
-    IpcBoundary.grantApproval("gameDir:target", targetDir, 100);
+    IpcBoundary.grantApproval("gameDir:target", targetDir, { ttlMs: 100 });
     if (!IpcBoundary.hasApproval("gameDir:target", targetDir)) {
       throw new Error("Approval should exist immediately");
     }
@@ -2481,13 +2481,17 @@ try {
 
   // 47. [Phase 2 Gate] Complete Java-argument privilege classification across full taxonomy
   await runTest("[Phase 2 Gate] Complete Java-argument privilege classification across full taxonomy", async () => {
-    // 1. Launch target override detection across complete taxonomy
+    // 1. Launch target override detection across complete taxonomy (positional, -jar, @args, --module, --source)
     const targetOverrideCases = [
       "-jar evil.jar",
       "com.evil.MainClass",
       "Script.java",
+      "--source 17 Script.java",
+      "--source=17 Script.java",
       "--module=evil/com.evil.Main",
       "-m=evil/com.evil.Main",
+      "--module evil/com.evil.Main",
+      "-m evil/com.evil.Main",
       "@/path/to/args.txt",
       "@C:\\evil\\args.txt",
     ];
@@ -2499,27 +2503,51 @@ try {
       }
     }
 
-    // 2. Sensitive / privileged options detection
+    // 2. Sensitive / privileged options detection: separate-token & equals forms receive equivalent decisions
     const privilegedCases = [
+      // Equals forms
       "--upgrade-module-path=/evil/mods",
       "--patch-module=java.base=/evil/patch",
       "--add-reads=java.base=ALL-UNNAMED",
       "--add-exports=java.base/sun.security.x509=ALL-UNNAMED",
       "--add-opens=java.base/java.lang=ALL-UNNAMED",
+      "--class-path=/evil/classes",
+      "--module-path=/evil/modules",
+      // Separate-token forms
+      "--upgrade-module-path /evil/mods",
+      "--patch-module java.base=/evil/patch",
+      "--add-reads java.base=ALL-UNNAMED",
+      "--add-exports java.base/sun.security.x509=ALL-UNNAMED",
+      "--add-opens java.base/java.lang=ALL-UNNAMED",
+      "-cp /evil/classes",
+      "--class-path /evil/classes",
+      "-classpath /evil/classes",
+      "-p /evil/modules",
+      "--module-path /evil/modules",
+      // Agents, native hooks, debuggers
       "-javaagent:C:\\agent.jar",
       "-agentlib:jdwp=transport=dt_socket",
       "-agentpath:/lib/libevil.so",
-      "-cp /evil/classes",
-      "--class-path=/evil/classes",
-      "-classpath /evil/classes",
-      "-p /evil/modules",
-      "--module-path=/evil/modules",
       "-Xbootclasspath:/evil/boot",
       '-XX:OnError="cmd.exe /c calc.exe"',
       '-XX:OnOutOfMemoryError="calc.exe"',
       '-XX:ErrorFile="C:\\evil\\dump.log"',
-      "-Djava.security.manager=default",
+      // Mod discovery and launch authority system properties
+      "-Dfabric.addMods=/evil/mod.jar",
+      "-Dfabric.modsFolder=/custom/mods",
+      "-Dquilt.addMods=/evil/mod.jar",
+      "-Dforge.modsFolder=/custom/mods",
+      "-Dneoforge.modsFolder=/custom/mods",
+      "-Djava.library.path=/evil/lib",
+      "-Dorg.lwjgl.librarypath=/evil/lib",
+      "-Dminecraft.applet.TargetDirectory=/evil",
       "-Djava.system.class.loader=com.evil.Loader",
+      "-Djava.security.manager=default",
+      "-Dcom.sun.management.jmxremote",
+      "-Djdk.module.main=com.evil.Main",
+      // Unknown properties require native approval
+      "-Dcustom.feature.flag=true",
+      "-Dmy.unknown.opt=123",
     ];
     for (const raw of privilegedCases) {
       const tokens = parseJavaArgs(raw);
@@ -2530,7 +2558,7 @@ try {
     }
 
     // 3. Reviewed ordinary tuning options permitted without native approval
-    const ordinaryTuning = "-Xmx8G -Xms2G -XX:+UseG1GC -XX:+UseZGC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -Dfile.encoding=UTF-8 -Duser.language=en";
+    const ordinaryTuning = "-Xmx8G -Xms2G -XX:+UseG1GC -XX:+UseZGC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -Duser.language=en -Duser.country=US -Djava.awt.headless=true -Dorg.lwjgl.util.Debug=false -Dfabric.disableTelemetry=true";
     const ordinaryTokens = parseJavaArgs(ordinaryTuning);
     const ordinaryRes = classifyJavaArgs(ordinaryTokens);
     if (ordinaryRes.hasLaunchTargetOverride || ordinaryRes.isPrivileged) {
@@ -2539,7 +2567,9 @@ try {
 
     // 4. Actual settings handler (config:set) rejects launch target override fail-closed
     const configHandler = ipcHandlers.get("config:set")!;
-    for (const overrideArg of ["-jar evil.jar", "com.evil.Main", "--module=evil", "@args.txt"]) {
+    const getHandler = ipcHandlers.get("config:get")!;
+    for (const overrideArg of ["-jar evil.jar", "com.evil.Main", "--module=evil", "@args.txt", "--source 17 Script.java"]) {
+      const beforeState = (await getHandler({})).javaArgs;
       let threw = false;
       try {
         await configHandler({}, { javaArgs: overrideArg });
@@ -2550,13 +2580,35 @@ try {
         }
       }
       if (!threw) throw new Error(`Expected config:set to reject launch target override: '${overrideArg}'`);
+      const afterState = (await getHandler({})).javaArgs;
+      if (afterState !== beforeState) {
+        throw new Error(`Launch target override attempt corrupted stored javaArgs: ${afterState} !== ${beforeState}`);
+      }
     }
 
-    // 5. Actual settings handler requires confirmation for privileged options
+    // 5. Actual settings handler: ordinary tuning permitted without dialog confirmation
+    const win = MockBrowserWindow.allWindows[0];
+    const event = { sender: win.webContents, senderFrame: win.webContents.mainFrame };
+    let dialogCalled = false;
+    mockDialog.showMessageBox.mockImplementationOnce(async () => {
+      dialogCalled = true;
+      return { response: 0 };
+    });
+    const ordinaryUpdate = await configHandler(event as any, { javaArgs: "-Xmx4G -Dfile.encoding=UTF-8" });
+    if (dialogCalled) {
+      throw new Error("Expected ordinary tuning (-Xmx4G -Dfile.encoding=UTF-8) to succeed without native dialog prompt");
+    }
+    if (ordinaryUpdate.javaArgs !== "-Xmx4G -Dfile.encoding=UTF-8") {
+      throw new Error(`Failed to update ordinary javaArgs: ${ordinaryUpdate.javaArgs}`);
+    }
+
+    // 6. Actual settings handler requires confirmation for sensitive / unknown properties; cancellation leaves settings unchanged
+    const preCancelConfig = (await getHandler({})).javaArgs;
+    mockDialog.showMessageBox.mockReset();
     mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
     let cancelThrew = false;
     try {
-      await configHandler({}, { javaArgs: "-javaagent:C:\\agent.jar" });
+      await configHandler(event as any, { javaArgs: "-Dcustom.unknown.property=123" });
     } catch (e: any) {
       cancelThrew = true;
       if (!e.message.includes("Privileged Java arguments rejected by user.")) {
@@ -2564,21 +2616,26 @@ try {
       }
     }
     if (!cancelThrew) throw new Error("Expected cancelled privileged option dialog to reject config:set");
+    const postCancelConfig = (await getHandler({})).javaArgs;
+    if (postCancelConfig !== preCancelConfig) {
+      throw new Error(`Cancelled dialog must leave settings unchanged! Got '${postCancelConfig}', expected '${preCancelConfig}'`);
+    }
 
     // When confirmed, privileged option succeeds
+    mockDialog.showMessageBox.mockReset();
     mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 0 })); // Confirm
-    const confirmedRes = await configHandler({}, { javaArgs: "-javaagent:C:\\agent.jar" });
+    const confirmedRes = await configHandler(event as any, { javaArgs: "-javaagent:C:\\agent.jar" });
     if (confirmedRes.javaArgs !== "-javaagent:C:\\agent.jar") {
       throw new Error(`Expected confirmed javaArgs to update, got: ${confirmedRes.javaArgs}`);
     }
 
-    // 6. Process argument sink (buildLaunchArguments) validation
+    // 7. Process argument sink (buildLaunchArguments) validation
     const dummyRuntime = {
       minecraft: "26.2",
       loader: { type: "fabric", version: "0.19.3" },
       launch: {},
     };
-    // Benign custom arguments are included
+    // Benign custom arguments are included in process argument sink
     const benignSinkArgs = buildLaunchArguments({
       gameDir,
       ramGb: 4,
@@ -2588,16 +2645,16 @@ try {
       uuid: "00000000000000000000000000000001",
       token: "0",
       userType: "legacy",
-      customJavaArgs: ["-Xmx4G", "-XX:+UseG1GC"],
+      customJavaArgs: ["-Xmx4G", "-XX:+UseG1GC", "-Dfile.encoding=UTF-8"],
       mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
       classpathString: "libraries.jar",
     });
-    if (!benignSinkArgs.includes("-Xmx4G") || !benignSinkArgs.includes("-XX:+UseG1GC")) {
+    if (!benignSinkArgs.includes("-Xmx4G") || !benignSinkArgs.includes("-XX:+UseG1GC") || !benignSinkArgs.includes("-Dfile.encoding=UTF-8")) {
       throw new Error("Expected buildLaunchArguments to include benign custom tuning");
     }
 
     // Process argument sink rejects launch target overrides fail-closed
-    for (const badArg of [["-jar", "evil.jar"], ["com.evil.Main"], ["--module=foo"]]) {
+    for (const badArg of [["-jar", "evil.jar"], ["com.evil.Main"], ["--module=foo"], ["--source", "17", "App.java"]]) {
       let sinkThrew = false;
       try {
         buildLaunchArguments({
@@ -2705,6 +2762,68 @@ try {
         }
       }
       if (!foreignFileThrew) throw new Error("Expected foreign file URL authority to be rejected");
+      win.webContents.url = "http://localhost:5173";
+
+      // 5. Missing or destroyed mainFrame fails closed
+      const savedMainFrame = win.webContents.mainFrame;
+      try {
+        (win.webContents as any).mainFrame = null;
+        let missingMainFrameThrew = false;
+        try {
+          IpcBoundary.validateIpcSender({
+            sender: win.webContents,
+            senderFrame: savedMainFrame,
+          } as any);
+        } catch (e: any) {
+          missingMainFrameThrew = true;
+          if (!e.message.includes("missing or destroyed main frame")) {
+            throw new Error(`Unexpected missing mainFrame error: ${e.message}`);
+          }
+        }
+        if (!missingMainFrameThrew) throw new Error("Expected missing mainFrame to fail closed");
+      } finally {
+        (win.webContents as any).mainFrame = savedMainFrame;
+      }
+
+      // 6. Destroyed sender frame fails closed
+      const destroyedFrame = {
+        ...savedMainFrame,
+        parent: null,
+        url: "http://localhost:5173",
+        isDestroyed: () => true,
+      };
+      let destroyedFrameThrew = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: destroyedFrame,
+        } as any);
+      } catch (e: any) {
+        destroyedFrameThrew = true;
+        if (!e.message.includes("destroyed") && !e.message.includes("detached") && !e.message.includes("Security violation")) {
+          throw new Error(`Unexpected destroyed frame error: ${e.message}`);
+        }
+      }
+      if (!destroyedFrameThrew) throw new Error("Expected destroyed sender frame to fail closed");
+
+      // 7. Destroyed WebContents fails closed
+      const origIsDestroyed = win.webContents.isDestroyed;
+      win.webContents.isDestroyed = () => true;
+      let destroyedWebContentsThrew = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: savedMainFrame,
+        } as any);
+      } catch (e: any) {
+        destroyedWebContentsThrew = true;
+        if (!e.message.includes("webContents is unavailable or destroyed") && !e.message.includes("Security violation")) {
+          throw new Error(`Unexpected destroyed webContents error: ${e.message}`);
+        }
+      } finally {
+        win.webContents.isDestroyed = origIsDestroyed;
+      }
+      if (!destroyedWebContentsThrew) throw new Error("Expected destroyed WebContents to fail closed");
     } finally {
       win.webContents.url = "http://localhost:5173";
       if (originalPolicy) {
@@ -2721,7 +2840,72 @@ try {
       senderFrame: win.webContents.mainFrame,
     };
 
-    // 1. Snapshot revalidation: document generation invalidation while awaiting confirmation
+    // 1. Generation equality checks: below, at, and above 50
+    const targetA = path.join(testRoot, "gen-target-a");
+    const currentGen = IpcBoundary.getDocumentGeneration();
+
+    // A. Current generation succeeds
+    IpcBoundary.grantApproval("gameDir:target", targetA, { generation: currentGen });
+    if (!IpcBoundary.hasApproval("gameDir:target", targetA)) {
+      throw new Error("Expected approval with exact matching generation to succeed");
+    }
+    IpcBoundary.consumeApproval("gameDir:target", targetA);
+
+    // B. Stale generation (below current) rejects fail-closed
+    let staleThrew = false;
+    try {
+      IpcBoundary.grantApproval("gameDir:target", targetA, { generation: currentGen - 1 });
+    } catch (e: any) {
+      staleThrew = true;
+      if (!e.message.includes("Approval generation mismatch")) {
+        throw new Error(`Unexpected stale generation error: ${e.message}`);
+      }
+    }
+    if (!staleThrew) throw new Error("Expected stale generation (below current) to reject");
+
+    // C. Future generation (above current) rejects fail-closed
+    let futureThrew = false;
+    try {
+      IpcBoundary.grantApproval("gameDir:target", targetA, { generation: currentGen + 1 });
+    } catch (e: any) {
+      futureThrew = true;
+      if (!e.message.includes("Approval generation mismatch")) {
+        throw new Error(`Unexpected future generation error: ${e.message}`);
+      }
+    }
+    if (!futureThrew) throw new Error("Expected future generation (above current) to reject");
+
+    // D. Cover generations explicitly below 50, at 50, and above 50
+    for (const testGen of [1, 25, 49, 50, 51, 100]) {
+      // If testGen !== currentGen, must throw
+      if (testGen !== currentGen) {
+        let threwGen = false;
+        try {
+          IpcBoundary.grantApproval("gameDir:target", targetA, { generation: testGen });
+        } catch {
+          threwGen = true;
+        }
+        if (!threwGen) throw new Error(`Expected generation ${testGen} !== ${currentGen} to throw`);
+      }
+    }
+
+    // E. Default 60s lifetime independent of generation number
+    const targetB = path.join(testRoot, "gen-target-b");
+    IpcBoundary.grantApproval("gameDir:target", targetB, { generation: currentGen });
+    if (!IpcBoundary.hasApproval("gameDir:target", targetB)) {
+      throw new Error("Approval should exist with default 60s lifetime");
+    }
+    IpcBoundary.consumeApproval("gameDir:target", targetB);
+
+    // F. Explicit TTL expiration
+    const expTarget = path.join(testRoot, "exp-target");
+    IpcBoundary.grantApproval("gameDir:target", expTarget, { generation: currentGen, ttlMs: 50 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    if (IpcBoundary.hasApproval("gameDir:target", expTarget)) {
+      throw new Error("Expired approval was not invalidated");
+    }
+
+    // 2. Snapshot revalidation: document generation invalidation while awaiting confirmation
     const snapshot = IpcBoundary.createApprovalSnapshot(event as any);
     IpcBoundary.onNavigation(); // Navigation occurs
     let navThrew = false;
@@ -2735,28 +2919,97 @@ try {
     }
     if (!navThrew) throw new Error("Expected snapshot revalidation to fail on document generation change");
 
-    // 2. Cancellation of confirmation dialog
-    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
-    const cancelResult = await IpcBoundary.confirmPrivilegedOperation(event as any, {
-      title: "Test Confirm",
-      message: "Confirm this action?",
+    // 3. Deferred native dialogs on actual handlers: Navigation during dialog in gameDir:browse
+    const browseHandler = ipcHandlers.get("gameDir:browse")!;
+    let resolveDialog!: (val: { canceled: boolean; filePaths: string[] }) => void;
+    const dialogPromise = new Promise<{ canceled: boolean; filePaths: string[] }>((resolve) => {
+      resolveDialog = resolve;
     });
-    if (cancelResult !== false) {
-      throw new Error("Expected confirmPrivilegedOperation to return false on user cancellation");
+    mockDialog.showOpenDialog.mockImplementationOnce(() => dialogPromise);
+
+    const browsePromise = browseHandler(event as any);
+    await new Promise((r) => setTimeout(r, 10));
+    // While dialog is awaiting, navigation occurs:
+    IpcBoundary.onNavigation();
+    const testDirChoice = path.join(testRoot, "nav-during-dialog");
+    resolveDialog({ canceled: false, filePaths: [testDirChoice] });
+
+    let browseNavThrew = false;
+    try {
+      await browsePromise;
+    } catch (e: any) {
+      browseNavThrew = true;
+      if (!e.message.includes("Document generation changed") && !e.message.includes("Security violation")) {
+        throw new Error(`Unexpected deferred dialog navigation error: ${e.message}`);
+      }
+    }
+    if (!browseNavThrew) throw new Error("Expected navigation during deferred dialog to fail closed");
+    if (IpcBoundary.hasApproval("gameDir:target", testDirChoice)) {
+      throw new Error("Approval was granted despite navigation during dialog!");
     }
 
-    // 3. Missing native dialog support fails closed
+    // 4. Deferred native dialogs on actual handlers: Conflicting operation during dialog in config:set
+    const configHandler = ipcHandlers.get("config:set")!;
+    const getHandler = ipcHandlers.get("config:get")!;
+    const preConflictJavaArgs = (await getHandler({})).javaArgs;
+    let resolveMsgBox!: (val: { response: number }) => void;
+    const msgBoxPromise = new Promise<{ response: number }>((resolve) => {
+      resolveMsgBox = resolve;
+    });
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(() => msgBoxPromise);
+
+    const configPromise = configHandler(event as any, { javaArgs: "-Dcustom.deferred.flag=1" });
+    await new Promise((r) => setTimeout(r, 10));
+    // While dialog is awaiting, conflicting operation starts:
+    const activeSync = OperationCoordinator.acquire("sync", "Background modpack synchronization active");
+    resolveMsgBox({ response: 0 }); // User clicked confirm, but background operation is active
+
+    let conflictOpThrew = false;
+    try {
+      await configPromise;
+    } catch (e: any) {
+      conflictOpThrew = true;
+      if (!e.message.includes("is currently in progress")) {
+        throw new Error(`Unexpected conflict op error: ${e.message}`);
+      }
+    } finally {
+      activeSync.release();
+    }
+    if (!conflictOpThrew) throw new Error("Expected conflicting operation during dialog to reject config:set");
+    const postConflictJavaArgs = (await getHandler({})).javaArgs;
+    if (postConflictJavaArgs !== preConflictJavaArgs) {
+      throw new Error("Conflicting operation during dialog modified config!");
+    }
+
+    // 5. Deferred native dialogs on actual handlers: Cancellation of confirmation dialog leaves settings unchanged
+    const preCancelJavaArgs = (await getHandler({})).javaArgs;
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
+    let cancelThrew = false;
+    try {
+      await configHandler(event as any, { javaArgs: "-Dcustom.cancel.flag=2" });
+    } catch (e: any) {
+      cancelThrew = true;
+      if (!e.message.includes("Privileged Java arguments rejected by user.")) {
+        throw new Error(`Unexpected cancellation error: ${e.message}`);
+      }
+    }
+    if (!cancelThrew) throw new Error("Expected cancelled privileged option dialog to reject config:set");
+    const postCancelJavaArgs = (await getHandler({})).javaArgs;
+    if (postCancelJavaArgs !== preCancelJavaArgs) {
+      throw new Error("Cancelled dialog must leave config unchanged!");
+    }
+
+    // 6. Deferred native dialogs on actual handlers: Missing native dialog service fails closed
     const originalMessageBox = mockDialog.showMessageBox;
     delete (mockDialog as any).showMessageBox;
     let missingDialogThrew = false;
     try {
-      await IpcBoundary.confirmPrivilegedOperation(event as any, {
-        title: "Test Confirm",
-        message: "Confirm action?",
-      });
+      await configHandler(event as any, { javaArgs: "-Dcustom.missing.flag=3" });
     } catch (e: any) {
       missingDialogThrew = true;
-      if (!e.message.includes("Native dialog service unavailable; privileged action denied fail-closed.")) {
+      if (!e.message.includes("Native dialog service unavailable") && !e.message.includes("Security violation")) {
         throw new Error(`Unexpected missing dialog error: ${e.message}`);
       }
     } finally {
@@ -2764,31 +3017,23 @@ try {
     }
     if (!missingDialogThrew) throw new Error("Expected missing dialog service to fail closed");
 
-    // 4. Operation coordinate barrier: operation state change during dialog blocks mutation
-    OperationCoordinator.assertCanMutate("test operation");
-    const activeOp = OperationCoordinator.acquire("sync", "Modpack synchronization active");
-    let conflictThrew = false;
-    try {
-      OperationCoordinator.assertCanMutate("configure game directory");
-    } catch (e: any) {
-      conflictThrew = true;
-      if (!e.message.includes("is currently in progress")) {
-        throw new Error(`Unexpected operation conflict error: ${e.message}`);
-      }
-    } finally {
-      activeOp.release();
+    // 7. Deferred native dialogs on actual handlers: Confirmed unchanged controls succeeds
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 0 }));
+    const validConfirmed = await configHandler(event as any, { javaArgs: "-Dcustom.confirmed.flag=4" });
+    if (validConfirmed.javaArgs !== "-Dcustom.confirmed.flag=4") {
+      throw new Error(`Failed to apply confirmed config: ${validConfirmed.javaArgs}`);
     }
-    if (!conflictThrew) throw new Error("Expected OperationCoordinator to reject mutation during conflicting operation");
 
-    // 5. Single-use consumption of granted approval
-    const testTarget = path.join(testRoot, "single-use-target");
-    IpcBoundary.grantApproval("gameDir:target", testTarget);
-    const firstConsume = IpcBoundary.consumeApproval("gameDir:target", testTarget);
-    const secondConsume = IpcBoundary.consumeApproval("gameDir:target", testTarget);
+    // 8. Single-use consumption of granted approval
+    const singleUseTarget = path.join(testRoot, "single-use-target");
+    IpcBoundary.grantApproval("gameDir:target", singleUseTarget);
+    const firstConsume = IpcBoundary.consumeApproval("gameDir:target", singleUseTarget);
+    const secondConsume = IpcBoundary.consumeApproval("gameDir:target", singleUseTarget);
     if (!firstConsume) throw new Error("Expected first consumeApproval to succeed");
     if (secondConsume) throw new Error("Expected second consumeApproval to fail (single-use)");
 
-    // 6. Platform-correct path normalization
+    // 9. Platform-correct path normalization
     if (process.platform === "win32") {
       const p1 = "C:\\Games\\Minecraft\\Data";
       const p2 = "c:\\games\\minecraft\\data";
@@ -2803,7 +3048,7 @@ try {
       }
     }
 
-    // 7. Intended TTL constant verification (60 seconds)
+    // 10. Intended TTL constant verification (60 seconds)
     if (APPROVAL_TTL_MS !== 60_000) {
       throw new Error(`Expected APPROVAL_TTL_MS to be 60000ms (60s), got ${APPROVAL_TTL_MS}`);
     }
@@ -2928,11 +3173,60 @@ try {
       }
 
       const launchCall = interceptedProcesses[interceptedProcesses.length - 1];
-      if (!launchCall.args.includes("Player") && !launchCall.args.includes("--username")) {
-        throw new Error(`Expected launch arguments to include consolidated player identity: ${JSON.stringify(launchCall.args)}`);
+      const args = launchCall.args;
+      const getFlagVal = (flag: string, argList: string[] = args) => {
+        const idx = argList.indexOf(flag);
+        if (idx === -1 || idx + 1 >= argList.length) return null;
+        return argList[idx + 1];
+      };
+
+      // Assert exact argument/value pairs
+      if (getFlagVal("--username") !== "Player") {
+        throw new Error(`Expected exact pair --username Player, got: ${getFlagVal("--username")}`);
       }
-      if (!launchCall.args.includes("26.2")) {
-        throw new Error(`Expected launch arguments to include release version: ${JSON.stringify(launchCall.args)}`);
+      if (getFlagVal("--version") !== "26.2") {
+        throw new Error(`Expected exact pair --version 26.2, got: ${getFlagVal("--version")}`);
+      }
+      if (getFlagVal("--gameDir") !== gameDir) {
+        throw new Error(`Expected exact pair --gameDir ${gameDir}, got: ${getFlagVal("--gameDir")}`);
+      }
+      if (getFlagVal("--uuid") !== "00000000000000000000000000000001") {
+        throw new Error(`Expected exact pair --uuid 00000000000000000000000000000001, got: ${getFlagVal("--uuid")}`);
+      }
+      if (getFlagVal("--accessToken") !== "0") {
+        throw new Error(`Expected exact pair --accessToken 0, got: ${getFlagVal("--accessToken")}`);
+      }
+      if (getFlagVal("--userType") !== "legacy") {
+        throw new Error(`Expected exact pair --userType legacy, got: ${getFlagVal("--userType")}`);
+      }
+      if (getFlagVal("--versionType") !== "release") {
+        throw new Error(`Expected exact pair --versionType 'release', got: ${getFlagVal("--versionType")}`);
+      }
+
+      // 7. Forged renderer arguments cannot influence launch
+      interceptedProcesses.length = 0;
+      try {
+        await (launchHandler as any)({}, {
+          user: { name: "AttackerPlayer", minecraftUuid: "forged-uuid-999" },
+          release: { version: "99.9.9", pack: "ForgedPack" },
+        });
+      } catch (e: any) {
+        if (!e.message.includes("[SecurityHarness] child_process.spawn blocked")) throw e;
+      }
+      if (interceptedProcesses.length === 0) {
+        throw new Error("Expected launch to execute process execution sink");
+      }
+      const forgedCall = interceptedProcesses[interceptedProcesses.length - 1];
+      if (
+        forgedCall.args.includes("AttackerPlayer") ||
+        forgedCall.args.includes("forged-uuid-999") ||
+        forgedCall.args.includes("99.9.9") ||
+        forgedCall.args.includes("ForgedPack")
+      ) {
+        throw new Error(`Forged renderer arguments leaked into process execution sink! Args: ${JSON.stringify(forgedCall.args)}`);
+      }
+      if (getFlagVal("--username", forgedCall.args) !== "Player") {
+        throw new Error("Main-owned consolidated user identity was overridden by forged renderer input");
       }
     } finally {
       javaSpy.mockRestore();
@@ -2953,8 +3247,9 @@ try {
     const deniedMedia = checkHandler(win.webContents, "media", "http://localhost:5173", {});
     const deniedGeo = checkHandler(win.webContents, "geolocation", "http://localhost:5173", {});
     const deniedNotif = checkHandler(win.webContents, "notifications", "http://localhost:5173", {});
-    if (deniedMedia !== false || deniedGeo !== false || deniedNotif !== false) {
-      throw new Error(`Expected all permission checks to return false: media=${deniedMedia}, geo=${deniedGeo}, notif=${deniedNotif}`);
+    const deniedClip = checkHandler(win.webContents, "clipboard-read", "http://localhost:5173", {});
+    if (deniedMedia !== false || deniedGeo !== false || deniedNotif !== false || deniedClip !== false) {
+      throw new Error(`Expected all permission checks to return false fail-closed: media=${deniedMedia}, geo=${deniedGeo}, notif=${deniedNotif}, clip=${deniedClip}`);
     }
 
     // 2. Permission request handler denies all requests fail-closed
@@ -2968,29 +3263,93 @@ try {
       throw new Error("Expected permission request for media to be denied fail-closed");
     }
 
-    // 3. Error sanitization strips raw filesystem paths and masks security exceptions
-    const winPathError = sanitizeIpcError(new Error("Cannot access file at C:\\Users\\Administrator\\secret\\file.txt: Access denied"));
+    // 3. Public IPC error contract: Unexpected backend failures return stable generic public error
+    const typeErr = sanitizeIpcError(new TypeError("Cannot read properties of undefined (reading 'secretKey')"));
+    if (typeErr.message !== "Operation failed: An unexpected internal error occurred.") {
+      throw new Error(`Expected generic error for unexpected TypeError, got: '${typeErr.message}'`);
+    }
+
+    const unhandledBackendErr = sanitizeIpcError(new Error("Fatal backend sqlite database disk image is malformed at block 4096"));
+    if (unhandledBackendErr.message !== "Operation failed: An unexpected internal error occurred.") {
+      throw new Error(`Expected generic error for unhandled backend error, got: '${unhandledBackendErr.message}'`);
+    }
+
+    const rangeErr = sanitizeIpcError(new RangeError("Maximum call stack size exceeded in internal cryptographic routine"));
+    if (rangeErr.message !== "Operation failed: An unexpected internal error occurred.") {
+      throw new Error(`Expected generic error for RangeError, got: '${rangeErr.message}'`);
+    }
+
+    // 4. Public IPC error contract: Security violations return exact masked security error
+    const securityError = sanitizeIpcError(new IpcSecurityError("detailed secret frame mismatch: frame id 12 != 14 from http://evil.com"));
+    if (securityError.message !== "Security violation: IPC request rejected.") {
+      throw new Error(`Expected masked security error message, got: '${securityError.message}'`);
+    }
+
+    // 5. Public IPC error contract: Validation errors scrub synthetic secrets, paths, multiline stacks, and bound length
+    // A. Synthetic JWT secrets scrubbed
+    const jwtError = sanitizeIpcError(new IpcValidationError("Invalid token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ"));
+    if (jwtError.message.includes("eyJ") || jwtError.message.includes("TJVA95")) {
+      throw new Error(`Synthetic JWT secret leaked in sanitized error: '${jwtError.message}'`);
+    }
+    if (!jwtError.message.includes("<redacted>")) {
+      throw new Error(`Expected <redacted> token placeholder in: '${jwtError.message}'`);
+    }
+
+    // B. Synthetic password and hex tokens scrubbed
+    const credError = sanitizeIpcError(new IpcValidationError("Auth failed with password=SuperSecretPassword123! token=0123456789abcdef0123456789abcdef"));
+    if (credError.message.includes("SuperSecretPassword123") || credError.message.includes("0123456789abcdef")) {
+      throw new Error(`Synthetic credentials leaked in sanitized error: '${credError.message}'`);
+    }
+    if (!credError.message.includes("<redacted>")) {
+      throw new Error(`Expected <redacted> credential placeholder in: '${credError.message}'`);
+    }
+
+    // C. Multiline errors collapsed and stack traces stripped
+    const multilineError = sanitizeIpcError(new IpcValidationError("Validation failed for field 'options':\n    at validateOptions (/app/src/validator.ts:42:15)\n    at Object.handle (/app/src/ipc.ts:100:12)"));
+    if (multilineError.message.includes("\n") || multilineError.message.includes("\r") || multilineError.message.includes("validator.ts")) {
+      throw new Error(`Multiline error / stack trace leaked in sanitized error: '${multilineError.message}'`);
+    }
+
+    // D. Windows drive paths scrubbed
+    const winPathError = sanitizeIpcError(new IpcValidationError("Cannot access file at C:\\Users\\Administrator\\secret\\config.json: Access denied"));
     if (winPathError.message.includes("C:\\Users")) {
-      throw new Error(`Expected Windows drive path to be scrubbed: ${winPathError.message}`);
+      throw new Error(`Expected Windows drive path to be scrubbed: '${winPathError.message}'`);
     }
     if (!winPathError.message.includes("<path>")) {
-      throw new Error(`Expected placeholder <path> in sanitized error: ${winPathError.message}`);
+      throw new Error(`Expected placeholder <path> in sanitized error: '${winPathError.message}'`);
     }
 
-    const posixPathError = sanitizeIpcError(new Error("Cannot access file at /home/markj/lampas-launcher/secret/file.txt: Access denied"));
-    if (posixPathError.message.includes("/home/markj")) {
-      throw new Error(`Expected POSIX path to be scrubbed: ${posixPathError.message}`);
-    }
-    if (!posixPathError.message.includes("<path>")) {
-      throw new Error(`Expected placeholder <path> in sanitized error: ${posixPathError.message}`);
-    }
-
-    const securityError = sanitizeIpcError(new IpcSecurityError("detailed secret frame mismatch: frame id 12 != 14"));
-    if (securityError.message !== "Security violation: IPC request rejected.") {
-      throw new Error(`Expected masked security error message, got: ${securityError.message}`);
+    // E. Single-component POSIX paths scrubbed (/etc, /tmp, /secret)
+    for (const singlePosix of ["/etc", "/tmp", "/secret"]) {
+      const posixSingleError = sanitizeIpcError(new IpcValidationError(`Refusing to access path ${singlePosix}`));
+      if (posixSingleError.message.includes(singlePosix)) {
+        throw new Error(`Expected single-component POSIX path '${singlePosix}' to be scrubbed: '${posixSingleError.message}'`);
+      }
+      if (!posixSingleError.message.includes("<path>")) {
+        throw new Error(`Expected <path> placeholder for '${singlePosix}', got: '${posixSingleError.message}'`);
+      }
     }
 
-    // 4. Mod file size boundary
+    // F. Multi-component POSIX paths scrubbed
+    const posixMultiError = sanitizeIpcError(new IpcValidationError("Cannot access file at /home/markj/lampas-launcher/secret/file.txt: Access denied"));
+    if (posixMultiError.message.includes("/home/markj")) {
+      throw new Error(`Expected POSIX path to be scrubbed: '${posixMultiError.message}'`);
+    }
+    if (!posixMultiError.message.includes("<path>")) {
+      throw new Error(`Expected placeholder <path> in sanitized error: '${posixMultiError.message}'`);
+    }
+
+    // G. Long unknown keys / messages bounded to at most 120 characters
+    const longMsg = "This is an extremely long validation failure message describing multiple parameter violations across different structures that exceeds the maximum allowed boundary length for errors.";
+    const boundedError = sanitizeIpcError(new IpcValidationError(longMsg));
+    if (boundedError.message.length > 120) {
+      throw new Error(`Expected bounded validation error <= 120 chars, got ${boundedError.message.length}: '${boundedError.message}'`);
+    }
+    if (!boundedError.message.endsWith("...")) {
+      throw new Error(`Expected truncated bounded error to end with '...', got: '${boundedError.message}'`);
+    }
+
+    // 6. Mod file size boundary (100 MB)
     if (MAX_CUSTOM_MOD_FILE_SIZE_BYTES !== 100 * 1024 * 1024) {
       throw new Error(`Expected MAX_CUSTOM_MOD_FILE_SIZE_BYTES to be 100MB (104857600 bytes), got ${MAX_CUSTOM_MOD_FILE_SIZE_BYTES}`);
     }

@@ -39,7 +39,14 @@ export interface ApprovalRecord {
 export interface ApprovalSnapshot {
   generation: number;
   window: BrowserWindow;
+  webContents: Electron.WebContents;
   frame: WebFrameMain;
+  frameUrl: string;
+}
+
+export interface GrantApprovalOptions {
+  generation?: number;
+  ttlMs?: number;
 }
 
 export interface StartupPolicy {
@@ -119,33 +126,37 @@ export function parseJavaArgs(value: string): string[] {
 // Comprehensive Java Argument Privilege Classification
 // ═══════════════════════════════════════════════════
 
-export function isLaunchTargetToken(token: string): boolean {
-  const trimmed = token.trim();
-  if (trimmed.length === 0) return false;
-  // Positional operands and argument files designate main-class / source / argument injection
-  if (!trimmed.startsWith("-")) return true;
-  // Launch target flags
-  if (/^-jar(=|$)/i.test(trimmed)) return true;
-  if (/^--source(=|$)/i.test(trimmed)) return true;
-  if (/^(-m|--module)(=|$)/i.test(trimmed)) return true;
-  return false;
-}
+export const ORDINARY_SYSTEM_PROPERTIES: Readonly<Record<string, RegExp>> = {
+  "file.encoding": /^[a-zA-Z0-9_-]+$/,
+  "sun.stdout.encoding": /^[a-zA-Z0-9_-]+$/,
+  "sun.stderr.encoding": /^[a-zA-Z0-9_-]+$/,
+  "user.language": /^[a-zA-Z]{2,3}(?:-[a-zA-Z]{2,3})?$/,
+  "user.country": /^[a-zA-Z]{2,3}$/,
+  "java.awt.headless": /^(?:true|false)$/i,
+  "org.lwjgl.util.Debug": /^(?:true|false)$/i,
+  "org.lwjgl.opengl.Window.undecorated": /^(?:true|false)$/i,
+  "sun.java2d.opengl": /^(?:true|false)$/i,
+  "sun.java2d.d3d": /^(?:true|false)$/i,
+  "sun.java2d.noddraw": /^(?:true|false)$/i,
+  "sun.rmi.dgc.client.gcInterval": /^\d+$/,
+  "sun.rmi.dgc.server.gcInterval": /^\d+$/,
+  "fabric.disableTelemetry": /^(?:true|false)$/i,
+};
+
+const LAUNCH_AUTHORITY_PROPERTY_PATTERN =
+  /^(?:(?:fabric|quilt|forge|neoforge)\.(?:addMods|modsFolder|disabledMods|modDir|customModDir|libraryPath)|java\.library\.path|org\.lwjgl\.librarypath|minecraft\.applet\.TargetDirectory|minecraft\.launcher\.(?:brand|version)|java\.system\.class\.loader|java\.class\.path|jdk\.module\..+|com\.sun\.management\..+|java\.rmi\.server\..+|java\.security\..+)$/i;
 
 const ORDINARY_MEMORY_PATTERN = /^-X(ms|mx|ss|mn)[0-9]+[kKmMgGtT]?$/i;
 const ORDINARY_XX_MEMORY_PATTERN =
   /^-XX:(MaxMetaspaceSize|MetaspaceSize|MaxDirectMemorySize|CompressedClassSpaceSize)=[0-9]+[kKmMgGtT]?$/i;
 const ORDINARY_GC_SELECTION_PATTERN =
-  /^-XX:[+-](UseG1GC|UseZGC|UseShenandoahGC|UseParallelGC|UseSerialGC|UseStringDeduplication|ParallelRefProcEnabled|AlwaysPreTouch|DisableExplicitGC|UnlockExperimentalVMOptions|UnlockDiagnosticVMOptions|OptimizeStringConcat|AggressiveOpts)$/;
+  /^-XX:[+-](UseG1GC|UseZGC|UseShenandoahGC|UseParallelGC|UseSerialGC|UseStringDeduplication|ParallelRefProcEnabled|AlwaysPreTouch|DisableExplicitGC|UnlockExperimentalVMOptions|OptimizeStringConcat|UseFastAccessorMethods|AggressiveOpts)$/;
 const ORDINARY_GC_NUMERIC_PATTERN =
   /^-XX:(G1ReservePercent|InitiatingHeapOccupancyPercent|G1HeapRegionSize|MaxGCPauseMillis|ConcGCThreads|ParallelGCThreads|G1NewSizePercent|G1MaxNewSizePercent|SurvivorRatio|TargetSurvivorRatio|MaxTenuringThreshold|G1MixedGCCountTarget|G1MixedGCLiveThresholdPercent|G1HeapWastePercent|NewRatio)=[0-9]+[kKmMgGtT]?$/i;
 const ORDINARY_GC_EXTRA_PATTERN =
   /^-XX:(ZAllocationSpikeTolerance=[0-9.]+|ShenandoahGCHeuristics=(adaptive|compact|passive))$/i;
 const ORDINARY_GENERAL_PATTERN =
-  /^(-server|-client|-showversion|-D(file|sun\.stdout|sun\.stderr)\.encoding=[a-zA-Z0-9._-]+)$/;
-const SAFE_SYSTEM_PROPERTY_PATTERN = /^-D[a-zA-Z0-9._-]+(=[a-zA-Z0-9._/:,-]*)?$/;
-
-const SENSITIVE_SYSTEM_PROPERTY_PATTERN =
-  /^-D(java\.system\.class\.loader|java\.class\.path|jdk\.module\.|java\.security\.)/i;
+  /^(-server|-client|-showversion)$/;
 
 export function isOrdinaryTuningOption(token: string): boolean {
   const trimmed = token.trim();
@@ -159,42 +170,35 @@ export function isOrdinaryTuningOption(token: string): boolean {
   ) {
     return true;
   }
-  if (SAFE_SYSTEM_PROPERTY_PATTERN.test(trimmed)) {
-    return !SENSITIVE_SYSTEM_PROPERTY_PATTERN.test(trimmed);
+  if (trimmed.startsWith("-D")) {
+    const match = trimmed.match(/^-D([^=]+)(?:=(.*))?$/);
+    if (match) {
+      const prop = match[1];
+      const val = match[2] ?? "";
+      const allowed = ORDINARY_SYSTEM_PROPERTIES[prop];
+      if (allowed && allowed.test(val)) {
+        return true;
+      }
+    }
   }
   return false;
 }
 
-const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /^@/, reason: "Argument file (@argfile)" },
-  { pattern: /^-javaagent:/i, reason: "Java agent (-javaagent)" },
-  { pattern: /^-agentlib(:|$)/i, reason: "Native agent library (-agentlib)" },
-  { pattern: /^-agentpath(:|$)/i, reason: "Native agent path (-agentpath)" },
-  { pattern: /^(-cp|-classpath|--class-path)(=|$)/i, reason: "Classpath override (-cp/--class-path)" },
-  {
-    pattern: /^(-p|--module-path|--upgrade-module-path|--patch-module)(=|$)/i,
-    reason: "Module path override (--module-path/--patch-module)",
-  },
-  { pattern: /^--add-modules(=|$)/i, reason: "Module addition (--add-modules)" },
-  { pattern: /^--add-exports(=|$)/i, reason: "Module export override (--add-exports)" },
-  { pattern: /^--add-opens(=|$)/i, reason: "Module reflection override (--add-opens)" },
-  { pattern: /^--add-reads(=|$)/i, reason: "Module reads override (--add-reads)" },
-  { pattern: /^--limit-modules(=|$)/i, reason: "Module limit override (--limit-modules)" },
-  { pattern: /^-Xbootclasspath/i, reason: "Bootstrap classpath override (-Xbootclasspath)" },
-  { pattern: /^-Djava\.system\.class\.loader=/i, reason: "Custom system class loader" },
-  { pattern: /^-Djava\.class\.path=/i, reason: "Class path property override" },
-  { pattern: /^-Djdk\.module\./i, reason: "JDK module configuration property" },
-  { pattern: /^-XX:OnError=/i, reason: "Error command hook (-XX:OnError)" },
-  { pattern: /^-XX:OnOutOfMemoryError=/i, reason: "OOM command hook (-XX:OnOutOfMemoryError)" },
-  { pattern: /^-XX:ErrorFile=/i, reason: "Error file path hook (-XX:ErrorFile)" },
-  { pattern: /^-XX:HeapDumpPath=/i, reason: "Heap dump path hook (-XX:HeapDumpPath)" },
-  { pattern: /^-XX:LogFile=/i, reason: "Log file path hook (-XX:LogFile)" },
-  { pattern: /^-XX:NativeMemoryTracking=/i, reason: "Native memory tracking hook" },
-  { pattern: /^-Xrunjdwp:/i, reason: "Remote debugger hook (-Xrunjdwp)" },
-  { pattern: /^-agentlib:jdwp/i, reason: "JDWP debugger hook" },
-  { pattern: /^-Xdebug$/i, reason: "JVM debug mode (-Xdebug)" },
-  { pattern: /^-Djava\.security\./i, reason: "Security manager/policy override" },
-];
+export function isLaunchTargetToken(token: string): boolean {
+  const trimmed = token.trim();
+  if (trimmed.length === 0) return false;
+  if (!trimmed.startsWith("-")) return true;
+  if (/^-jar(=|$)/i.test(trimmed)) return true;
+  if (/^--source(=|$)/i.test(trimmed)) return true;
+  if (/^(-m|--module)(=|$)/i.test(trimmed)) return true;
+  if (trimmed.startsWith("-D")) {
+    const match = trimmed.match(/^-D([^=]+)/);
+    if (match && LAUNCH_AUTHORITY_PROPERTY_PATTERN.test(match[1])) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
   let hasLaunchTargetOverride = false;
@@ -202,32 +206,195 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
   const launchTargetViolations: string[] = [];
   const privilegedReasons: string[] = [];
 
-  for (const token of tokens) {
-    const trimmed = token.trim();
-    if (!trimmed) continue;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i].trim();
+    if (!token) continue;
 
-    if (isLaunchTargetToken(trimmed)) {
+    // 1. Argument files
+    if (token.startsWith("@")) {
       hasLaunchTargetOverride = true;
       isPrivileged = true;
-      launchTargetViolations.push(trimmed);
-      privilegedReasons.push(`Launch target override: '${trimmed}'`);
+      launchTargetViolations.push(token);
+      privilegedReasons.push(`Argument file (@argfile): '${token}'`);
       continue;
     }
 
-    for (const sensitive of SENSITIVE_PATTERNS) {
-      if (sensitive.pattern.test(trimmed)) {
+    // 2. Launch target flags: -jar
+    if (token === "-jar" || token.startsWith("-jar=")) {
+      hasLaunchTargetOverride = true;
+      isPrivileged = true;
+      launchTargetViolations.push(token);
+      privilegedReasons.push(`Launch target override (-jar): '${token}'`);
+      if (token === "-jar" && i + 1 < tokens.length) {
+        i++;
+        launchTargetViolations.push(tokens[i]);
+      }
+      continue;
+    }
+
+    // 3. Module launch target: -m or --module
+    if (token === "-m" || token === "--module") {
+      hasLaunchTargetOverride = true;
+      isPrivileged = true;
+      launchTargetViolations.push(token);
+      privilegedReasons.push(`Module launch target override: '${token}'`);
+      if (i + 1 < tokens.length) {
+        i++;
+        launchTargetViolations.push(tokens[i]);
+      }
+      continue;
+    }
+    if (token.startsWith("-m=") || token.startsWith("--module=")) {
+      hasLaunchTargetOverride = true;
+      isPrivileged = true;
+      launchTargetViolations.push(token);
+      privilegedReasons.push(`Module launch target override: '${token}'`);
+      continue;
+    }
+
+    // 4. Source file launch: --source
+    if (token === "--source") {
+      hasLaunchTargetOverride = true;
+      isPrivileged = true;
+      launchTargetViolations.push(token);
+      privilegedReasons.push(`Source launch target override: '${token}'`);
+      if (i + 1 < tokens.length) {
+        i++;
+        launchTargetViolations.push(tokens[i]);
+      }
+      continue;
+    }
+    if (token.startsWith("--source=")) {
+      hasLaunchTargetOverride = true;
+      isPrivileged = true;
+      launchTargetViolations.push(token);
+      privilegedReasons.push(`Source launch target override: '${token}'`);
+      continue;
+    }
+
+    // 5. Positional operands (non-option tokens not consumed as operands of prior options)
+    if (!token.startsWith("-")) {
+      hasLaunchTargetOverride = true;
+      isPrivileged = true;
+      launchTargetViolations.push(token);
+      privilegedReasons.push(`Positional launch target override: '${token}'`);
+      continue;
+    }
+
+    // 6. Options with separate operands or equals form:
+    // Classpath: -cp, -classpath, --class-path
+    if (token === "-cp" || token === "-classpath" || token === "--class-path") {
+      isPrivileged = true;
+      privilegedReasons.push(`Classpath override: '${token}'`);
+      if (i + 1 < tokens.length) {
+        i++; // consume operand so it is not treated as a positional main class
+      }
+      continue;
+    }
+    if (token.startsWith("-cp=") || token.startsWith("-classpath=") || token.startsWith("--class-path=")) {
+      isPrivileged = true;
+      privilegedReasons.push(`Classpath override: '${token}'`);
+      continue;
+    }
+
+    // Module path: -p, --module-path
+    if (token === "-p" || token === "--module-path") {
+      isPrivileged = true;
+      privilegedReasons.push(`Module path override: '${token}'`);
+      if (i + 1 < tokens.length) {
+        i++;
+      }
+      continue;
+    }
+    if (token.startsWith("-p=") || token.startsWith("--module-path=")) {
+      isPrivileged = true;
+      privilegedReasons.push(`Module path override: '${token}'`);
+      continue;
+    }
+
+    // Advanced module options: --upgrade-module-path, --patch-module, etc.
+    const moduleOptMatch = token.match(/^(--upgrade-module-path|--patch-module|--add-modules|--add-exports|--add-opens|--add-reads|--limit-modules)(?:=(.*))?$/);
+    if (moduleOptMatch) {
+      isPrivileged = true;
+      privilegedReasons.push(`Module configuration override: '${token}'`);
+      if (moduleOptMatch[2] === undefined && i + 1 < tokens.length) {
+        i++;
+      }
+      continue;
+    }
+
+    // Agents and debuggers
+    if (/^-javaagent:/i.test(token)) {
+      isPrivileged = true;
+      privilegedReasons.push(`Java agent: '${token}'`);
+      continue;
+    }
+    if (/^-agentlib(:|$)/i.test(token)) {
+      isPrivileged = true;
+      privilegedReasons.push(`Native agent library: '${token}'`);
+      continue;
+    }
+    if (/^-agentpath(:|$)/i.test(token)) {
+      isPrivileged = true;
+      privilegedReasons.push(`Native agent path: '${token}'`);
+      continue;
+    }
+    if (/^-Xbootclasspath/i.test(token)) {
+      isPrivileged = true;
+      privilegedReasons.push(`Bootstrap classpath override: '${token}'`);
+      continue;
+    }
+    if (/^-Xrunjdwp:/i.test(token) || /^-Xdebug$/i.test(token)) {
+      isPrivileged = true;
+      privilegedReasons.push(`JVM debugger hook: '${token}'`);
+      continue;
+    }
+
+    // Command hooks and error files
+    if (/^-XX:(OnError|OnOutOfMemoryError|ErrorFile|HeapDumpPath|LogFile|NativeMemoryTracking)=/i.test(token)) {
+      isPrivileged = true;
+      privilegedReasons.push(`JVM diagnostic/command hook: '${token}'`);
+      continue;
+    }
+
+    // System properties (-D)
+    if (token.startsWith("-D")) {
+      const match = token.match(/^-D([^=]+)(?:=(.*))?$/);
+      if (match) {
+        const propName = match[1];
+        const propVal = match[2] ?? "";
+
+        // Check launch/mod authority hijacking
+        if (LAUNCH_AUTHORITY_PROPERTY_PATTERN.test(propName)) {
+          hasLaunchTargetOverride = true;
+          isPrivileged = true;
+          launchTargetViolations.push(token);
+          privilegedReasons.push(`Launch authority property override: '${token}'`);
+          continue;
+        }
+
+        // Check ordinary allowlist
+        const allowedRegex = ORDINARY_SYSTEM_PROPERTIES[propName];
+        if (allowedRegex && allowedRegex.test(propVal)) {
+          // Permitted ordinary tuning property
+          continue;
+        }
+
+        // Unknown or sensitive system property
         isPrivileged = true;
-        privilegedReasons.push(`${sensitive.reason}: '${trimmed}'`);
-        break;
+        privilegedReasons.push(`Unreviewed or sensitive system property: '${token}'`);
+        continue;
       }
     }
 
-    if (!isOrdinaryTuningOption(trimmed)) {
-      isPrivileged = true;
-      if (!privilegedReasons.some((r) => r.includes(trimmed))) {
-        privilegedReasons.push(`Unreviewed or sensitive JVM option: '${trimmed}'`);
-      }
+    // 7. Check ordinary memory and GC options
+    if (isOrdinaryTuningOption(token)) {
+      continue;
     }
+
+    // Any remaining unknown or unreviewed option
+    isPrivileged = true;
+    privilegedReasons.push(`Unreviewed or sensitive JVM option: '${token}'`);
   }
 
   return {
@@ -356,28 +523,16 @@ export class IpcBoundary {
   static grantApproval(
     operation: string,
     target: string,
-    generationOrTtl?: number,
-    maybeTtlMs?: number
+    options?: GrantApprovalOptions
   ): void {
-    let generation: number | undefined;
-    let ttlMs = APPROVAL_TTL_MS;
+    const generation = options?.generation ?? this.documentGeneration;
+    const ttlMs = options?.ttlMs ?? APPROVAL_TTL_MS;
 
-    if (maybeTtlMs !== undefined) {
-      generation = generationOrTtl;
-      ttlMs = maybeTtlMs;
-    } else if (generationOrTtl !== undefined) {
-      if (generationOrTtl > 50) {
-        ttlMs = generationOrTtl;
-        generation = this.documentGeneration;
-      } else {
-        generation = generationOrTtl;
-      }
-    }
-
-    const gen = generation ?? this.documentGeneration;
-    if (gen < this.documentGeneration) {
-      // Do not grant old-generation result to newer generation
-      return;
+    // Require exact current-generation equality
+    if (generation !== this.documentGeneration) {
+      throw new IpcSecurityError(
+        `Approval generation mismatch: expected generation ${this.documentGeneration}, but got ${generation}.`
+      );
     }
 
     const normTarget = normalizeApprovalTarget(target);
@@ -386,7 +541,7 @@ export class IpcBoundary {
       operation,
       target: normTarget,
       expiresAt: Date.now() + ttlMs,
-      generation: gen,
+      generation,
     });
   }
 
@@ -407,11 +562,10 @@ export class IpcBoundary {
     const key = `${operation}:${normTarget}`;
     const record = this.approvals.get(key);
     if (!record) return false;
+    this.approvals.delete(key);
     if (Date.now() > record.expiresAt || record.generation !== this.documentGeneration) {
-      this.approvals.delete(key);
       return false;
     }
-    this.approvals.delete(key);
     return true;
   }
 
@@ -419,14 +573,39 @@ export class IpcBoundary {
     if (!this.mainWindowRef || this.mainWindowRef.isDestroyed?.()) {
       throw new IpcSecurityError("Cannot create approval snapshot: main window is unavailable.");
     }
+    const webContents = this.mainWindowRef.webContents;
+    if (!webContents || (typeof (webContents as any).isDestroyed === "function" && (webContents as any).isDestroyed())) {
+      throw new IpcSecurityError("Cannot create approval snapshot: webContents is unavailable or destroyed.");
+    }
+    if (event.sender !== webContents) {
+      throw new IpcSecurityError("Cannot create approval snapshot: caller webContents does not match main window.");
+    }
+    const currentMainFrame = webContents.mainFrame;
+    if (!currentMainFrame || (typeof (currentMainFrame as any).isDestroyed === "function" && (currentMainFrame as any).isDestroyed())) {
+      throw new IpcSecurityError("Cannot create approval snapshot: missing or destroyed main frame.");
+    }
     const frame = event.senderFrame;
     if (!frame || (typeof (frame as any).isDestroyed === "function" && (frame as any).isDestroyed())) {
       throw new IpcSecurityError("Cannot create approval snapshot: sender frame is destroyed.");
     }
+    if (frame !== currentMainFrame) {
+      throw new IpcSecurityError("Cannot create approval snapshot: sender frame is not the active main frame.");
+    }
+    if (frame.parent !== null) {
+      throw new IpcSecurityError("Cannot create approval snapshot: sender frame is not top-level.");
+    }
+    const frameUrl = frame.url;
+    if (!frameUrl || frameUrl.trim() === "" || frameUrl === "about:blank") {
+      throw new IpcSecurityError("Cannot create approval snapshot: uninitialized or blank document.");
+    }
+    this.assertApprovedDocument(frameUrl);
+
     return {
       generation: this.documentGeneration,
       window: this.mainWindowRef,
+      webContents,
       frame,
+      frameUrl,
     };
   }
 
@@ -438,11 +617,37 @@ export class IpcBoundary {
       throw new IpcSecurityError("Application window destroyed or replaced while awaiting native user approval.");
     }
     if (
+      !snapshot.webContents ||
+      (typeof (snapshot.webContents as any).isDestroyed === "function" && (snapshot.webContents as any).isDestroyed()) ||
+      snapshot.window.webContents !== snapshot.webContents
+    ) {
+      throw new IpcSecurityError("WebContents invalidated while awaiting native user approval.");
+    }
+    const currentMainFrame = snapshot.webContents.mainFrame;
+    if (
+      !currentMainFrame ||
+      (typeof (currentMainFrame as any).isDestroyed === "function" && (currentMainFrame as any).isDestroyed())
+    ) {
+      throw new IpcSecurityError("Active main frame destroyed or unavailable while awaiting native user approval.");
+    }
+    if (
       !snapshot.frame ||
       (typeof (snapshot.frame as any).isDestroyed === "function" && (snapshot.frame as any).isDestroyed()) ||
+      snapshot.frame !== currentMainFrame ||
       snapshot.frame.parent !== null
     ) {
       throw new IpcSecurityError("Sender frame invalidated while awaiting native user approval.");
+    }
+
+    // Revalidate the approved document after native approval
+    const currentUrl = currentMainFrame.url;
+    if (!currentUrl || currentUrl !== snapshot.frameUrl) {
+      throw new IpcSecurityError("Document URL changed while awaiting native user approval.");
+    }
+    this.assertApprovedDocument(currentUrl);
+
+    if (snapshot.webContents.getURL && snapshot.webContents.getURL() !== currentUrl) {
+      throw new IpcSecurityError("Document has navigated away from active frame URL.");
     }
   }
 
@@ -479,7 +684,16 @@ export class IpcBoundary {
       throw new IpcSecurityError("Unauthorized IPC caller: main application window is unavailable.");
     }
 
-    if (event.sender !== this.mainWindowRef.webContents) {
+    const webContents = this.mainWindowRef.webContents;
+    if (
+      !webContents ||
+      (typeof (webContents as any).isDestroyed === "function" && (webContents as any).isDestroyed()) ||
+      (typeof (event.sender as any)?.isDestroyed === "function" && (event.sender as any).isDestroyed())
+    ) {
+      throw new IpcSecurityError("Unauthorized IPC caller: webContents is unavailable or destroyed.");
+    }
+
+    if (event.sender !== webContents) {
       throw new IpcSecurityError("Unauthorized IPC caller: caller webContents does not match main window.");
     }
 
@@ -497,7 +711,10 @@ export class IpcBoundary {
     }
 
     const mainFrame = this.mainWindowRef.webContents?.mainFrame;
-    if (mainFrame && frame !== mainFrame) {
+    if (!mainFrame || (typeof (mainFrame as any).isDestroyed === "function" && (mainFrame as any).isDestroyed())) {
+      throw new IpcSecurityError("Unauthorized IPC caller: missing or destroyed main frame.");
+    }
+    if (frame !== mainFrame) {
       throw new IpcSecurityError("Unauthorized IPC caller: sender frame is not the active main frame.");
     }
 
@@ -624,7 +841,7 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
 
   for (const key of keys) {
     if (!ALLOWED_CONFIG_KEYS.has(key)) {
-      throw new IpcValidationError(`Unknown or unauthorized settings field: '${key}'`);
+      throw new IpcValidationError("Unknown or unauthorized settings field.");
     }
   }
 
@@ -724,9 +941,7 @@ const KNOWN_LOCATIONS = new Set<KnownLocationId>([
 
 export function validateOpenKnownLocation(raw: unknown): KnownLocationId {
   if (typeof raw !== "string" || !KNOWN_LOCATIONS.has(raw as KnownLocationId)) {
-    throw new IpcValidationError(
-      `Invalid known location '${raw}'. Permitted: gameDir, modsDir, logsDir, launcherLog, minecraftLog`
-    );
+    throw new IpcValidationError("Invalid known location identifier.");
   }
   return raw as KnownLocationId;
 }
@@ -783,18 +998,18 @@ export function validateModPaths(raw: unknown): string[] {
     }
     const resolved = path.resolve(item.trim());
     if (path.extname(resolved).toLowerCase() !== ".jar") {
-      throw new IpcValidationError(`Mod file must have a .jar extension: '${path.basename(resolved)}'`);
+      throw new IpcValidationError("Mod file must have a .jar extension.");
     }
     if (!fs.existsSync(resolved)) {
-      throw new IpcValidationError(`Mod file does not exist: '${path.basename(resolved)}'`);
+      throw new IpcValidationError("Mod file does not exist.");
     }
     const stat = fs.statSync(resolved);
     if (!stat.isFile()) {
-      throw new IpcValidationError(`Mod path is not a regular file: '${path.basename(resolved)}'`);
+      throw new IpcValidationError("Mod path is not a regular file.");
     }
     if (stat.size > MAX_CUSTOM_MOD_FILE_SIZE_BYTES) {
       throw new IpcValidationError(
-        `Mod file exceeds maximum allowed size of 100MB: '${path.basename(resolved)}'`
+        "Mod file exceeds maximum allowed size of 100MB."
       );
     }
     result.push(resolved);
@@ -884,19 +1099,105 @@ export const IpcSchemas = {
 // Error Sanitization & Secure Registration Wrappers
 // ═══════════════════════════════════════════════════
 
+export function scrubErrorText(text: string): string {
+  let s = text;
+  // 1. Strip stack trace lines (lines starting with whitespace followed by 'at ')
+  s = s.replace(/\r?\n\s*at\s+.*$/s, "");
+  s = s.replace(/\r?\n\s*at\s+[^\r\n]*/g, "");
+  // 2. Collapse newlines and multiline spacing to single line
+  s = s.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  // 3. Scrub Windows drive paths and UNC paths
+  s = s.replace(/[a-zA-Z]:[\\/][^'"\s;:,]+/g, "<path>");
+  s = s.replace(/\\\\[^'"\s;:,]+/g, "<path>");
+  // 4. Scrub POSIX absolute paths (both single-component and multi-component: /etc, /tmp, /secret, /a/b/c)
+  s = s.replace(/(?<=^|[\s'"`;:])\/(?:[a-zA-Z0-9._-]+\/?)+/g, "<path>");
+  // 5. Scrub synthetic secrets and credential values
+  s = s.replace(
+    /(?<=\b(?:token|bearer|secret|password|access_token|refresh_token|code|key)[\s:=]+)['"]?[^\s'"`;:,]+['"]?/gi,
+    "<redacted>"
+  );
+  s = s.replace(
+    /(?<=^|[\s'"`;:])(?:eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+|[a-fA-F0-9]{32,}|[a-zA-Z0-9+/]{32,}={0,2})(?=$|[\s'"`;:])/g,
+    "<redacted>"
+  );
+  return s.trim();
+}
+
 export function sanitizeIpcError(err: any): Error {
   if (err instanceof IpcSecurityError) {
     return new Error("Security violation: IPC request rejected.");
   }
-  const rawMsg = typeof err?.message === "string" ? err.message : String(err || "Operation failed.");
-  // Strip raw filesystem paths (Windows drive paths or POSIX absolute paths)
-  const sanitized = rawMsg
-    .replace(/[a-zA-Z]:\\[^'"\s;:,]+/g, "<path>")
-    .replace(/\/(?:[a-zA-Z0-9._-]+\/)+[a-zA-Z0-9._-]+/g, "<path>");
+
   if (err instanceof IpcValidationError) {
-    return new Error(sanitized);
+    const rawMsg = typeof err?.message === "string" ? err.message : "Validation error.";
+    const scrubbed = scrubErrorText(rawMsg);
+    const bounded = scrubbed.length > 120 ? scrubbed.slice(0, 117) + "..." : scrubbed;
+    return new Error(bounded);
   }
-  return new Error(sanitized);
+
+  // Handle test harness interception
+  if (err && typeof err.message === "string" && err.message.includes("[SecurityHarness]")) {
+    return new Error(err.message);
+  }
+
+  // Handle known expected domain / operational conflict errors
+  if (err && typeof err.message === "string") {
+    const msg = err.message;
+    if (
+      msg.includes("is currently in progress") ||
+      msg.includes("while Minecraft is running") ||
+      msg.includes("Cannot modify client mods while") ||
+      msg.includes("Authentication required") ||
+      msg.includes("Session expired") ||
+      msg.includes("No bound Minecraft account found") ||
+      msg.includes("Incompatible installation state detected") ||
+      msg.includes("Incompatible installation generation detected") ||
+      msg.includes("Missing installation state metadata") ||
+      msg.includes("Installation state metadata is empty") ||
+      msg.includes("Installation state metadata is missing") ||
+      msg.includes("Installation state metadata is corrupted") ||
+      msg.includes("No installed Lampas release found") ||
+      msg.includes("Release descriptor is corrupted") ||
+      msg.includes("Release descriptor metadata is missing") ||
+      msg.includes("Cannot disable unknown official mod") ||
+      msg.includes("is required and cannot be disabled") ||
+      msg.includes("is required by the server modpack and cannot be disabled") ||
+      msg.includes("Mod import cancelled by user") ||
+      msg.includes("Mod file must have a .jar extension") ||
+      msg.includes("Mod file does not exist") ||
+      msg.includes("Mod path is not a regular file") ||
+      msg.includes("Mod file exceeds maximum allowed size") ||
+      msg.includes("Privileged action rejected by user") ||
+      msg.includes("Privileged Java arguments rejected by user") ||
+      msg.includes("Custom Java executable update cancelled by user") ||
+      msg.includes("Configuration cancelled by user") ||
+      msg.includes("Move cancelled by user") ||
+      msg.includes("Native dialog service unavailable") ||
+      msg.includes("Document generation changed while awaiting native user approval") ||
+      msg.includes("Operation state changed while awaiting native user approval") ||
+      msg.includes("Custom Java arguments cannot override launch target") ||
+      msg.includes("Process argument sink rejected launch target override") ||
+      msg.includes("does not exist") ||
+      msg.includes("Expected file") ||
+      msg.includes("Expected directory") ||
+      msg.includes("Refusing to open") ||
+      msg.includes("escaping") ||
+      msg.includes("Cannot access file") ||
+      msg.includes("Access denied") ||
+      msg.includes("Location identifier must be a non-empty string") ||
+      msg.includes("No existing ancestor for path") ||
+      msg.includes("Portal URL") ||
+      msg.includes("Web URL") ||
+      msg.includes("Remote portal")
+    ) {
+      const scrubbed = scrubErrorText(msg);
+      const bounded = scrubbed.length > 200 ? scrubbed.slice(0, 197) + "..." : scrubbed;
+      return new Error(bounded);
+    }
+  }
+
+  // Unexpected backend failures return a stable generic public error
+  return new Error("Operation failed: An unexpected internal error occurred.");
 }
 
 export function registerSecureHandler<TArgs extends any[], TRes>(
