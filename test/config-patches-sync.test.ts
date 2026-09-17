@@ -73,7 +73,7 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: "http://127.0.0.1:" + server.port });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
 
     await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
       /Unsupported modpack protocol: release requires protocol 4, but this launcher only supports up to protocol 3/
@@ -111,7 +111,7 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: "http://127.0.0.1:" + server.port });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
 
     await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
       /Launcher update required: release requires launcher version 99.0.0 or newer/
@@ -177,7 +177,7 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: "http://127.0.0.1:" + server.port });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
 
     // 1. Sync
     const syncRes = await LauncherSync.syncClient(() => {});
@@ -267,7 +267,7 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: "http://127.0.0.1:" + server.port });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
 
     // Sync rev 1
     await LauncherSync.syncClient(() => {});
@@ -336,7 +336,7 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: "http://127.0.0.1:" + server.port });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
 
     // Sync when file does not exist
     const res1 = await LauncherSync.syncClient(() => {});

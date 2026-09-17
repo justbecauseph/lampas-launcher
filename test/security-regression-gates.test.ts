@@ -103,9 +103,15 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
   });
 
   test("[Phase 1 Gate] Session origin binding: ConfigManager binds credentials to sessionPortalUrl and wipes credentials on unapproved remote origin change", () => {
+    // Attempting to set sessionPortalUrl directly via ConfigManager.set is stripped (forgery blocked)
     ConfigManager.set({
-      portalUrl: "https://dev.lampas.town",
       sessionPortalUrl: "https://dev.lampas.town",
+      token: "syn-test-token",
+    } as any);
+    expect(ConfigManager.get().sessionPortalUrl).toBeUndefined();
+
+    // Authenticated credentials must be established via establishSession
+    ConfigManager.establishSession("https://dev.lampas.town", {
       token: "syn-test-token",
       refreshToken: "syn-test-refresh",
     });
@@ -137,6 +143,12 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
     expect(loaded.refreshToken).toBeUndefined();
     expect(loaded.minecraftAccessToken).toBeUndefined();
     expect(loaded.sessionPortalUrl).toBeUndefined();
+
+    // Verify durable disk scrubbing: on-disk file is scrubbed!
+    const scrubbedDisk = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(scrubbedDisk.token).toBeUndefined();
+    expect(scrubbedDisk.refreshToken).toBeUndefined();
+    expect(scrubbedDisk.minecraftAccessToken).toBeUndefined();
   });
 });
 

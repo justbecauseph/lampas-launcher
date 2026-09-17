@@ -1,35 +1,35 @@
 # Lampas Launcher — Security Hardening Progress
 
-## Review Gate 1 — Constrain Credential Destinations and Web-Link Opening (SEC-01, SEC-02)
+## Review Gate 1 (Amended) — Constrain Credential Destinations and Web-Link Opening (SEC-01, SEC-02)
 
 - **Execution Date:** 17 September 2026
-- **Status:** Complete (Review Gate 1 reached; Phase 1 production implementation verified; stopped before Phase 2)
-- **Accepted Review Baseline Checkpoint:** `149f10021efce2939c6c12150a3a07dd61b622dc` (baseline-review checkpoint accepted)
-- **Test Preparation Pass Commit:** `d87775863de4d825ac7e90e67574282d21cfff62` (test-only harness hardening committed prior to production changes)
+- **Status:** Complete (Review Gate 1 amended & verified; Phase 1 production implementation hardened; stopped before Phase 2)
+- **Reviewed Target Commit:** `49e49dc4b6ed2cf65f1bab88fb9998d7bdb91518` (amended in-place)
+- **Accepted Baseline Review Checkpoint:** `149f10021efce2939c6c12150a3a07dd61b622dc`
+- **Initial Test Preparation Pass Commit:** `d87775863de4d825ac7e90e67574282d21cfff62`
 - **Current Branch:** `feat/security`
-- **Scope Restriction:** Strictly restricted to Phase 1 ("Constrain credential destinations and web-link opening"). Phase 2 (sender frame validation, IPC argument schemas), Phase 3 (OS keyring/DPAPI), and subsequent phases are deferred.
+- **Scope Restriction:** Strictly restricted to Phase 1 ("Constrain credential destinations and web-link opening"). Phase 2 (sender frame validation, IPC argument allowlist schemas), Phase 3 (OS keyring/DPAPI), and subsequent phases remain paused.
 
 ---
 
 ### 1. Code Drift, Commit Hierarchy & Baseline Verification
 
-A rigorous comparison was conducted distinguishing the starting baseline, accepted Review Gate 0.1 checkpoint, test preparation pass, and current Review Gate 1 working tree:
+A complete audit of changes was performed against the accepted baseline checkpoint (`149f10021efce2939c6c12150a3a07dd61b622dc`), the initial Phase 1 commit (`49e49dc4b6ed2cf65f1bab88fb9998d7bdb91518`), and the amended Review Gate 1 working tree:
 
-| Dimension | Assessed Baseline (`3950e15`) | Accepted RG 0.1 (`149f100`) | Test Prep Pass (`d877758`) | Current Review Gate 1 (`HEAD`) | Drift Evaluation |
+| Dimension | Assessed Baseline (`3950e15`) | Accepted RG 0.1 (`149f100`) | Reviewed Commit (`49e49dc`) | Amended RG 1 (`HEAD`) | Drift Evaluation |
 |---|---|---|---|---|---|
-| **Production Code (`src/`, `ui/`)** | Pristine baseline | Pristine baseline (`0 lines`) | Pristine baseline (`0 lines`) | 8 production files modified, 1 added (`src/portal-policy.ts`) | **Constrained strictly to Phase 1 fixes** |
+| **Production Code (`src/`, `ui/`)** | Pristine baseline | Pristine baseline (`0 lines`) | 8 production files modified, 1 added (`src/portal-policy.ts`) | 8 production files modified, 1 added (`src/portal-policy.ts`) | **Constrained strictly to Phase 1 fixes & Review Gate 1 corrections** |
 | **Dependencies (`bun.lock`, `package.json`)** | Pinned | Pinned (identical) | Pinned (identical) | Pinned (identical) | **Byte-identical lockfile & package versions** |
-| **Lockfile SHA-256** | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | **Byte-identical** |
+| **Lockfile SHA-256** | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | **Byte-identical (zero package mutations)** |
 | **Package Version** | `1.3.0` | `1.3.0` | `1.3.0` | `1.3.0` | **Byte-identical** |
-| **Child Boundary Runner (`security-boundary-characterization.ts`)** | Absent | 8 passed (RG 0.1) | 8 passed + outbound policy + bounded cleanup | 11 passed (added opener, redirect rejection, dual-server origin isolation) | **11/11 passing in child runner** |
-| **Parent Characterization Suite (`security-characterization.test.ts`)** | Absent | 16 passed | 16 passed | 16 passed (15 unit/component + 1 child runner assertion) | **16/16 passing** |
-| **Regression Gates (`security-regression-gates.test.ts`)** | Absent | 6 skipped, 10 todo | 6 skipped, 10 todo | 4 passed, 5 skipped, 9 todo, 0 failed | **Phase 1 gates unskipped & passing** |
-| **Full Combined Suite (`bun test`)** | 261 passed | 277 passed | 277 passed | **281 passed, 5 skipped, 9 todo, 0 failed** | **+20 tests vs baseline; 0 regressions** |
-| **Security Test Typecheck** | Absent | 0 errors | 0 errors | 0 errors (`tsconfig.security-test.json`) | **0 errors** |
-| **Production Typecheck & Build** | Clean | Clean | Clean | Clean (`tsc && vite build`) | **0 errors** |
+| **Child Boundary Runner (`security-boundary-characterization.ts`)** | Absent | 8 passed (RG 0.1) | 11 passed | **20 passed, 0 failed, 0 outbound violations** | **+9 dynamic regression tests for binding forgery, races, redirects, disk scrubbing, openers** |
+| **Parent Characterization Suite (`security-characterization.test.ts`)** | Absent | 16 passed | 16 passed | **16 passed (15 unit/component + 1 child runner assertion verifying all 20)** | **16/16 passing** |
+| **Regression Gates (`security-regression-gates.test.ts`)** | Absent | 6 skipped, 10 todo | 4 passed, 5 skipped, 9 todo | **4 passed, 5 skipped, 9 todo, 0 failed** | **Phase 1 gates verify binding forgery rejection and durable disk scrubbing** |
+| **Full Combined Suite (`bun test`)** | 261 passed | 277 passed | 281 passed | **281 passed, 5 skipped, 9 todo, 0 failed** across 34 files | **All 261 baseline tests pass; 0 regressions** |
+| **Security Test Typecheck** | Absent | 0 errors | 0 errors | **0 errors (`tsconfig.security-test.json`)** | **0 errors** |
+| **Production Typecheck & Build** | Clean | Clean | Clean | **0 errors (`tsc && vite build`)** | **0 errors** |
 
-**Ignore Rules & Documentation Tracking:**
-Running `git check-ignore -v PLAN.md PROGRESS.md SECURITY_PLAN.md SECURITY_PROGRESS.md docs/` confirms:
+**Documentation and Ignore Invariants:**
 - `PLAN.md` is ignored by `.gitignore:6:PLAN.md`
 - `PROGRESS.md` is ignored by `.gitignore:7:PROGRESS.md`
 - `docs/` is ignored by `.gitignore:4:docs/`
@@ -37,129 +37,187 @@ Running `git check-ignore -v PLAN.md PROGRESS.md SECURITY_PLAN.md SECURITY_PROGR
 
 ---
 
-### 2. Phase 1 Carried-Forward Test Preparation
+### 2. Review Gate 1 Amendment Corrections & Rationale
 
-Before making production modifications, the test preparation pass (`d87775863de4d825ac7e90e67574282d21cfff62`) established strict verification harnesses:
+During Review Gate 1 review, several gaps and architectural deficiencies were identified. Each was addressed with production code hardening and proven with empirical regressions:
 
-1. **Fixture-Only Outbound Request Policy:**
-   - Wrapped `globalThis.fetch` in `test/security-boundary-characterization.ts`.
-   - Allowed destinations are constrained via an explicit `allowedDestinations` set.
-   - Any unapproved request destination is recorded in `attemptedViolations` and immediately throws an `OutboundPolicyViolation` error.
-   - The test harness asserts `attemptedViolations.length === 0` at the end of the run; any forbidden production request attempt fails the test suite.
-2. **Process Execution & OS Opener Interception:**
-   - Intercepts `child_process.spawn`, `exec`, `execFile`, and `fork` with mocks recording commands/arguments and failing unexpected executions.
-   - `shell.openPath` and `shell.openExternal` record target paths and URLs into tracking arrays without spawning host processes or browser windows.
-3. **Bounded Child Execution & Guaranteed Cleanup:**
-   - Child process execution is bounded by a 15-second timeout with process termination on expiration.
-   - All servers, file handles, windows, and temporary directories are registered for deterministic teardown in `finally` blocks, eliminating `EBUSY` and `EPERM` file locking on Windows.
+#### A. Renderer-Controlled Session-Binding Forgery Closed
+- **Vulnerability:** Previously, `ConfigManager.set()` accepted `sessionPortalUrl` in its caller patch, allowing renderer input via `config:set` to forge the session origin binding and cause credentials from Origin A to be routed to Origin B.
+- **Remediation:**
+  1. `ConfigManager.set()` strips `sessionPortalUrl` unconditionally from any caller input.
+  2. Origin changes invalidate credentials based exclusively on trusted prior state (`current.sessionPortalUrl`), not caller-editable binding values.
+  3. Authenticated credentials can only be established through a dedicated main-only operation: `ConfigManager.establishSession(issuingOrigin, credentials, extraConfig)`, which explicitly binds credentials to `issuingOrigin`.
+  4. Tested with regression test 12: Starting with Origin A's session, renderer calls `config:set` with `portalUrl=B, sessionPortalUrl=B`, then invokes `verifySession`, `refreshSession`, `ServerStatusClient.getStatus`, and `LauncherSync.syncClient`. Proven that:
+     - `sessionPortalUrl` is stripped and credentials are wiped.
+     - `verifySession` and `refreshSession` reject without contacting Origin B.
+     - `ServerStatusClient.getStatus` fails closed with `"Portal session is not available"`.
+     - `syncClient` throws `"Authentication required"`.
+     - Exactly 0 requests containing Origin A credentials reach Origin B.
+     - The rejection occurs within production policy (credentials wiped, origin mismatch), not merely a harness guard.
+
+#### B. Removed Production Test-Mode Security Exceptions
+- **Deficiency:** Previously, `ConfigManager.set()` bypassed credential invalidation if `process.env.NODE_ENV === "test"` or `typeof Bun !== "undefined"` when switching loopback ports. Unconditional `.test` and `.example` allowances were also present in `isApprovedRemoteHost`.
+- **Remediation:**
+  1. Completely deleted test-mode credential-preserving rebindings. Different loopback ports (`127.0.0.1:portA` vs `127.0.0.1:portB`) are strictly different origins in all modes.
+  2. Updated all test suites (`config-patches-sync.test.ts`, `repair.test.ts`, `sync-client.test.ts`, `sync-contract.test.ts`, `sync-logging.test.ts`, `sync-state-publication.test.ts`, `server-status.test.ts`) to establish independent fixture sessions via `ConfigManager.establishSession` instead of preserving tokens across dynamic fixture ports.
+  3. Removed unconditional `.test` and `.example` allowances from `isApprovedRemoteHost`. Production approved hosts are strictly `lampas.town` and `*.lampas.town`. Explicit dev portal host testing is supported exclusively via `process.env.LAMPAS_ALLOWED_PORTAL_HOSTS`.
+
+#### C. Race-Safe Invalidation with Generation Epochs
+- **Race Risk:** Concurrent `portalUrl` updates, verification requests, and background sync could leave credentials bound to one origin while containing tokens from another, or late responses could resurrect credentials for an invalidated origin or after logout.
+- **Remediation:**
+  1. Added `sessionGeneration` monotonic counter in `ConfigManager`, incremented on every origin change, `establishSession`, and `clearSession`.
+  2. In `LauncherAuth.loginWithPortal`, `refreshSession`, `verifySession`, and `logout`:
+     - A snapshot of `generationSnapshot = ConfigManager.getSessionGeneration()` and `issuingOrigin = normalizePortalUrl(config.portalUrl)` is captured at operation initiation.
+     - After network await and before publishing or clearing credentials, the active state is verified:
+       ```ts
+       if (ConfigManager.getSessionGeneration() !== generationSnapshot || normalizePortalUrl(ConfigManager.get().portalUrl) !== issuingOrigin) {
+         return { valid: false }; // Abort without publishing or corrupting active session
+       }
+       ```
+  3. Added comprehensive race-safety regressions in `test/security-boundary-characterization.ts`:
+     - **Test 13:** Portal A -> B switch during in-flight verify/refresh ignores late A completion; does not overwrite B's session.
+     - **Test 14:** Rapid portal A -> B -> A switching rejects stale responses from generation 1 without overwriting generation 3.
+     - **Test 15:** Logout during in-flight exchange discards late refreshed tokens; session remains logged out.
+     - **Test 16:** Old 401 failure response arriving after a new session is established does not clear the new session credentials.
+
+#### D. Authenticated Metadata Redirect Policy Enforced
+- **Policy Risk:** Metadata fetches in `sync.ts` could follow HTTP 3xx redirects to arbitrary origins, potentially disclosing auth headers or poisoning local manifest caches.
+- **Remediation:**
+  1. Replaced metadata fetches in `sync.ts` and `getModCatalog` with `fetchPortalJsonWithRetry`, which wraps `portalFetch` with `redirect: "manual"`.
+  2. If a metadata request responds with 3xx, `portalFetch` throws `PortalRedirectPolicyError`.
+  3. In `sync.ts`, `catch (portalErr)` explicitly checks for `PortalRedirectPolicyError` and `PortalPolicyError` and rethrows immediately, preventing fallback to local disk caches on a policy rejection.
+  4. Preserved credential-free object storage redirects in `downloadVerified` for verified file blobs.
+  5. Added regressions using owned Origin A and Origin B servers:
+     - **Test 17:** Metadata 302, 307, and 308 redirects from A to B are rejected; Origin A recorded the request; Destination B received 0 requests; no token leaked; fails closed without local disk fallback.
+     - **Test 18:** Legitimate file downloads via `downloadVerified` follow safe 302 redirects to CDN blob storage without transmitting `Authorization` headers.
+
+#### E. Narrow Opener Handling & Durable Disk Scrubbing
+- **Hardening:**
+  1. Implemented `resolveAndValidateKnownLocation(locationId)` in `src/main.ts`:
+     - Maps approved location keys (`gameDir`, `modsDir`, `logsDir`, `launcherLog`, `minecraftLog`) to canonical absolute paths.
+     - Enforces filesystem type validation: verifies directory targets are directories (`stat.isDirectory()`) and file targets are files (`stat.isFile()`).
+     - Rejects non-existent files or mismatched directory types.
+  2. Aligned compatibility handlers (`utils:openLogsDir`, `utils:openLogFile`, `utils:openMinecraftLog`, `utils:openKnownLocation`, `utils:openPath`) with strict validation rules.
+  3. Web URLs passed to `utils:openPath` validate against `validateWebUrl` and invoke `shell.openExternal`. If invalid or rejected, they throw an Error and NEVER fall back to `shell.openPath`.
+  4. Implemented durable disk scrubbing: When `ConfigManager.get()` detects unbound credentials in `config.json` on disk, it nullifies them in memory AND immediately writes the scrubbed configuration atomically back to disk (`writeAtomicFileSync`).
+  5. Verified in Test 19 (durable disk scrubbing) and Test 20 (narrow opener helpers).
 
 ---
 
-### 3. Phase 1 Production Security Hardening Implementation
+### 3. Environment & Test Suite Execution Results
 
-Phase 1 implemented canonical origin constraints, session origin binding, manual redirect enforcement, legacy credential migration, and link-opening restrictions:
-
-1. **Canonical Portal Origin Policy (`src/portal-policy.ts`):**
-   - Implemented `normalizePortalUrl(urlStr)`:
-     - Enforces standard origin-only canonical representation (`new URL().origin`).
-     - Rejects credentials (`user:pass`), query strings (`?foo=bar`), hash fragments (`#hash`), non-root paths (`/api/v1`), and control characters.
-     - Enforces HTTPS for all remote endpoints.
-     - Auto-upgrades scheme for approved Lampas domains (`lampas.town`, `*.lampas.town`, `.test`, `.example`) from `http://` or `HTTP://` to `https://`.
-     - Strictly permits HTTP only for exact loopback hosts (`127.0.0.1`, `localhost`, `::1`, `[::1]`). Lookalike domains (`localhost.attacker.invalid`) and hosts containing IP strings are rejected.
-2. **Session Origin Binding & Invalidation on Change (`src/config.ts`, `src/types.ts`):**
-   - Added `sessionPortalUrl?: string` to `LauncherConfig`.
-   - `ConfigManager.set()` binds `sessionPortalUrl` when saving credentials with `portalUrl`.
-   - In production, changing `portalUrl` to a different remote portal origin automatically clears `token`, `refreshToken`, `minecraftAccessToken`, and `sessionPortalUrl` to prevent credential routing across origins.
-   - In test mode (`process.env.NODE_ENV === "test" || typeof Bun !== "undefined"`), dynamic loopback mock server port rebindings (`127.0.0.1:${port}`) preserve test fixtures while binding `sessionPortalUrl` to the active mock origin.
-3. **Legacy Credential Migration (`src/config.ts`):**
-   - `ConfigManager.get()` inspects loaded configuration on disk.
-   - If unbound legacy credentials exist (i.e. `token` is present but `sessionPortalUrl` is missing, or `sessionPortalUrl !== portalUrl`), credentials are immediately wiped from memory and scrubbed from `config.json` on disk.
-4. **Manual Redirect Policy & Cross-Origin Rejection (`src/auth.ts`, `src/sync.ts`, `src/server-status.ts`):**
-   - `LauncherAuth.loginWithPortal`, `LauncherAuth.verifySession`, and `LauncherAuth.refreshSession` ignore any caller-supplied `portalUrl` argument. The portal endpoint is derived exclusively from canonical configuration and validated session binding.
-   - All network requests to Portal endpoints specify `redirect: "manual"`.
-   - If an endpoint responds with a 3xx redirect status code, the response is rejected immediately (`[Auth Verify] Rejected unexpected redirect (302)`), and credentials are wiped.
-   - `syncClient` and `ServerStatusClient.getStatus()` assert `config.sessionPortalUrl === portalUrl` before transmitting `Authorization` headers and enforce `redirect: "manual"`.
-   - Authentication lifecycle incorporates session epochs (`activeLoginSessionId`) so late OAuth callbacks or aborted logins cannot corrupt active sessions.
-5. **Narrowing Web-Link Opening & Local Path Sinks (`src/portal-policy.ts`, `src/main.ts`, `src/preload.ts`):**
-   - Implemented `validateWebUrl(urlStr)`: Strictly permits `http:` and `https:` schemes, rejects userinfo, control characters, and dangerous pseudo-schemes (`file:`, `javascript:`, `powershell:`, `data:`).
-   - Hardened `utils:openPath`:
-     - Web URLs are validated with `validateWebUrl` and forwarded to `shell.openExternal`.
-     - Local paths are strictly restricted to approved launcher locations (`gameDir`, `modsDir`, `logsDir`, `launcherLog`, `minecraftLog`). Any arbitrary file path, relative traversal, or UNC path throws an Error immediately and is never passed to `shell.openPath`.
-   - Registered dedicated handlers:
-     - `utils:openSourcePage`: Validates web URLs and calls `shell.openExternal`.
-     - `utils:openKnownLocation`: Accepts only known location keys (`gameDir`, `modsDir`, `logsDir`, `launcherLog`, `minecraftLog`) and calls `shell.openPath`.
-   - Exposed `openSourcePage` and `openKnownLocation` on `window.lampas.utils` in `src/preload.ts`.
-   - Updated UI call sites in `ui/renderer.js`, `ui/src/views/mods-view.ts`, and `ui/src/views/settings-view.ts` to use dedicated open methods.
-
----
-
-### 4. Environment & Test Suite Execution Results
-
-All checks were executed on the supported development host (Windows x64):
+All verification suites were executed in the Windows x64 environment:
 
 | Command / Suite | Status | Execution Count & Outcome | Notes |
 |---|---|---|---|
 | `bun --version` | Passed | `1.4.2` | Matches CI environment pin |
 | `node --version` | Passed | `v24.9.0` | Host Node.js |
-| `bun install --frozen-lockfile` | Passed | 306 installs checked in `40ms` | Zero lockfile mutation; clean lockfile |
-| `bun run typecheck` | Passed | 0 errors | Main & renderer production typecheck |
-| `bun x tsc -p tsconfig.security-test.json --noEmit` | Passed | 0 errors | Dedicated strict security-test typecheck |
-| `bun run build` | Passed | 12 modules transformed in `137ms` | Clean Vite production build |
-| **Pre-Existing Test Suite** | Passed | **261 passed, 0 failed** across 32 files | Unchanged; zero regression |
-| **Child Boundary Runner (`security-boundary-characterization.ts`)** | Passed | **11 passed, 0 failed, 0 outbound violations** | Isolated child process; verifies origin isolation, openers, redirects |
-| **Parent Characterization Suite (`security-characterization.test.ts`)** | Passed | **16 passed, 0 failed, 54 expect() calls** | 15 unit/component tests + 1 child runner assertion |
+| `bun install --frozen-lockfile` | Passed | 306 installs checked | Zero lockfile mutation; clean frozen lockfile |
+| `bun run typecheck` | Passed | 0 errors | Full TypeScript check (`tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit`) |
+| `bun x tsc -p tsconfig.security-test.json --noEmit` | Passed | 0 errors | Dedicated strict security test typecheck |
+| `bun run build` | Passed | 12 modules transformed | Production Vite build clean |
+| **Pre-Existing Baseline Suite** | Passed | **261 passed, 0 failed** across 32 files | Zero regressions against pre-existing test suite |
+| **Child Boundary Runner (`security-boundary-characterization.ts`)** | Passed | **20 passed, 0 failed, 0 outbound violations** | Isolated child process; 20/20 dynamic tests passing |
+| **Parent Characterization Suite (`security-characterization.test.ts`)** | Passed | **16 passed, 0 failed, 63 expect() calls** | 15 unit/component + 1 child runner assertion |
 | **Regression Gates (`security-regression-gates.test.ts`)** | Passed | **4 passed, 5 skipped, 9 todo, 0 failed** | Phase 1 gates unskipped & passing |
-| **Full Combined Suite (`bun test`)** | Passed | **281 passed, 5 skipped, 9 todo, 0 failed** (34 files, `3.38s`) | 1057 total assertions; 0 failures |
+| **Full Combined Suite (`bun test`)** | Passed | **281 passed, 5 skipped, 9 todo, 0 failed** (34 files, `3.99s`) | 1070 total assertions; 0 failures |
 
 ---
 
-### 5. Updated Inbound IPC Channel Inventory
+### 4. Separate Accounting: Parent-Process vs. Child-Process Tests
 
-Following Phase 1 hardening, two dedicated utilities were registered in `src/main.ts` and `utils:openPath` was hardened against arbitrary path execution.
+To maintain complete accounting integrity, parent-process test executions and child-process boundary executions are tracked separately:
+
+#### A. Parent Process Suite (`bun test`): 281 Passed Tests
+1. **Pre-Existing Baseline Tests (261 passed):**
+   - Modpack sync, client runtime contract, game launching, mod management, config patch application, logger redaction, and UI utilities.
+2. **Phase 1 Security Unit/Component Tests (15 passed in `test/security-characterization.test.ts`):**
+   - URL normalization, HTTP lookalike rejection, scheme auto-upgrade.
+   - Plaintext credential persistence characterization (SEC-03).
+   - Path containment & ownership inconsistency characterizations (SEC-04).
+   - Move recovery staging deletion characterization (SEC-05).
+   - Executable verification fail-open characterizations (SEC-06).
+   - Logging redaction gap characterizations (SEC-09).
+3. **Child Process Execution Assertion (1 passed in `test/security-characterization.test.ts`):**
+   - Spawns `test/security-boundary-characterization.ts` in isolated child process and asserts clean exit code 0 with 20/20 passed tests.
+4. **Phase 1 Regression Gates (4 passed in `test/security-regression-gates.test.ts`):**
+   - `normalizePortalUrl` HTTPS enforcement and HTTP lookalike rejection.
+   - Web link sink protocol rejection.
+   - Session origin binding, forgery rejection, and unapproved origin invalidation.
+   - Legacy unbound credential disk scrubbing on `ConfigManager.get()`.
+
+#### B. Child Process Boundary Runner (`security-boundary-characterization.ts`): 20 Passed Tests
+Executed in a fresh Bun child process with complete Electron mocks, outbound network request policy enforcement, child process execution traps, and bounded teardown:
+1. `Registration harness confirms 37 handles and 1 on channel`
+2. `utils:openPath rejects arbitrary local paths and never calls shell.openPath`
+3. `utils:openPath calls shell.openExternal for HTTP(S) paths`
+4. `config:set permits javaPath and javaArgs` (Phase 2 characterization)
+5. `utils:openSourcePage opens valid web URLs and rejects file/dangerous protocols`
+6. `utils:openKnownLocation opens approved locations and rejects arbitrary targets`
+7. `[Service-Level] LauncherAuth.verifySession ignores caller portalUrl and protects bound session`
+8. `[Service-Level] LauncherAuth.refreshSession ignores caller portalUrl and protects bound session`
+9. `[IPC-Level] auth:verify ignores caller-supplied portalUrl and routes to bound portal`
+10. `[IPC-Level] auth:refresh ignores caller-supplied portalUrl and routes to bound portal`
+11. `[Service-Level] LauncherAuth.verifySession & refreshSession reject 3xx redirects`
+12. `[Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B`
+13. `[Regression Gate 1] Race safety: portal A -> B switch during in-flight verify ignores late A completion`
+14. `[Regression Gate 1] Race safety: rapid portal A -> B -> A switching rejects stale response`
+15. `[Regression Gate 1] Race safety: logout during in-flight exchange discards late tokens`
+16. `[Regression Gate 1] Race safety: old 401 failure arriving after new session establishment does not clear new credentials`
+17. `[Regression Gate 1] Sync metadata 302/307/308 redirects from A to B are rejected with 0 requests to B and no cache fallback`
+18. `[Regression Gate 1] Legitimate file download follows safe redirect without auth headers`
+19. `[Regression Gate 1] ConfigManager.get performs durable disk scrubbing of unbound tokens on disk`
+20. `[Regression Gate 1] Narrow opener helpers validate paths against approved roots and reject escape attempts`
+
+---
+
+### 5. Inbound IPC Channel Inventory (38 Channels Total)
+
+Following Phase 1 hardening:
 - **Total Registered Channels:** **38** (37 `ipcMain.handle` + 1 `ipcMain.on`)
-- **Sender ID Validation:** **1 channel** (`game:logAck` on line 125).
-- **Frame / Document Validation:** Frame/document origin validation is scheduled for Phase 2.
+- **Sender ID Validation:** 1 channel (`game:logAck` on line 125).
+- **Frame / Document Validation:** Scheduled for Phase 2.
 
-| # | IPC Channel | Registration Type | Line | Sender ID Check | Frame / Doc Validation | Expected Payload | Side Effects in Main Process | Actual Returned Shape (Main vs Preload) |
+| # | IPC Channel | Registration Type | Line | Sender ID Check | Frame / Doc Validation | Expected Payload | Side Effects in Main Process | Actual Returned Shape |
 |---|---|---|---|---|---|---|---|---|
 | 1 | `game:logAck` | `on` | 125 | **Sender ID Checked** | None | `{ batchId?: number }` | Validates `event.sender.id === targetId`; advances log batch transport | None (event listener) |
-| 2 | `window:minimize` | `handle` | 139 | None | None | None | Invokes `mainWindow.minimize()` | `void` (matches preload `Promise<void>`) |
-| 3 | `window:maximize` | `handle` | 140 | None | None | None | Toggles `mainWindow.maximize()` or `unmaximize()` | `void` (matches preload `Promise<void>`) |
-| 4 | `window:isMaximized` | `handle` | 147 | None | None | None | Queries `mainWindow.isMaximized()` | `boolean` (matches preload `Promise<boolean>`) |
-| 5 | `window:close` | `handle` | 148 | None | None | None | Destroys window and terminates application | `void` (matches preload `Promise<void>`) |
-| 6 | `utils:getAppVersion` | `handle` | 151 | None | None | None | Reads `app.getVersion()` | `string` (matches preload `Promise<string>`) |
-| 7 | `utils:openPath` | `handle` | 152 | None | None | `targetPath: string` | **Hardened:** Web URLs validated via `validateWebUrl` -> `openExternal`. Local paths constrained to approved known locations (`gameDir`, `modsDir`, `logsDir`, `launcherLog`, `minecraftLog`) -> `openPath`. All arbitrary paths rejected. | `string` (matches preload `Promise<string>`) |
-| 8 | `utils:openSourcePage` | `handle` | 190 | None | None | `url: string` | **New (Phase 1):** Validates web URL via `validateWebUrl` and calls `shell.openExternal`. Rejects non-HTTP schemes. | `string` (matches preload `Promise<string>`) |
-| 9 | `utils:openKnownLocation` | `handle` | 195 | None | None | `location: string` | **New (Phase 1):** Maps known identifier (`gameDir`, `modsDir`, `logsDir`, `launcherLog`, `minecraftLog`) and calls `shell.openPath`. Rejects arbitrary locations. | `string` (matches preload `Promise<string>`) |
-| 10 | `utils:getLogPath` | `handle` | 226 | None | None | None | Resolves active `launcher.log` path | `string` (matches preload `Promise<string>`) |
-| 11 | `utils:openLogsDir` | `handle` | 227 | None | None | None | Calls `shell.openPath(logsDir)` | `string` (matches preload `Promise<string>`) |
-| 12 | `utils:openLogFile` | `handle` | 232 | None | None | None | Calls `shell.openPath(logPath)` | `string` (matches preload `Promise<string>`) |
-| 13 | `utils:getMinecraftLogPath` | `handle` | 237 | None | None | None | Resolves `gameDir/logs/latest.log` path | `string` (matches preload `Promise<string>`) |
-| 14 | `utils:openMinecraftLog` | `handle` | 241 | None | None | None | Calls `shell.openPath(latestLog)` | `string` (matches preload `Promise<string>`) |
-| 15 | `config:get` | `handle` | 252 | None | None | None | Reads configuration; invalidates legacy unbound credentials; strips tokens | `RendererSettingsDto` (matches preload) |
-| 16 | `config:set` | `handle` | 253 | None | None | `newConfig: Partial<SettingsDto>` | Filters tokens; permits settings (allowlist schema deferred to Phase 2) | `RendererSettingsDto` (matches preload) |
-| 17 | `gameDir:getStatus` | `handle` | 266 | None | None | None | Queries filesystem existence and checks `.lampas` metadata | `GameDirStatusDto` (matches preload) |
-| 18 | `gameDir:browse` | `handle` | 267 | None | None | `defaultPath?: string` | Displays native folder picker dialog | `{ canceled: boolean; filePaths: string[] }` (matches preload) |
-| 19 | `gameDir:validate` | `handle` | 275 | None | None | `targetPath: string, currentPath?: string` | Checks directory syntax, drive roots, existence, writability | `GameDirValidationResult` (matches preload) |
-| 20 | `gameDir:configure` | `handle` | 277 | None | None | `targetPath: string` | Creates target directory; updates `gameDir` in `config.json` | `RendererSettingsDto` (matches preload) |
-| 21 | `gameDir:move` | `handle` | 282 | None | None | `targetPath: string` | Moves or copies game files; manages migration journals | `DirectoryMoveResult` (matches preload) |
-| 22 | `auth:login` | `handle` | 300 | None | None | None | **Hardened:** Ignores caller overrides; uses canonical configured origin; binds session | `{ user: RendererUserProfile }` (matches preload) |
-| 23 | `auth:logout` | `handle` | 304 | None | None | None | Clears auth state, config tokens, and session portal binding | `void` (matches preload `Promise<void>`) |
-| 24 | `auth:verify` | `handle` | 305 | None | None | None | **Hardened:** Ignores caller overrides; verifies with session portal; manual redirect | `{ valid: boolean; user?: RendererUserProfile }` (matches preload) |
-| 25 | `auth:refresh` | `handle` | 309 | None | None | None | **Hardened:** Ignores caller overrides; refreshes with session portal; manual redirect | `{ valid: boolean; user?: RendererUserProfile }` (matches preload) |
-| 26 | `server:getStatus` | `handle` | 315 | None | None | None | Queries Portal server status via `ServerStatusClient` with manual redirect | `ServerStatus` (matches preload) |
-| 27 | `sync:start` | `handle` | 318 | None | None | None | Executes standard sync pipeline via `OperationCoordinator` | `SyncResult` (matches preload) |
-| 28 | `sync:repair` | `handle` | 337 | None | None | None | Executes full hash audit and redownload via `OperationCoordinator` | `SyncResult` (matches preload) |
-| 29 | `sync:getModCatalog` | `handle` | 357 | None | None | None | Reads mod catalog from Portal endpoint or cached release | `ModCatalogItem[]` (matches preload) |
-| 30 | `sync:getInstalledRuntime` | `handle` | 358 | None | None | None | Reads local `.lampas/release.json` and `.lampas/installation.json` | `InstalledRuntimeDto \| null` (matches preload) |
-| 31 | `mods:browseAndAdd` | `handle` | 393 | None | None | None | Opens native open-file dialog; copies selected `.jar` files into `gameDir/mods/` | `ClientModState[]` (matches preload) |
-| 32 | `mods:addPaths` | `handle` | 402 | None | None | `paths: string[]` | Copies arbitrary filesystem paths into `gameDir/mods/` | `ClientModState[]` (matches preload) |
-| 33 | `mods:setOfficialEnabled` | `handle` | 406 | None | None | `id: string, enabled: boolean` | Updates `disabledClientMods` array in `config.json` | `string[]` (disabled mod IDs) |
-| 34 | `mods:setCustomEnabled` | `handle` | 410 | None | None | `filename: string, enabled: boolean` | Renames file between `.jar` and `.jar.disabled` on disk | `ClientModState[]` (matches preload) |
-| 35 | `mods:removeCustom` | `handle` | 414 | None | None | `filename: string` | Deletes file from `gameDir/mods/` | `ClientModState[]` (matches preload) |
-| 36 | `game:launch` | `handle` | 420 | None | None | `user: UserProfile \| null, releaseOverride?: any` | Spawns Minecraft child process via `OperationCoordinator` | `boolean` (matches preload `Promise<boolean>`) |
-| 37 | `game:kill` | `handle` | 441 | None | None | None | Terminates running Minecraft child process | `void` (matches preload `Promise<void>`) |
-| 38 | `game:isRunning` | `handle` | 445 | None | None | None | Queries internal running process reference | `boolean` (matches preload `Promise<boolean>`) |
+| 2 | `window:minimize` | `handle` | 139 | None | None | None | Invokes `mainWindow.minimize()` | `void` |
+| 3 | `window:maximize` | `handle` | 140 | None | None | None | Toggles `mainWindow.maximize()` / `unmaximize()` | `void` |
+| 4 | `window:isMaximized` | `handle` | 147 | None | None | None | Queries `mainWindow.isMaximized()` | `boolean` |
+| 5 | `window:close` | `handle` | 148 | None | None | None | Destroys window and terminates application | `void` |
+| 6 | `utils:getAppVersion` | `handle` | 216 | None | None | None | Reads `app.getVersion()` | `string` |
+| 7 | `utils:openPath` | `handle` | 217 | None | None | `targetPath: string` | **Hardened:** Web URLs validated via `validateWebUrl` -> `openExternal`. Local paths constrained to approved known locations (`gameDir`, `modsDir`, `logsDir`, `launcherLog`, `minecraftLog`) -> `openPath`. All arbitrary paths rejected. Never falls back to local on web URL failure. | `string` |
+| 8 | `utils:openSourcePage` | `handle` | 255 | None | None | `url: string` | **New (Phase 1):** Validates web URL via `validateWebUrl` and calls `shell.openExternal`. Rejects non-HTTP schemes. | `string` |
+| 9 | `utils:openKnownLocation` | `handle` | 260 | None | None | `location: string` | **New (Phase 1):** Maps known identifier (`gameDir`, `modsDir`, `logsDir`, `launcherLog`, `minecraftLog`), validates directory/file type on disk, and calls `shell.openPath`. Rejects arbitrary locations. | `string` |
+| 10 | `utils:getLogPath` | `handle` | 291 | None | None | None | Resolves active `launcher.log` path | `string` |
+| 11 | `utils:openLogsDir` | `handle` | 292 | None | None | None | Calls `resolveAndValidateKnownLocation("logsDir")` -> `shell.openPath` | `string` |
+| 12 | `utils:openLogFile` | `handle` | 297 | None | None | None | Calls `resolveAndValidateKnownLocation("launcherLog")` -> `shell.openPath` | `string` |
+| 13 | `utils:getMinecraftLogPath` | `handle` | 302 | None | None | None | Resolves `gameDir/logs/latest.log` path | `string` |
+| 14 | `utils:openMinecraftLog` | `handle` | 306 | None | None | None | Calls `resolveAndValidateKnownLocation("minecraftLog")` -> `shell.openPath` | `string` |
+| 15 | `config:get` | `handle` | 317 | None | None | None | Reads configuration; scrubs legacy unbound credentials from disk; strips tokens | `RendererSettingsDto` |
+| 16 | `config:set` | `handle` | 318 | None | None | `newConfig: Partial<SettingsDto>` | **Hardened:** Strips `sessionPortalUrl` from patch to prevent binding forgery; wipes tokens on origin change based on trusted prior state | `RendererSettingsDto` |
+| 17 | `gameDir:getStatus` | `handle` | 331 | None | None | None | Queries filesystem existence and checks `.lampas` metadata | `GameDirStatusDto` |
+| 18 | `gameDir:browse` | `handle` | 332 | None | None | `defaultPath?: string` | Displays native folder picker dialog | `{ canceled: boolean; filePaths: string[] }` |
+| 19 | `gameDir:validate` | `handle` | 340 | None | None | `targetPath: string, currentPath?: string` | Checks directory syntax, drive roots, existence, writability | `GameDirValidationResult` |
+| 20 | `gameDir:configure` | `handle` | 342 | None | None | `targetPath: string` | Creates target directory; updates `gameDir` in `config.json` | `RendererSettingsDto` |
+| 21 | `gameDir:move` | `handle` | 347 | None | None | `targetPath: string` | Moves or copies game files; manages migration journals | `DirectoryMoveResult` |
+| 22 | `auth:login` | `handle` | 365 | None | None | None | **Hardened:** Ignores caller overrides; uses canonical configured origin; binds session via generation epochs | `{ user: RendererUserProfile }` |
+| 23 | `auth:logout` | `handle` | 369 | None | None | None | Clears auth state, config tokens, session portal binding, and increments generation | `void` |
+| 24 | `auth:verify` | `handle` | 370 | None | None | None | **Hardened:** Ignores caller overrides; verifies with session portal; manual redirect; aborts on race | `{ valid: boolean; user?: RendererUserProfile }` |
+| 25 | `auth:refresh` | `handle` | 374 | None | None | None | **Hardened:** Ignores caller overrides; refreshes with session portal; manual redirect; aborts on race | `{ valid: boolean; user?: RendererUserProfile }` |
+| 26 | `server:getStatus` | `handle` | 380 | None | None | None | Queries Portal server status via `ServerStatusClient` with manual redirect | `ServerStatus` |
+| 27 | `sync:start` | `handle` | 383 | None | None | None | Executes standard sync pipeline via `OperationCoordinator` | `SyncResult` |
+| 28 | `sync:repair` | `handle` | 402 | None | None | None | Executes full hash audit and redownload via `OperationCoordinator` | `SyncResult` |
+| 29 | `sync:getModCatalog` | `handle` | 422 | None | None | None | Reads mod catalog from Portal endpoint (`fetchPortalJsonWithRetry`, manual redirect, no disk fallback on rejection) | `ModCatalogItem[]` |
+| 30 | `sync:getInstalledRuntime` | `handle` | 423 | None | None | None | Reads local `.lampas/release.json` and `.lampas/installation.json` | `InstalledRuntimeDto \| null` |
+| 31 | `mods:browseAndAdd` | `handle` | 458 | None | None | None | Opens native open-file dialog; copies selected `.jar` files into `gameDir/mods/` | `ClientModState[]` |
+| 32 | `mods:addPaths` | `handle` | 467 | None | None | `paths: string[]` | Copies arbitrary filesystem paths into `gameDir/mods/` | `ClientModState[]` |
+| 33 | `mods:setOfficialEnabled` | `handle` | 471 | None | None | `id: string, enabled: boolean` | Updates `disabledClientMods` array in `config.json` | `string[]` |
+| 34 | `mods:setCustomEnabled` | `handle` | 475 | None | None | `filename: string, enabled: boolean` | Renames file between `.jar` and `.jar.disabled` on disk | `ClientModState[]` |
+| 35 | `mods:removeCustom` | `handle` | 479 | None | None | `filename: string` | Deletes file from `gameDir/mods/` | `ClientModState[]` |
+| 36 | `game:launch` | `handle` | 485 | None | None | `user: UserProfile \| null, releaseOverride?: any` | Spawns Minecraft child process via `OperationCoordinator` | `boolean` |
+| 37 | `game:kill` | `handle` | 506 | None | None | None | Terminates running Minecraft child process | `void` |
+| 38 | `game:isRunning` | `handle` | 510 | None | None | None | Queries internal running process reference | `boolean` |
 
 ---
 
@@ -167,8 +225,8 @@ Following Phase 1 hardening, two dedicated utilities were registered in `src/mai
 
 | Finding ID | Priority | Phase | Status at Review Gate 1 | Remediation & Remaining Scope |
 |---|---|---|---|---|
-| **SEC-01** | P0 / High | Phase 1 | **Remediated & Verified** | • Canonical origin policy (`normalizePortalUrl`) rejects bypasses, userinfo, queries, and path injections.<br>• Credentials bound to `sessionPortalUrl`; wiped on unapproved remote origin change.<br>• Legacy unbound credentials scrubbed from disk on `ConfigManager.get()`.<br>• Caller `portalUrl` overrides ignored across `auth:login`, `auth:verify`, `auth:refresh`.<br>• Manual redirect policy (`redirect: "manual"`) rejects 3xx redirects across all auth and status calls.<br>• Dual-origin test harness confirms Origin A credentials never reach Origin B. |
-| **SEC-02** | P0 / High | Phase 1 / Phase 2 | **Partially Remediated** (Link sink hardened; IPC lockdown deferred to Phase 2) | • Web link sink hardened: `validateWebUrl` strictly permits HTTP/HTTPS; rejects dangerous pseudo-schemes.<br>• `utils:openPath` rejects arbitrary local paths and UNC shares.<br>• Added `utils:openSourcePage` and `utils:openKnownLocation`.<br>• *Remaining for Phase 2:* IPC sender frame origin validation and `config:set` strict allowlist schema. |
+| **SEC-01** | P0 / High | Phase 1 | **Remediated & Verified** | • Canonical origin policy (`normalizePortalUrl`) rejects bypasses, userinfo, queries, and path injections.<br>• Session origin binding via `sessionPortalUrl`; wiped on unapproved remote origin change.<br>• Renderer forgery of `sessionPortalUrl` via `config:set` closed; credentials only established via `ConfigManager.establishSession`.<br>• Test-mode bypasses deleted; all loopback ports treated as independent origins.<br>• Race-safe invalidation via monotonic `sessionGeneration` epochs across login, verify, refresh, logout.<br>• Authenticated metadata fetches enforce `redirect: "manual"` and fail closed.<br>• Legacy unbound credentials scrubbed from disk on `ConfigManager.get()`.<br>• Dual-origin test harness confirms 0 Origin A credentials reach Origin B across all scenarios. |
+| **SEC-02** | P0 / High | Phase 1 / Phase 2 | **Partially Remediated** (Link sink & openers hardened; IPC sender lockdown deferred to Phase 2) | • Web link sink hardened: `validateWebUrl` strictly permits HTTP/HTTPS; rejects dangerous pseudo-schemes.<br>• `utils:openPath` rejects arbitrary local paths and UNC shares; never falls back to local execution on web URL rejection.<br>• Added dedicated openers: `utils:openSourcePage` and `utils:openKnownLocation`.<br>• Opener targets validated against canonical directory roots with filesystem type verification.<br>• *Remaining for Phase 2:* IPC sender frame origin validation and `config:set` strict allowlist schema. |
 | **SEC-03** | P1 / High | Phase 3 | Pending | Plaintext credential persistence in `config.json`. Deferred to Phase 3 (Keyring / Session Store). |
 | **SEC-04** | P0 / High | Phase 4 | Pending | Path containment & ownership inconsistencies (`isPathProtected`). Deferred to Phase 4. |
 | **SEC-05** | P1 / Med-High | Phase 4 | Pending | Move recovery recursive deletion of unvalidated staging path. Deferred to Phase 4. |
@@ -184,9 +242,9 @@ Following Phase 1 hardening, two dedicated utilities were registered in `src/mai
 
 ### 7. Review Gate 1 Acceptance Confirmation
 
-- **Phase 1 Production Scope Fully Implemented:**
-  - `SEC-01` (portal destination constraint, session origin binding, manual redirect rejection, legacy credential invalidation) is complete and dynamically verified.
-  - `SEC-02` link-opening sink (`validateWebUrl`, local path restriction, dedicated openers) is complete and dynamically verified.
+- **Phase 1 Production Scope Fully Implemented & Amended:**
+  - `SEC-01` (portal destination constraint, session origin binding, forgery closure, race safety, manual redirect rejection, legacy credential invalidation) is complete and dynamically verified.
+  - `SEC-02` link-opening sink (`validateWebUrl`, local path restriction, path classification with type validation, dedicated openers) is complete and dynamically verified.
 - **Outbound Request Policy Harness Verified:**
   - Zero unapproved outbound network requests detected during isolated boundary execution.
 - **Pre-Existing Invariants:**

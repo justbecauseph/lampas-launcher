@@ -23,6 +23,20 @@ export class PortalPolicyError extends Error {
   }
 }
 
+export class PortalRedirectPolicyError extends Error {
+  readonly status: number;
+  readonly location: string | null;
+  readonly endpointUrl: string;
+
+  constructor(status: number, location: string | null, endpointUrl: string) {
+    super(`[PortalRedirectPolicy] Authenticated metadata endpoint '${endpointUrl}' rejected redirect (${status}) to '${location || "unknown"}'`);
+    this.name = "PortalRedirectPolicyError";
+    this.status = status;
+    this.location = location;
+    this.endpointUrl = endpointUrl;
+  }
+}
+
 export class WebOpeningPolicyError extends Error {
   constructor(message: string) {
     super(`[WebOpeningPolicy] ${message}`);
@@ -45,6 +59,8 @@ export function isExactLoopbackHost(hostname: string): boolean {
 
 /**
  * Checks if a remote hostname is approved according to the application contract.
+ * Approved remote hosts: lampas.town and *.lampas.town.
+ * Explicit development hosts may be configured via LAMPAS_ALLOWED_PORTAL_HOSTS.
  */
 export function isApprovedRemoteHost(hostname: string): boolean {
   const lower = hostname.toLowerCase();
@@ -52,11 +68,30 @@ export function isApprovedRemoteHost(hostname: string): boolean {
   if (lower === "lampas.town" || lower.endsWith(".lampas.town")) {
     return true;
   }
-  // Allow RFC 2606 / RFC 6761 .test domain for local test suites
-  if (lower.endsWith(".test") || lower.endsWith(".example")) {
+  // Explicit development portal hosts configured via environment
+  const allowedDevHosts = process.env.LAMPAS_ALLOWED_PORTAL_HOSTS?.split(",").map((h) => h.trim().toLowerCase()) || [];
+  if (allowedDevHosts.includes(lower)) {
     return true;
   }
   return false;
+}
+
+/**
+ * Restricted Portal transport path for authenticated metadata requests.
+ * Enforces manual redirect policy (redirect: "manual") and rejects any redirect status (301, 302, 307, 308).
+ */
+export async function portalFetch(url: string, init?: RequestInit): Promise<Response> {
+  const resp = await fetch(url, {
+    ...init,
+    redirect: "manual",
+  });
+
+  if ((resp.status >= 300 && resp.status < 400) || resp.type === "opaqueredirect") {
+    const location = resp.headers.get("location");
+    throw new PortalRedirectPolicyError(resp.status, location, url);
+  }
+
+  return resp;
 }
 
 /**

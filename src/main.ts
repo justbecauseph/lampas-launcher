@@ -147,6 +147,71 @@ app.whenReady().then(async () => {
   ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
   ipcMain.handle("window:close", () => mainWindow?.close());
 
+  // Helper: validate known location identifiers, expected types, and authorizations
+  type KnownLocationId = "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog";
+  const knownLocationIds: KnownLocationId[] = ["gameDir", "modsDir", "logsDir", "launcherLog", "minecraftLog"];
+
+  function resolveAndValidateKnownLocation(locationId: string): string {
+    if (typeof locationId !== "string" || !locationId.trim()) {
+      throw new Error("Location identifier must be a non-empty string.");
+    }
+    const id = locationId.trim() as KnownLocationId;
+    const config = ConfigManager.get();
+
+    let targetPath: string;
+    let expectedType: "dir" | "file";
+    let createIfMissing = false;
+    let missingErrorMessage: string | undefined;
+
+    switch (id) {
+      case "gameDir":
+        targetPath = path.resolve(config.gameDir);
+        expectedType = "dir";
+        createIfMissing = true;
+        break;
+      case "modsDir":
+        targetPath = path.resolve(path.join(config.gameDir, "mods"));
+        expectedType = "dir";
+        createIfMissing = true;
+        break;
+      case "logsDir":
+        targetPath = path.resolve(LauncherLogger.getLogsDir());
+        expectedType = "dir";
+        createIfMissing = true;
+        break;
+      case "launcherLog":
+        targetPath = path.resolve(LauncherLogger.getLogPath());
+        expectedType = "file";
+        missingErrorMessage = "Launcher log file does not exist yet.";
+        break;
+      case "minecraftLog":
+        targetPath = path.resolve(path.join(config.gameDir, "logs", "latest.log"));
+        expectedType = "file";
+        missingErrorMessage = "Minecraft log (latest.log) not found. Launch Minecraft first to create it.";
+        break;
+      default:
+        throw new Error(`Unknown location '${locationId}'. Permitted locations: gameDir, modsDir, logsDir, launcherLog, minecraftLog`);
+    }
+
+    if (createIfMissing && !fs.existsSync(targetPath)) {
+      fs.mkdirSync(targetPath, { recursive: true });
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      throw new Error(missingErrorMessage || `Target location does not exist: ${targetPath}`);
+    }
+
+    const stat = fs.statSync(targetPath);
+    if (expectedType === "dir" && !stat.isDirectory()) {
+      throw new Error(`Expected directory at '${targetPath}', but found non-directory.`);
+    }
+    if (expectedType === "file" && !stat.isFile()) {
+      throw new Error(`Expected file at '${targetPath}', but found non-file.`);
+    }
+
+    return targetPath;
+  }
+
   // IPC Handlers: Utils
   ipcMain.handle("utils:getAppVersion", () => app.getVersion());
   ipcMain.handle("utils:openPath", async (_, targetPath: string) => {
@@ -155,34 +220,29 @@ app.whenReady().then(async () => {
     }
     const trimmed = targetPath.trim();
 
-    // 1. If web URL (http/https), validate and open externally
+    // 1. If web URL (http/https), validate and open externally. Never fall back to local opening.
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(trimmed)) {
       const validUrl = validateWebUrl(trimmed);
       await shell.openExternal(validUrl);
       return validUrl;
     }
 
-    // 2. Local path handling: strictly constrain to approved known launcher locations
-    const config = ConfigManager.get();
-    const approvedPaths = new Map<string, string>([
-      ["gameDir", path.resolve(config.gameDir)],
-      ["modsDir", path.resolve(path.join(config.gameDir, "mods"))],
-      ["logsDir", path.resolve(LauncherLogger.getLogsDir())],
-      ["launcherLog", path.resolve(LauncherLogger.getLogPath())],
-      ["minecraftLog", path.resolve(path.join(config.gameDir, "logs", "latest.log"))],
-    ]);
-
-    if (approvedPaths.has(trimmed)) {
-      const resolved = approvedPaths.get(trimmed)!;
+    // 2. Local path handling: strictly constrain to approved known launcher locations with type validation
+    if (knownLocationIds.includes(trimmed as KnownLocationId)) {
+      const resolved = resolveAndValidateKnownLocation(trimmed);
       await shell.openPath(resolved);
       return resolved;
     }
 
-    const resolvedTarget = path.resolve(trimmed);
-    const isApproved = Array.from(approvedPaths.values()).some((p) => p === resolvedTarget);
-    if (isApproved) {
-      await shell.openPath(resolvedTarget);
-      return resolvedTarget;
+    // Check if path resolves identically to one of the authorized known locations
+    for (const id of knownLocationIds) {
+      try {
+        const resolved = resolveAndValidateKnownLocation(id);
+        if (path.resolve(trimmed) === resolved) {
+          await shell.openPath(resolved);
+          return resolved;
+        }
+      } catch {}
     }
 
     throw new Error(`Refusing to open unapproved path '${targetPath}'. Only validated web URLs and known launcher locations may be opened.`);
@@ -193,44 +253,18 @@ app.whenReady().then(async () => {
     return validatedUrl;
   });
   ipcMain.handle("utils:openKnownLocation", async (_, location: string) => {
-    const config = ConfigManager.get();
-    let targetPath: string;
-    switch (location) {
-      case "gameDir":
-        targetPath = config.gameDir;
-        break;
-      case "modsDir":
-        targetPath = path.join(config.gameDir, "mods");
-        if (!fs.existsSync(targetPath)) {
-          fs.mkdirSync(targetPath, { recursive: true });
-        }
-        break;
-      case "logsDir":
-        targetPath = LauncherLogger.getLogsDir();
-        break;
-      case "launcherLog":
-        targetPath = LauncherLogger.getLogPath();
-        break;
-      case "minecraftLog":
-        targetPath = path.join(config.gameDir, "logs", "latest.log");
-        if (!fs.existsSync(targetPath)) {
-          throw new Error("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
-        }
-        break;
-      default:
-        throw new Error(`Unknown location '${location}'. Permitted locations: gameDir, modsDir, logsDir, launcherLog, minecraftLog`);
-    }
+    const targetPath = resolveAndValidateKnownLocation(location);
     await shell.openPath(targetPath);
     return targetPath;
   });
   ipcMain.handle("utils:getLogPath", () => LauncherLogger.getLogPath());
   ipcMain.handle("utils:openLogsDir", async () => {
-    const logsDir = LauncherLogger.getLogsDir();
+    const logsDir = resolveAndValidateKnownLocation("logsDir");
     await shell.openPath(logsDir);
     return logsDir;
   });
   ipcMain.handle("utils:openLogFile", async () => {
-    const logPath = LauncherLogger.getLogPath();
+    const logPath = resolveAndValidateKnownLocation("launcherLog");
     await shell.openPath(logPath);
     return logPath;
   });
@@ -239,11 +273,7 @@ app.whenReady().then(async () => {
     return path.join(config.gameDir, "logs", "latest.log");
   });
   ipcMain.handle("utils:openMinecraftLog", async () => {
-    const config = ConfigManager.get();
-    const latestLog = path.join(config.gameDir, "logs", "latest.log");
-    if (!fs.existsSync(latestLog)) {
-      throw new Error("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
-    }
+    const latestLog = resolveAndValidateKnownLocation("minecraftLog");
     await shell.openPath(latestLog);
     return latestLog;
   });
@@ -258,6 +288,7 @@ app.whenReady().then(async () => {
     delete (safeConfig as any).token;
     delete (safeConfig as any).refreshToken;
     delete (safeConfig as any).minecraftAccessToken;
+    delete (safeConfig as any).sessionPortalUrl; // Renderer cannot forge session-binding ownership
     if (typeof safeConfig?.javaArgs === "string") parseJavaArgs(safeConfig.javaArgs);
     return toRendererSettingsDto(ConfigManager.set(safeConfig));
   });

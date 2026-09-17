@@ -44,12 +44,16 @@ function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+import { portalFetch, PortalRedirectPolicyError } from "./portal-policy";
+export { PortalRedirectPolicyError } from "./portal-policy";
+
 export async function fetchJsonWithRetry<T>(
   url: string,
   headers?: Record<string, string>,
   attempts = 3,
   timeoutMs = 60_000,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  redirect: RequestRedirect = "follow"
 ): Promise<T> {
   if (signal?.aborted) {
     throw signal.reason || new Error(`Request to ${url} was aborted.`);
@@ -69,7 +73,10 @@ export async function fetchJsonWithRetry<T>(
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
     try {
-      const response = await fetch(url, { signal: controller.signal, headers });
+      const response = redirect === "manual"
+        ? await portalFetch(url, { signal: controller.signal, headers })
+        : await fetch(url, { signal: controller.signal, headers, redirect });
+
       const durationMs = Date.now() - startTime;
       if (!response.ok) {
         LauncherLogger.logApiResponse("GET", url, response.status, durationMs, response.statusText);
@@ -82,6 +89,9 @@ export async function fetchJsonWithRetry<T>(
       if (signal?.aborted) {
         throw signal.reason || error;
       }
+      if (error instanceof PortalRedirectPolicyError || error?.name === "PortalRedirectPolicyError") {
+        throw error;
+      }
       const durationMs = Date.now() - startTime;
       lastError = error;
       LauncherLogger.logApiError("GET", url, error, durationMs);
@@ -93,6 +103,16 @@ export async function fetchJsonWithRetry<T>(
     }
   }
   throw new Error(`Failed to fetch ${url} after ${attempts} attempts`, { cause: lastError });
+}
+
+export async function fetchPortalJsonWithRetry<T>(
+  url: string,
+  headers?: Record<string, string>,
+  attempts = 3,
+  timeoutMs = 60_000,
+  signal?: AbortSignal
+): Promise<T> {
+  return fetchJsonWithRetry<T>(url, headers, attempts, timeoutMs, signal, "manual");
 }
 
 function tempSibling(filePath: string): string {

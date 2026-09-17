@@ -1,7 +1,7 @@
 import * as http from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { shell } from "electron";
-import { ConfigManager, normalizePortalUrl } from "./config";
+import { ConfigManager, normalizePortalUrl, portalFetch, PortalRedirectPolicyError } from "./config";
 import type { UserProfile } from "./types";
 
 import { LauncherLogger } from "./logger";
@@ -24,6 +24,7 @@ export class LauncherAuth {
     const loginEpoch = ++LauncherAuth.activeLoginSessionId;
     const config = ConfigManager.get();
     const portalUrl = normalizePortalUrl(config.portalUrl);
+    const generationSnapshot = ConfigManager.getSessionGeneration();
     const { verifier, challenge } = generatePkce();
     const state = randomBytes(16).toString("hex");
 
@@ -46,7 +47,11 @@ export class LauncherAuth {
 
             // Phase 1 Security: Late authentication results cannot reinstall an obsolete-origin session
             const currentConfig = ConfigManager.get();
-            if (loginEpoch !== LauncherAuth.activeLoginSessionId || normalizePortalUrl(currentConfig.portalUrl) !== portalUrl) {
+            if (
+              loginEpoch !== LauncherAuth.activeLoginSessionId ||
+              ConfigManager.getSessionGeneration() !== generationSnapshot ||
+              normalizePortalUrl(currentConfig.portalUrl) !== portalUrl
+            ) {
               res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
               res.end("<h3>Authentication Failed: Portal destination was changed or session was cancelled.</h3>");
               server.close();
@@ -99,22 +104,17 @@ export class LauncherAuth {
 
             server.close();
 
-            // Exchange authorization code for token (reject redirects via redirect: "manual")
+            // Exchange authorization code for token (reject redirects via portalFetch)
             const exchangeUrl = `${portalUrl}/api/v1/auth/exchange`;
             const startTime = Date.now();
             LauncherLogger.logApiRequest("POST", exchangeUrl, { code: "[REDACTED]" });
 
-            const resp = await fetch(exchangeUrl, {
+            const resp = await portalFetch(exchangeUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ code, code_verifier: verifier }),
-              redirect: "manual",
             });
             const durationMs = Date.now() - startTime;
-
-            if (resp.status >= 300 && resp.status < 400) {
-              throw new Error("Authentication exchange rejected unexpected redirect.");
-            }
 
             if (!resp.ok) {
               let errMsg = `Token exchange failed (${resp.status})`;
@@ -141,11 +141,20 @@ export class LauncherAuth {
               throw err;
             }
 
-            ConfigManager.set({
+            // Snapshot check immediately before establishing credentials
+            if (
+              loginEpoch !== LauncherAuth.activeLoginSessionId ||
+              ConfigManager.getSessionGeneration() !== generationSnapshot ||
+              normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+            ) {
+              reject(new Error("Authentication session was invalidated or portal changed during token exchange"));
+              return;
+            }
+
+            ConfigManager.establishSession(portalUrl, {
               token: json.token,
               refreshToken: json.refreshToken || undefined,
               minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
-              sessionPortalUrl: portalUrl,
             });
 
             LauncherLogger.info(`[Auth Success] Logged in as ${user.minecraftUsername} (UUID: ${user.minecraftUuid})`);
@@ -186,6 +195,7 @@ export class LauncherAuth {
     }
 
     const portalUrl = normalizePortalUrl(config.portalUrl);
+    const generationSnapshot = ConfigManager.getSessionGeneration();
 
     // Phase 1 Security: Session Origin Binding
     if (!config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
@@ -199,7 +209,7 @@ export class LauncherAuth {
       const startTime = Date.now();
       LauncherLogger.logApiRequest("POST", refreshUrl);
 
-      const resp = await fetch(refreshUrl, {
+      const resp = await portalFetch(refreshUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -209,12 +219,15 @@ export class LauncherAuth {
           refreshToken: config.refreshToken,
           token: config.token,
         }),
-        redirect: "manual",
       });
       const durationMs = Date.now() - startTime;
 
-      if (resp.status >= 300 && resp.status < 400) {
-        LauncherLogger.warn(`[Auth Refresh] Rejected unexpected redirect (${resp.status})`);
+      // Check snapshot after await
+      if (
+        ConfigManager.getSessionGeneration() !== generationSnapshot ||
+        normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+      ) {
+        LauncherLogger.warn("[Auth Refresh] Aborted publishing refresh result: session was superseded or portal changed");
         return { valid: false };
       }
 
@@ -225,7 +238,12 @@ export class LauncherAuth {
         const user = json.user;
         if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
           LauncherLogger.warn("[Auth Refresh] Session invalid: user lacks bound Minecraft UUID");
-          ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
+          if (
+            ConfigManager.getSessionGeneration() === generationSnapshot &&
+            normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
+          ) {
+            ConfigManager.clearSession();
+          }
           return { valid: false };
         }
 
@@ -233,11 +251,18 @@ export class LauncherAuth {
         const newRefreshToken = json.refreshToken || config.refreshToken;
         const newMcToken = user?.minecraftAccessToken || json.minecraftAccessToken || config.minecraftAccessToken;
 
-        ConfigManager.set({
+        // Check snapshot immediately before establishing credentials
+        if (
+          ConfigManager.getSessionGeneration() !== generationSnapshot ||
+          normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+        ) {
+          return { valid: false };
+        }
+
+        ConfigManager.establishSession(portalUrl, {
           token: newToken,
           refreshToken: newRefreshToken,
           minecraftAccessToken: newMcToken,
-          sessionPortalUrl: portalUrl,
         });
 
         return {
@@ -249,8 +274,26 @@ export class LauncherAuth {
         LauncherLogger.logApiResponse("POST", refreshUrl, resp.status, durationMs);
       }
     } catch (err: any) {
+      if (err instanceof PortalRedirectPolicyError || err?.name === "PortalRedirectPolicyError") {
+        LauncherLogger.warn(`[Auth Refresh] Rejected redirect: ${err.message}`);
+        if (
+          ConfigManager.getSessionGeneration() === generationSnapshot &&
+          normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
+        ) {
+          ConfigManager.clearSession();
+        }
+        return { valid: false };
+      }
       LauncherLogger.logApiError("POST", `${portalUrl}/api/v1/auth/refresh`, err);
       // Fall through to verifySession
+    }
+
+    // Check snapshot before fallback
+    if (
+      ConfigManager.getSessionGeneration() !== generationSnapshot ||
+      normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+    ) {
+      return { valid: false };
     }
 
     // 2. Fallback to /api/v1/auth/verify
@@ -264,6 +307,7 @@ export class LauncherAuth {
     }
 
     const portalUrl = normalizePortalUrl(config.portalUrl);
+    const generationSnapshot = ConfigManager.getSessionGeneration();
 
     // Phase 1 Security: Session Origin Binding
     if (!config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
@@ -277,18 +321,20 @@ export class LauncherAuth {
       const startTime = Date.now();
       LauncherLogger.logApiRequest("POST", verifyUrl);
 
-      const resp = await fetch(verifyUrl, {
+      const resp = await portalFetch(verifyUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.token}`,
         },
-        redirect: "manual",
       });
       const durationMs = Date.now() - startTime;
 
-      if (resp.status >= 300 && resp.status < 400) {
-        LauncherLogger.warn(`[Auth Verify] Rejected unexpected redirect (${resp.status})`);
-        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
+      // Check snapshot after await
+      if (
+        ConfigManager.getSessionGeneration() !== generationSnapshot ||
+        normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+      ) {
+        LauncherLogger.warn("[Auth Verify] Aborted verify result: session was superseded or portal changed");
         return { valid: false };
       }
 
@@ -302,16 +348,19 @@ export class LauncherAuth {
             const refreshStart = Date.now();
             LauncherLogger.logApiRequest("POST", refreshUrl);
 
-            const refreshResp = await fetch(refreshUrl, {
+            const refreshResp = await portalFetch(refreshUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ refreshToken: config.refreshToken }),
-              redirect: "manual",
             });
             const refreshDur = Date.now() - refreshStart;
 
-            if (refreshResp.status >= 300 && refreshResp.status < 400) {
-              throw new Error("Refresh rejected unexpected redirect");
+            // Check snapshot after refresh await
+            if (
+              ConfigManager.getSessionGeneration() !== generationSnapshot ||
+              normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+            ) {
+              return { valid: false };
             }
 
             if (refreshResp.ok) {
@@ -320,25 +369,53 @@ export class LauncherAuth {
 
               const user = json.user;
               if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
-                ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
+                if (
+                  ConfigManager.getSessionGeneration() === generationSnapshot &&
+                  normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
+                ) {
+                  ConfigManager.clearSession();
+                }
                 return { valid: false };
               }
-              ConfigManager.set({
+
+              // Check snapshot immediately before establishing credentials
+              if (
+                ConfigManager.getSessionGeneration() !== generationSnapshot ||
+                normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+              ) {
+                return { valid: false };
+              }
+
+              ConfigManager.establishSession(portalUrl, {
                 token: json.token,
                 refreshToken: json.refreshToken || config.refreshToken,
                 minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
-                sessionPortalUrl: portalUrl,
               });
               return { valid: true, user };
             } else {
               LauncherLogger.logApiResponse("POST", refreshUrl, refreshResp.status, refreshDur);
             }
           } catch (refErr: any) {
+            if (refErr instanceof PortalRedirectPolicyError || refErr?.name === "PortalRedirectPolicyError") {
+              if (
+                ConfigManager.getSessionGeneration() === generationSnapshot &&
+                normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
+              ) {
+                ConfigManager.clearSession();
+              }
+              return { valid: false };
+            }
             LauncherLogger.logApiError("POST", `${portalUrl}/api/v1/auth/refresh`, refErr);
           }
         }
 
-        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
+        // On verify failure, check snapshot before clearing session
+        if (
+          ConfigManager.getSessionGeneration() === generationSnapshot &&
+          normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
+        ) {
+          ConfigManager.clearSession();
+        }
         return { valid: false };
       }
 
@@ -347,14 +424,28 @@ export class LauncherAuth {
 
       const user = json.user;
       if (!json.valid || !user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
-        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
+        if (
+          ConfigManager.getSessionGeneration() === generationSnapshot &&
+          normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
+        ) {
+          ConfigManager.clearSession();
+        }
+        return { valid: false };
+      }
+
+      // Check snapshot immediately before updating tokens or returning success
+      if (
+        ConfigManager.getSessionGeneration() !== generationSnapshot ||
+        normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
+      ) {
         return { valid: false };
       }
 
       if (user?.minecraftAccessToken) {
-        ConfigManager.set({
+        ConfigManager.establishSession(portalUrl, {
+          token: config.token,
+          refreshToken: config.refreshToken,
           minecraftAccessToken: user.minecraftAccessToken,
-          sessionPortalUrl: portalUrl,
         });
       }
       return {
@@ -362,6 +453,15 @@ export class LauncherAuth {
         user,
       };
     } catch (err: any) {
+      if (err instanceof PortalRedirectPolicyError || err?.name === "PortalRedirectPolicyError") {
+        if (
+          ConfigManager.getSessionGeneration() === generationSnapshot &&
+          normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
+        ) {
+          ConfigManager.clearSession();
+        }
+        return { valid: false };
+      }
       LauncherLogger.logApiError("POST", verifyUrl, err);
       return { valid: false };
     }
@@ -369,6 +469,6 @@ export class LauncherAuth {
 
   static logout() {
     LauncherAuth.activeLoginSessionId++;
-    ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
+    ConfigManager.clearSession();
   }
 }

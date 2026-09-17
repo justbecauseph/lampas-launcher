@@ -171,7 +171,7 @@ describe("Launcher sync and mod management logging", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     // Put an obsolete mod on disk that should be deleted
     const obsoleteModDir = path.join(gameDir, "mods");

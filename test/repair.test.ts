@@ -116,7 +116,7 @@ describe("LauncherSync.repairInstallation runtime forwarding (PLAN.md Part E & S
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       const result = await LauncherSync.repairInstallation(() => {});

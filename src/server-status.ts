@@ -1,4 +1,4 @@
-import { ConfigManager, normalizePortalUrl } from "./config";
+import { ConfigManager, normalizePortalUrl, PortalRedirectPolicyError } from "./config";
 import { LauncherLogger } from "./logger";
 import type {
   MinecraftServerState,
@@ -118,9 +118,9 @@ export class ServerStatusClient {
       });
       const durationMs = Date.now() - startedAt;
 
-      if (response.status >= 300 && response.status < 400) {
+      if ((response.status >= 300 && response.status < 400) || response.type === "opaqueredirect") {
         LauncherLogger.logApiResponse("GET", url, response.status, durationMs, "Redirect rejected");
-        throw new Error("Server status request rejected unexpected redirect");
+        throw new PortalRedirectPolicyError(response.status, response.headers.get("location"), url);
       }
 
       if (!response.ok) {

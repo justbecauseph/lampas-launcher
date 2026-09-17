@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { ConfigManager, normalizePortalUrl } from "./config";
 import { MinecraftBootstrap } from "./minecraft-bootstrap";
 import { JavaRuntimeManager } from "./java-runtime";
-import { copyAtomic, copyVerified, downloadVerified, fetchJsonWithRetry, hashFile, HttpResponseError, writeAtomicFile } from "./file-transfer";
+import { copyAtomic, copyVerified, downloadVerified, fetchJsonWithRetry, fetchPortalJsonWithRetry, hashFile, HttpResponseError, PortalRedirectPolicyError, writeAtomicFile } from "./file-transfer";
 import { reconcileRequiredResourcePacks } from "./resource-packs";
 import { app } from "electron";
 import { reconcileConfigPatches } from "./config-patches";
@@ -109,12 +109,12 @@ export class LauncherSync {
         channelHeaders["Authorization"] = `Bearer ${config.token}`;
       }
 
-      const channelData: any = await fetchJsonWithRetry(`${portalUrl}/api/v1/channels/${channel}`, channelHeaders);
+      const channelData: any = await fetchPortalJsonWithRetry(`${portalUrl}/api/v1/channels/${channel}`, channelHeaders);
       targetVersion = channelData.version;
 
       // 2. Fetch release descriptor
       try {
-        releaseData = await fetchJsonWithRetry(`${portalUrl}/api/v1/releases/${targetVersion}`, channelHeaders);
+        releaseData = await fetchPortalJsonWithRetry(`${portalUrl}/api/v1/releases/${targetVersion}`, channelHeaders);
       } catch (error) {
         if (error instanceof HttpResponseError && error.status === 410) {
           throw new Error(`Release v${targetVersion} has been REVOKED due to critical issues. Please select another channel.`);
@@ -133,8 +133,14 @@ export class LauncherSync {
         totalBytes: 0,
       });
 
-      manifest = await fetchJsonWithRetry(`${portalUrl}/api/v1/releases/${targetVersion}/client-manifest`, channelHeaders);
+      manifest = await fetchPortalJsonWithRetry(`${portalUrl}/api/v1/releases/${targetVersion}/client-manifest`, channelHeaders);
     } catch (portalErr: any) {
+      if (
+        portalErr instanceof PortalRedirectPolicyError ||
+        portalErr?.name === "PortalRedirectPolicyError"
+      ) {
+        throw portalErr;
+      }
       // Offline / Local pipeline fallback
       const localManifestPath = path.join(__dirname, "../../manifest/client-manifest.json");
       if (fs.existsSync(localManifestPath)) {
@@ -683,8 +689,8 @@ export class LauncherSync {
     const channel = config.selectedChannel || "stable";
 
     try {
-      const channelData: any = await fetchJsonWithRetry(`${portalUrl}/api/v1/channels/${channel}`);
-      const manifest: any = await fetchJsonWithRetry(`${portalUrl}/api/v1/releases/${channelData.version}/client-manifest`);
+      const channelData: any = await fetchPortalJsonWithRetry(`${portalUrl}/api/v1/channels/${channel}`);
+      const manifest: any = await fetchPortalJsonWithRetry(`${portalUrl}/api/v1/releases/${channelData.version}/client-manifest`);
       if (manifest.mods && Array.isArray(manifest.mods)) {
         return this.decorateModCatalog(manifest.mods);
       }

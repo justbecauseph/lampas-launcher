@@ -31,8 +31,8 @@ const DEFAULT_CONFIG: LauncherConfig = {
   noSync: false,
 };
 
-import { normalizePortalUrl, isExactLoopbackHost } from "./portal-policy";
-export { normalizePortalUrl, validateWebUrl, isApprovedRemoteHost, isExactLoopbackHost } from "./portal-policy";
+import { normalizePortalUrl, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError } from "./portal-policy";
+export { normalizePortalUrl, validateWebUrl, isApprovedRemoteHost, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError } from "./portal-policy";
 
 function valuesEqual(a: any, b: any): boolean {
   if (a === b) return true;
@@ -65,6 +65,15 @@ function formatConfigValue(key: string, value: any): string {
 export class ConfigManager {
   private static configPath: string;
   private static cachedConfig: LauncherConfig | null = null;
+  private static sessionGeneration: number = 1;
+
+  static getSessionGeneration(): number {
+    return this.sessionGeneration;
+  }
+
+  static incrementSessionGeneration(): number {
+    return ++this.sessionGeneration;
+  }
 
   private static initPath() {
     if (!this.configPath) {
@@ -122,6 +131,16 @@ export class ConfigManager {
         loaded.refreshToken = undefined;
         loaded.minecraftAccessToken = undefined;
         loaded.sessionPortalUrl = undefined;
+        this.incrementSessionGeneration();
+        // Durable disk cleanup: scrub unencrypted legacy credentials from disk
+        if (fs.existsSync(this.configPath)) {
+          const scrubbed = { ...loaded };
+          delete (scrubbed as any).token;
+          delete (scrubbed as any).refreshToken;
+          delete (scrubbed as any).minecraftAccessToken;
+          delete (scrubbed as any).sessionPortalUrl;
+          writeAtomicFileSync(this.configPath, JSON.stringify(scrubbed, null, 2), "utf-8");
+        }
       }
     }
 
@@ -138,33 +157,29 @@ export class ConfigManager {
   static set(newConfig: Partial<LauncherConfig>): LauncherConfig {
     this.initPath();
     const current = this.get();
-    const updated = { ...current, ...newConfig };
 
-    if (newConfig.portalUrl !== undefined) {
-      const normalizedPortal = normalizePortalUrl(newConfig.portalUrl);
+    // Security invariant: sessionPortalUrl cannot be forged or modified via generic set()
+    const sanitizedConfig = { ...newConfig };
+    delete (sanitizedConfig as any).sessionPortalUrl;
+
+    const updated = { ...current, ...sanitizedConfig };
+
+    if (sanitizedConfig.portalUrl !== undefined) {
+      const normalizedPortal = normalizePortalUrl(sanitizedConfig.portalUrl);
       updated.portalUrl = normalizedPortal;
 
-      // Phase 1 Security: Portal changes must invalidate existing credentials
+      // Phase 1 Security: Portal origin changes must invalidate existing credentials based on trusted prior state
       if (current.sessionPortalUrl && normalizedPortal !== current.sessionPortalUrl) {
-        const currentIsLoopback = isExactLoopbackHost(new URL(current.sessionPortalUrl).hostname);
-        const newIsLoopback = isExactLoopbackHost(new URL(normalizedPortal).hostname);
-        if (currentIsLoopback && newIsLoopback && (process.env.NODE_ENV === "test" || typeof (globalThis as any).Bun !== "undefined")) {
-          updated.sessionPortalUrl = normalizedPortal;
-        } else {
-          updated.token = undefined;
-          updated.refreshToken = undefined;
-          updated.minecraftAccessToken = undefined;
-          updated.sessionPortalUrl = undefined;
-        }
+        updated.token = undefined;
+        updated.refreshToken = undefined;
+        updated.minecraftAccessToken = undefined;
+        updated.sessionPortalUrl = undefined;
+        this.incrementSessionGeneration();
       }
     }
 
-    // Bind session to active portal when credentials are established
-    if (updated.token || updated.refreshToken || updated.minecraftAccessToken) {
-      if (!updated.sessionPortalUrl) {
-        updated.sessionPortalUrl = updated.portalUrl;
-      }
-    } else {
+    // Ensure sessionPortalUrl remains unset if there are no tokens
+    if (!updated.token && !updated.refreshToken && !updated.minecraftAccessToken) {
       updated.sessionPortalUrl = undefined;
     }
 
@@ -177,6 +192,68 @@ export class ConfigManager {
       }
     }
 
+    return this.persistAndEmit(current, updated);
+  }
+
+  /**
+   * Main-only operation to establish newly authenticated credentials with an explicit issuing origin.
+   */
+  static establishSession(
+    issuingOrigin: string,
+    credentials: { token?: string; refreshToken?: string; minecraftAccessToken?: string },
+    extraSettings?: Partial<LauncherConfig>
+  ): LauncherConfig {
+    this.initPath();
+    const current = this.get();
+    const canonicalOrigin = normalizePortalUrl(issuingOrigin);
+
+    const updated: LauncherConfig = {
+      ...current,
+      ...extraSettings,
+      portalUrl: canonicalOrigin,
+      sessionPortalUrl: canonicalOrigin,
+      token: credentials.token,
+      refreshToken: credentials.refreshToken,
+      minecraftAccessToken: credentials.minecraftAccessToken,
+    };
+
+    this.incrementSessionGeneration();
+
+    for (const key of Object.keys(updated) as Array<keyof LauncherConfig>) {
+      if (updated[key] === undefined) {
+        delete updated[key];
+      }
+    }
+
+    return this.persistAndEmit(current, updated);
+  }
+
+  /**
+   * Main-only operation to clear the active authenticated session.
+   */
+  static clearSession(): LauncherConfig {
+    this.initPath();
+    const current = this.get();
+    const updated: LauncherConfig = {
+      ...current,
+      token: undefined,
+      refreshToken: undefined,
+      minecraftAccessToken: undefined,
+      sessionPortalUrl: undefined,
+    };
+
+    this.incrementSessionGeneration();
+
+    for (const key of Object.keys(updated) as Array<keyof LauncherConfig>) {
+      if (updated[key] === undefined) {
+        delete updated[key];
+      }
+    }
+
+    return this.persistAndEmit(current, updated);
+  }
+
+  private static persistAndEmit(current: LauncherConfig, updated: LauncherConfig): LauncherConfig {
     // Persist to disk FIRST using atomic write before updating in-memory state or emitting change logs
     const dir = path.dirname(this.configPath);
     if (!fs.existsSync(dir)) {
@@ -208,5 +285,6 @@ export class ConfigManager {
   static resetForTesting(): void {
     this.cachedConfig = null;
     this.configPath = "";
+    this.sessionGeneration = 1;
   }
 }

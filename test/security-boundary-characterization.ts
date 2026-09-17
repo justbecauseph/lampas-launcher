@@ -2,6 +2,7 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import { mock } from "bun:test";
 
 /**
@@ -182,9 +183,15 @@ try {
   const configMod = await import("../src/config");
   const authMod = await import("../src/auth");
   const loggerMod = await import("../src/logger");
+  const syncMod = await import("../src/sync");
+  const serverStatusMod = await import("../src/server-status");
+  const fileTransferMod = await import("../src/file-transfer");
   const ConfigManager = configMod.ConfigManager;
   const LauncherAuth = authMod.LauncherAuth;
   LauncherLogger = loggerMod.LauncherLogger;
+  const LauncherSync = syncMod.LauncherSync;
+  const ServerStatusClient = serverStatusMod.ServerStatusClient;
+  const downloadVerified = fileTransferMod.downloadVerified;
 
   // Import production main.ts to register IPC channels
   await import("../src/main");
@@ -316,6 +323,11 @@ try {
 
   let capturedRequests: CapturedRequest[] = [];
   let capturedRequestsA: CapturedRequest[] = [];
+  let delayNextServerAResponse = 0;
+  let serverARespondWith401 = false;
+  let serverARedirectMetadataToB = 0;
+  let serverARedirectBlobUrl = "";
+  let attackerBlobContent: { path: string; content: Buffer } | null = null;
 
   server = http.createServer((req, res) => {
     let bodyChunks: Buffer[] = [];
@@ -327,6 +339,36 @@ try {
         headers: req.headers,
         body: Buffer.concat(bodyChunks).toString("utf-8"),
       });
+
+      if (attackerBlobContent && req.url === attackerBlobContent.path) {
+        res.writeHead(200, {
+          "Content-Type": "application/java-archive",
+          "Content-Length": attackerBlobContent.content.length.toString(),
+        });
+        res.end(attackerBlobContent.content);
+        return;
+      }
+
+      if (req.url?.startsWith("/api/v1/channels/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ channel: "stable", version: "2.0.0" }));
+        return;
+      }
+
+      if (req.url?.startsWith("/api/v1/releases/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          pack: "Lampas 2",
+          version: "2.0.0",
+          protocol: 3,
+          minecraft: "26.2",
+          loader: { type: "fabric", version: "0.19.3" },
+          files: [],
+          mods: [],
+        }));
+        return;
+      }
+
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ valid: true, user: { id: "u-attacker", name: "Attacker", minecraftUsername: "Attacker", minecraftUuid: "00000000-0000-0000-0000-000000000000" } }));
     });
@@ -335,13 +377,60 @@ try {
   serverA = http.createServer((req, res) => {
     let bodyChunks: Buffer[] = [];
     req.on("data", (chunk) => bodyChunks.push(chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       capturedRequestsA.push({
         method: req.method || "",
         url: req.url || "",
         headers: req.headers,
         body: Buffer.concat(bodyChunks).toString("utf-8"),
       });
+
+      if (delayNextServerAResponse > 0) {
+        const d = delayNextServerAResponse;
+        delayNextServerAResponse = 0;
+        await new Promise((r) => setTimeout(r, d));
+      }
+
+      if (serverARespondWith401) {
+        serverARespondWith401 = false;
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+
+      if (serverARedirectMetadataToB > 0 && (req.url?.startsWith("/api/v1/channels") || req.url?.startsWith("/api/v1/releases"))) {
+        const code = serverARedirectMetadataToB;
+        res.writeHead(code, { Location: `${attackerPortal}${req.url}` });
+        res.end();
+        return;
+      }
+
+      if (serverARedirectBlobUrl && req.url?.startsWith("/api/v1/blobs/test-blob-redirect")) {
+        res.writeHead(302, { Location: serverARedirectBlobUrl });
+        res.end();
+        return;
+      }
+
+      if (req.url?.startsWith("/api/v1/channels/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ channel: "stable", version: "2.0.0" }));
+        return;
+      }
+
+      if (req.url?.startsWith("/api/v1/releases/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          pack: "Lampas 2",
+          version: "2.0.0",
+          protocol: 3,
+          minecraft: "26.2",
+          loader: { type: "fabric", version: "0.19.3" },
+          files: [],
+          mods: [],
+        }));
+        return;
+      }
+
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         valid: true,
@@ -366,9 +455,7 @@ try {
   allowedDestinations.add(originAPortal);
 
   // Set synthetic credentials bound to originAPortal
-  ConfigManager.set({
-    portalUrl: originAPortal,
-    sessionPortalUrl: originAPortal,
+  ConfigManager.establishSession(originAPortal, {
     token: "syn-test-bearer-token-12345",
     refreshToken: "syn-test-refresh-token-67890",
     minecraftAccessToken: "syn-test-mc-token-abcdef",
@@ -418,9 +505,7 @@ try {
 
   // 9. [IPC-Level] auth:verify production handler credential routing
   await runTest("[IPC-Level] auth:verify ignores caller-supplied portalUrl and routes to bound portal", async () => {
-    ConfigManager.set({
-      portalUrl: originAPortal,
-      sessionPortalUrl: originAPortal,
+    ConfigManager.establishSession(originAPortal, {
       token: "syn-test-bearer-token-12345",
       refreshToken: "syn-test-refresh-token-67890",
     });
@@ -439,9 +524,7 @@ try {
 
   // 10. [IPC-Level] auth:refresh production handler credential routing
   await runTest("[IPC-Level] auth:refresh ignores caller-supplied portalUrl and routes to bound portal", async () => {
-    ConfigManager.set({
-      portalUrl: originAPortal,
-      sessionPortalUrl: originAPortal,
+    ConfigManager.establishSession(originAPortal, {
       token: "syn-test-bearer-token-12345",
       refreshToken: "syn-test-refresh-token-67890",
     });
@@ -471,9 +554,7 @@ try {
       const redirectPortal = `http://127.0.0.1:${redirectPort}`;
       allowedDestinations.add(redirectPortal);
 
-      ConfigManager.set({
-        portalUrl: redirectPortal,
-        sessionPortalUrl: redirectPortal,
+      ConfigManager.establishSession(redirectPortal, {
         token: "syn-test-token-redirect",
         refreshToken: "syn-test-refresh-redirect",
       });
@@ -494,6 +575,380 @@ try {
     }
   });
 
+  // 12. [Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B
+  await runTest("[Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B", async () => {
+    // 1. Establish valid session for Origin A
+    ConfigManager.establishSession(originAPortal, {
+      token: "secret-token-origin-a-9999",
+      refreshToken: "secret-refresh-origin-a-9999",
+    });
+
+    // 2. Renderer attempts to forge session binding to attackerPortal (Origin B) via IPC config:set
+    const handler = ipcHandlers.get("config:set")!;
+    await handler({}, {
+      portalUrl: attackerPortal,
+      sessionPortalUrl: attackerPortal,
+    });
+
+    // Verify sessionPortalUrl was stripped from renderer input and credentials were wiped on origin change
+    const afterSet = ConfigManager.get();
+    if (afterSet.sessionPortalUrl === attackerPortal) {
+      throw new Error("sessionPortalUrl was forged via config:set!");
+    }
+    if (afterSet.token !== undefined) {
+      throw new Error("token was not wiped when changing portalUrl to attackerPortal!");
+    }
+
+    // 3. Clear captured requests on Origin B
+    capturedRequests = [];
+    capturedRequestsA = [];
+
+    // 4. Invoke verify
+    const verifyRes = await LauncherAuth.verifySession(attackerPortal);
+    if (verifyRes.valid !== false) {
+      throw new Error("Expected verifySession to reject unauthenticated session");
+    }
+
+    // 5. Invoke refresh
+    const refreshRes = await LauncherAuth.refreshSession(attackerPortal);
+    if (refreshRes.valid !== false) {
+      throw new Error("Expected refreshSession to reject unauthenticated session");
+    }
+
+    // 6. Invoke status
+    let statusThrew = false;
+    try {
+      await ServerStatusClient.getStatus();
+    } catch (err: any) {
+      statusThrew = true;
+      if (!err.message.includes("Portal session is not available")) {
+        throw new Error(`Expected 'Portal session is not available', got: ${err.message}`);
+      }
+    }
+    if (!statusThrew) {
+      throw new Error("Expected ServerStatusClient.getStatus to fail when session is invalid");
+    }
+
+    // 7. Invoke sync
+    let syncThrew = false;
+    try {
+      await LauncherSync.syncClient(() => {});
+    } catch (err: any) {
+      syncThrew = true;
+      if (!err.message.includes("Authentication required")) {
+        throw new Error(`Expected authentication required error, got: ${err.message}`);
+      }
+    }
+    if (!syncThrew) {
+      throw new Error("Expected syncClient to fail due to lack of authentication");
+    }
+
+    // 8. Assert ZERO Origin A credentials reached Origin B (attackerPortal)
+    for (const r of capturedRequests) {
+      const authHeader = (r.headers["authorization"] || "") as string;
+      if (authHeader.includes("secret-token-origin-a-9999") || authHeader.includes("secret-refresh-origin-a-9999")) {
+        throw new Error(`Origin A credential leaked to Origin B in request: ${r.method} ${r.url}`);
+      }
+      if (r.body.includes("secret-token-origin-a-9999") || r.body.includes("secret-refresh-origin-a-9999")) {
+        throw new Error(`Origin A credential leaked to Origin B in body: ${r.method} ${r.url}`);
+      }
+    }
+  });
+
+  // 13. [Regression Gate 1] Race safety: portal A -> B switch during in-flight verify ignores late A completion
+  await runTest("[Regression Gate 1] Race safety: portal A -> B switch during in-flight verify ignores late A completion", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "a-token-for-race",
+      refreshToken: "a-refresh-for-race",
+    });
+
+    delayNextServerAResponse = 50;
+    const inFlightVerify = LauncherAuth.verifySession();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    ConfigManager.establishSession(attackerPortal, {
+      token: "b-token-active",
+      refreshToken: "b-refresh-active",
+    });
+
+    const lateVerifyResult = await inFlightVerify;
+    if (lateVerifyResult.valid !== false) {
+      throw new Error("Expected late verify from old portal to be rejected");
+    }
+
+    const current = ConfigManager.get();
+    if (current.portalUrl !== attackerPortal) {
+      throw new Error(`portalUrl corrupted: expected ${attackerPortal}, got ${current.portalUrl}`);
+    }
+    if (current.sessionPortalUrl !== attackerPortal) {
+      throw new Error(`sessionPortalUrl corrupted: expected ${attackerPortal}, got ${current.sessionPortalUrl}`);
+    }
+    if (current.token !== "b-token-active") {
+      throw new Error(`token overwritten by old session: got ${current.token}`);
+    }
+  });
+
+  // 14. [Regression Gate 1] Race safety: rapid portal A -> B -> A switching rejects stale response
+  await runTest("[Regression Gate 1] Race safety: rapid portal A -> B -> A switching rejects stale response", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "gen1-token-a",
+      refreshToken: "gen1-refresh-a",
+    });
+
+    delayNextServerAResponse = 50;
+    const inFlightVerify = LauncherAuth.verifySession();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    ConfigManager.establishSession(attackerPortal, {
+      token: "gen2-token-b",
+      refreshToken: "gen2-refresh-b",
+    });
+
+    ConfigManager.establishSession(originAPortal, {
+      token: "gen3-token-a-new",
+      refreshToken: "gen3-refresh-a-new",
+    });
+
+    await inFlightVerify;
+
+    const current = ConfigManager.get();
+    if (current.token !== "gen3-token-a-new") {
+      throw new Error(`Stale generation 1 response overwrote generation 3 token! Current: ${current.token}`);
+    }
+  });
+
+  // 15. [Regression Gate 1] Race safety: logout during in-flight exchange discards late tokens
+  await runTest("[Regression Gate 1] Race safety: logout during in-flight exchange discards late tokens", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "logout-test-token",
+      refreshToken: "logout-test-refresh",
+    });
+
+    delayNextServerAResponse = 50;
+    const inFlightRefresh = LauncherAuth.refreshSession();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    LauncherAuth.logout();
+
+    const refreshRes = await inFlightRefresh;
+    if (refreshRes.valid !== false) {
+      throw new Error("Expected in-flight refresh to be marked invalid after logout");
+    }
+
+    const current = ConfigManager.get();
+    if (current.token !== undefined) {
+      throw new Error(`Late refresh resurrected token after logout: ${current.token}`);
+    }
+    if (current.sessionPortalUrl !== undefined) {
+      throw new Error(`Late refresh resurrected sessionPortalUrl after logout: ${current.sessionPortalUrl}`);
+    }
+  });
+
+  // 16. [Regression Gate 1] Race safety: old 401 failure arriving after new session establishment does not clear new credentials
+  await runTest("[Regression Gate 1] Race safety: old 401 failure arriving after new session establishment does not clear new credentials", async () => {
+    serverARespondWith401 = true;
+    delayNextServerAResponse = 50;
+
+    ConfigManager.establishSession(originAPortal, {
+      token: "old-session-token",
+      refreshToken: "old-session-refresh",
+    });
+
+    const inFlightVerify = LauncherAuth.verifySession();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    ConfigManager.establishSession(attackerPortal, {
+      token: "new-session-b-token",
+      refreshToken: "new-session-b-refresh",
+    });
+
+    await inFlightVerify;
+
+    const current = ConfigManager.get();
+    if (current.token !== "new-session-b-token") {
+      throw new Error(`Old 401 cleared new session credentials! Token is: ${current.token}`);
+    }
+    if (current.sessionPortalUrl !== attackerPortal) {
+      throw new Error(`Old 401 cleared new session portal! sessionPortalUrl is: ${current.sessionPortalUrl}`);
+    }
+  });
+
+  // 17. [Regression Gate 1] Sync metadata 302/307/308 redirects from A to B are rejected with 0 requests to B and no cache fallback
+  await runTest("[Regression Gate 1] Sync metadata 302/307/308 redirects from A to B are rejected with 0 requests to B and no cache fallback", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "syn-metadata-secret-token",
+      refreshToken: "syn-metadata-secret-refresh",
+    });
+
+    // 302 redirect
+    serverARedirectMetadataToB = 302;
+    capturedRequests = [];
+    capturedRequestsA = [];
+
+    let threw = false;
+    try {
+      await LauncherSync.syncClient(() => {});
+    } catch {
+      threw = true;
+    }
+    if (!threw) {
+      throw new Error("Expected syncClient to fail when metadata endpoint returns 302 redirect");
+    }
+    const reqA = capturedRequestsA.find((r) => r.url === "/api/v1/channels/stable");
+    if (!reqA) {
+      throw new Error("Origin A was not called with the metadata request before rejection!");
+    }
+    if (capturedRequests.length !== 0) {
+      throw new Error(`Requests unexpectedly reached Destination B during metadata 302! Captured: ${JSON.stringify(capturedRequests)}`);
+    }
+
+    // 307 redirect
+    serverARedirectMetadataToB = 307;
+    capturedRequests = [];
+    capturedRequestsA = [];
+    threw = false;
+    try {
+      await LauncherSync.syncClient(() => {});
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected syncClient to reject 307 redirect");
+    if (capturedRequests.length !== 0) {
+      throw new Error(`Requests reached Destination B during metadata 307! Captured: ${JSON.stringify(capturedRequests)}`);
+    }
+
+    // 308 redirect
+    serverARedirectMetadataToB = 308;
+    capturedRequests = [];
+    capturedRequestsA = [];
+    threw = false;
+    try {
+      await LauncherSync.syncClient(() => {});
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected syncClient to reject 308 redirect");
+    if (capturedRequests.length !== 0) {
+      throw new Error(`Requests reached Destination B during metadata 308! Captured: ${JSON.stringify(capturedRequests)}`);
+    }
+
+    serverARedirectMetadataToB = 0;
+  });
+
+  // 18. [Regression Gate 1] Legitimate file download follows safe redirect without auth headers
+  await runTest("[Regression Gate 1] Legitimate file download follows safe redirect without auth headers", async () => {
+    const testContent = Buffer.from("legitimate file content from storage CDN");
+    const testHash = crypto.createHash("sha256").update(testContent).digest("hex");
+
+    serverARedirectBlobUrl = `${attackerPortal}/cdn-storage/test-blob.jar`;
+    attackerBlobContent = { path: "/cdn-storage/test-blob.jar", content: testContent };
+
+    capturedRequests = [];
+    capturedRequestsA = [];
+
+    const destPath = path.join(gameDir, "mods", "redirected-mod.jar");
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    await downloadVerified(
+      `${originAPortal}/api/v1/blobs/test-blob-redirect`,
+      destPath,
+      {
+        expectedHash: testHash,
+        algorithm: "sha256",
+        attempts: 3,
+      }
+    );
+
+    const downloadedContent = fs.readFileSync(destPath);
+    if (!downloadedContent.equals(testContent)) {
+      throw new Error("Downloaded content does not match expected content");
+    }
+
+    const cdnReq = capturedRequests.find((r) => r.url === "/cdn-storage/test-blob.jar");
+    if (!cdnReq) {
+      throw new Error("Destination B (CDN) did not receive the redirected download request");
+    }
+    if (cdnReq.headers["authorization"] !== undefined) {
+      throw new Error(`Redirected blob download leaked Authorization header: ${cdnReq.headers["authorization"]}`);
+    }
+
+    serverARedirectBlobUrl = "";
+    attackerBlobContent = null;
+  });
+
+  // 19. [Regression Gate 1] ConfigManager.get performs durable disk scrubbing of unbound tokens on disk
+  await runTest("[Regression Gate 1] ConfigManager.get performs durable disk scrubbing of unbound tokens on disk", async () => {
+    const configFilePath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configFilePath, JSON.stringify({
+      portalUrl: originAPortal,
+      token: "unbound-token-on-disk-to-scrub",
+      refreshToken: "unbound-refresh-on-disk-to-scrub",
+      minecraftAccessToken: "unbound-mc-on-disk-to-scrub",
+    }), "utf-8");
+
+    ConfigManager.resetForTesting();
+    const loaded = ConfigManager.get();
+    if (loaded.token !== undefined || loaded.refreshToken !== undefined || loaded.minecraftAccessToken !== undefined) {
+      throw new Error("ConfigManager.get() did not clear in-memory unbound tokens");
+    }
+
+    const onDisk = JSON.parse(fs.readFileSync(configFilePath, "utf-8"));
+    if (onDisk.token !== undefined || onDisk.refreshToken !== undefined || onDisk.minecraftAccessToken !== undefined) {
+      throw new Error(`Durable disk scrubbing failed: disk still has secrets: ${JSON.stringify(onDisk)}`);
+    }
+  });
+
+  // 20. [Regression Gate 1] Narrow opener helpers validate paths against approved roots and reject escape attempts
+  await runTest("[Regression Gate 1] Narrow opener helpers validate paths against approved roots and reject escape attempts", async () => {
+    openedPaths.length = 0;
+    openedExternals.length = 0;
+
+    const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+    await knownHandler({}, "logsDir");
+    if (openedPaths.length !== 1 || !openedPaths[0].includes("logs")) {
+      throw new Error(`Expected logsDir opened, got: ${JSON.stringify(openedPaths)}`);
+    }
+
+    let threw = false;
+    try {
+      await knownHandler({}, "../../../windows/system32");
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openKnownLocation to reject traversal key");
+
+    openedPaths.length = 0;
+    const logsDirHandler = ipcHandlers.get("utils:openLogsDir")!;
+    await logsDirHandler({});
+    if (openedPaths.length !== 1) throw new Error("Expected openLogsDir to open logs directory");
+
+    openedPaths.length = 0;
+    openedExternals.length = 0;
+    const pathHandler = ipcHandlers.get("utils:openPath")!;
+    threw = false;
+    try {
+      await pathHandler({}, "javascript:alert(1)");
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openPath to reject javascript: URL");
+    if (openedPaths.length !== 0 || openedExternals.length !== 0) {
+      throw new Error("Rejected URL triggered an opener call!");
+    }
+
+    threw = false;
+    try {
+      await pathHandler({}, "C:\\Windows\\System32\\cmd.exe");
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openPath to reject arbitrary system path");
+    if (openedPaths.length !== 0) throw new Error("Rejected path was opened via shell.openPath!");
+  });
+
   // Assert outbound request policy compliance: zero unapproved network attempts
   if (attemptedViolations.length > 0) {
     throw new Error(`[OutboundPolicyViolation] Forbidden outbound request attempts detected: ${JSON.stringify(attemptedViolations)}`);
@@ -509,11 +964,13 @@ try {
   // Guaranteed teardown of owned resources
   if (server) {
     try {
+      (server as any).closeAllConnections?.();
       await new Promise<void>((resolve) => server!.close(() => resolve()));
     } catch {}
   }
   if (serverA) {
     try {
+      (serverA as any).closeAllConnections?.();
       await new Promise<void>((resolve) => serverA!.close(() => resolve()));
     } catch {}
   }

@@ -160,7 +160,7 @@ describe("Phase 0 Characterization — Fast vs Full Sync Verification & Same-Siz
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       const progressMessages: string[] = [];

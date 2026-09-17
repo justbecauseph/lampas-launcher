@@ -120,7 +120,7 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       const result = await LauncherSync.syncClient(() => {});
@@ -188,7 +188,7 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       const result = await LauncherSync.syncClient(() => {});
@@ -258,7 +258,7 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow();
@@ -338,7 +338,7 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(/failed integrity verification/);
@@ -390,7 +390,7 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(

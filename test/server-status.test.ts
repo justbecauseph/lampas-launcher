@@ -37,14 +37,15 @@ function response(body: unknown, init: { status?: number; statusText?: string } 
 }
 
 beforeEach(() => {
+  process.env.LAMPAS_ALLOWED_PORTAL_HOSTS = "portal.example.test";
   ConfigManager.resetForTesting();
-  ConfigManager.set({
-    portalUrl: "https://portal.example.test/",
+  ConfigManager.establishSession("https://portal.example.test", {
     token: "launcher-token",
   });
 });
 
 afterAll(() => {
+  delete process.env.LAMPAS_ALLOWED_PORTAL_HOSTS;
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }

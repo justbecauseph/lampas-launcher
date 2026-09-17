@@ -395,7 +395,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
 
     try {
       // In full verification mode, same-size corruption must be detected and replaced
