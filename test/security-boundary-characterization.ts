@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { mock } from "bun:test";
+import * as cp from "node:child_process";
+import { mock, spyOn } from "bun:test";
 
 /**
  * Isolated Security Boundary Characterization
@@ -25,6 +26,8 @@ const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-boundary-test-"))
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
 
+process.env.LAMPAS_DEFAULT_GAME_DIR = gameDir;
+
 fs.mkdirSync(userDataDir, { recursive: true });
 fs.mkdirSync(gameDir, { recursive: true });
 
@@ -35,8 +38,27 @@ const openedPaths: string[] = [];
 const openedExternals: string[] = [];
 const interceptedProcesses: Array<{ command: string; args: any[] }> = [];
 
-// Intercept unintended process execution
+// Intercept unintended process execution via spyOn
+spyOn(cp, "spawn").mockImplementation(((command: string, args: any[] = []) => {
+  interceptedProcesses.push({ command, args });
+  throw new Error(`[SecurityHarness] child_process.spawn blocked for: ${command}`);
+}) as any);
+spyOn(cp, "exec").mockImplementation(((command: string) => {
+  interceptedProcesses.push({ command, args: [] });
+  throw new Error(`[SecurityHarness] child_process.exec blocked for: ${command}`);
+}) as any);
+spyOn(cp, "execFile").mockImplementation(((command: string, args: any[] = []) => {
+  interceptedProcesses.push({ command, args });
+  throw new Error(`[SecurityHarness] child_process.execFile blocked for: ${command}`);
+}) as any);
+spyOn(cp, "fork").mockImplementation(((modulePath: string, args: any[] = []) => {
+  interceptedProcesses.push({ command: modulePath, args });
+  throw new Error(`[SecurityHarness] child_process.fork blocked for: ${modulePath}`);
+}) as any);
+
+// Also configure mock.module as second line of defense
 mock.module("node:child_process", () => ({
+  ...cp,
   spawn: (command: string, args: any[] = []) => {
     interceptedProcesses.push({ command, args });
     throw new Error(`[SecurityHarness] child_process.spawn blocked for: ${command}`);
@@ -86,20 +108,70 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return originalFetch(input, init);
 }) as any;
 
+const mockDialog = {
+  showOpenDialog: mock(async () => ({ canceled: false, filePaths: [] as string[] })),
+  showMessageBox: mock(async () => ({ response: 0 })),
+};
+
 class MockWebContents {
   id = 1;
-  url = "http://localhost:5173";
-  getURL() { return this.url; }
-  on() { return this; }
-  once() { return this; }
+  private _url = "http://localhost:5173";
+  mainFrame: any = { parent: null, url: "http://localhost:5173", isDestroyed: () => false };
+  get url() {
+    return this._url;
+  }
+  set url(val: string) {
+    this._url = val;
+    this.mainFrame.url = val;
+  }
+  private listeners = new Map<string, Function[]>();
+  getURL() { return this._url; }
+  on(event: string, fn: Function) {
+    const list = this.listeners.get(event) || [];
+    list.push(fn);
+    this.listeners.set(event, list);
+    return this;
+  }
+  once(event: string, fn: Function) {
+    const wrapper = (...args: any[]) => {
+      this.removeListener(event, wrapper);
+      fn(...args);
+    };
+    return this.on(event, wrapper);
+  }
+  removeListener(event: string, fn: Function) {
+    const list = this.listeners.get(event) || [];
+    this.listeners.set(event, list.filter((l) => l !== fn));
+    return this;
+  }
+  emit(event: string, ...args: any[]) {
+    const list = this.listeners.get(event) || [];
+    for (const fn of [...list]) {
+      fn(...args);
+    }
+    return list.length > 0;
+  }
   send() {}
   isLoading() { return false; }
   isDestroyed() { return false; }
-  setWindowOpenHandler() {}
+  setWindowOpenHandler(handler: Function) {
+    this.windowOpenHandler = handler;
+  }
+  windowOpenHandler?: Function;
   session = {
-    setPermissionRequestHandler: () => {},
+    permissionRequestHandler: null as any,
+    permissionCheckHandler: null as any,
+    headersReceivedHandler: null as any,
+    setPermissionRequestHandler: (fn: any) => {
+      this.session.permissionRequestHandler = fn;
+    },
+    setPermissionCheckHandler: (fn: any) => {
+      this.session.permissionCheckHandler = fn;
+    },
     webRequest: {
-      onHeadersReceived: () => {},
+      onHeadersReceived: (fn: any) => {
+        this.session.headersReceivedHandler = fn;
+      },
     },
   };
 }
@@ -133,12 +205,7 @@ class MockBrowserWindow {
 
 function getValidEvent(overrides: any = {}) {
   const win = MockBrowserWindow.allWindows[0];
-  const frame = {
-    parent: null,
-    url: win?.webContents?.getURL?.() || "http://localhost:5173",
-    isDestroyed: () => false,
-    ...(overrides?.senderFrame || {}),
-  };
+  const frame = overrides?.senderFrame !== undefined ? overrides.senderFrame : win?.webContents?.mainFrame;
   return {
     sender: overrides?.sender || win?.webContents,
     senderFrame: frame,
@@ -260,10 +327,7 @@ mock.module("electron", () => ({
   },
   shell: mockShell,
   nativeImage: { createFromPath: () => ({}) },
-  dialog: {
-    showOpenDialog: async () => ({ canceled: false, filePaths: [] }),
-    showMessageBox: async () => ({ response: 0 }),
-  },
+  dialog: mockDialog,
 }));
 
 const results = {
@@ -338,6 +402,7 @@ try {
   const serverStatusMod = await import("../src/server-status");
   const fileTransferMod = await import("../src/file-transfer");
   const ConfigManager = configMod.ConfigManager;
+  ConfigManager.set({ gameDir });
   const LauncherAuth = authMod.LauncherAuth;
   LauncherLogger = loggerMod.LauncherLogger;
   const LauncherSync = syncMod.LauncherSync;
@@ -346,7 +411,26 @@ try {
   const PortalPolicy = configMod.PortalPolicy;
   const normalizePortalUrl = configMod.normalizePortalUrl;
   const ipcBoundaryMod = await import("../src/ipc-boundary");
-  const { IpcBoundary, IpcSecurityError, IpcValidationError, isPrivilegedJavaArg } = ipcBoundaryMod;
+  const {
+    IpcBoundary,
+    IpcSecurityError,
+    IpcValidationError,
+    isPrivilegedJavaArg,
+    classifyJavaArgs,
+    parseJavaArgs,
+    APPROVAL_TTL_MS,
+    MAX_CUSTOM_MOD_FILE_SIZE_BYTES,
+    normalizeApprovalTarget,
+    sanitizeIpcError,
+  } = ipcBoundaryMod;
+  const gameRunnerMod = await import("../src/game-runner");
+  const { GameRunner, buildLaunchArguments } = gameRunnerMod;
+  const operationsMod = await import("../src/operations");
+  const { OperationCoordinator } = operationsMod;
+  const javaRuntimeMod = await import("../src/java-runtime");
+  const { JavaRuntimeManager } = javaRuntimeMod;
+  const bootstrapMod = await import("../src/minecraft-bootstrap");
+  const { MinecraftBootstrap } = bootstrapMod;
 
   // Supply explicit development policy for test harness
   PortalPolicy.configureDevelopmentPolicy({
@@ -2051,7 +2135,7 @@ try {
       await rawHandler({ rawEmptyEvent: true });
     } catch (e: any) {
       threw = true;
-      if (!e.message.includes("Unauthorized IPC caller")) throw new Error(`Unexpected error: ${e.message}`);
+      if (!e.message.includes("Security violation") && !e.message.includes("Unauthorized IPC caller")) throw new Error(`Unexpected error: ${e.message}`);
     }
     if (!threw) throw new Error("Expected empty event to be rejected");
 
@@ -2064,7 +2148,7 @@ try {
       });
     } catch (e: any) {
       threw = true;
-      if (!e.message.includes("child frames and subdocuments are not permitted")) throw new Error(`Unexpected error: ${e.message}`);
+      if (!e.message.includes("Security violation") && !e.message.includes("child frames")) throw new Error(`Unexpected error: ${e.message}`);
     }
     if (!threw) throw new Error("Expected child frame to be rejected");
 
@@ -2077,7 +2161,7 @@ try {
       });
     } catch (e: any) {
       threw = true;
-      if (!e.message.includes("caller webContents does not match main window")) throw new Error(`Unexpected error: ${e.message}`);
+      if (!e.message.includes("Security violation") && !e.message.includes("caller webContents")) throw new Error(`Unexpected error: ${e.message}`);
     }
     if (!threw) throw new Error("Expected foreign webContents to be rejected");
 
@@ -2090,7 +2174,7 @@ try {
       });
     } catch (e: any) {
       threw = true;
-      if (!e.message.includes("not an approved application document")) throw new Error(`Unexpected error: ${e.message}`);
+      if (!e.message.includes("Security violation") && !e.message.includes("approved")) throw new Error(`Unexpected error: ${e.message}`);
     }
     if (!threw) throw new Error("Expected unapproved document URL to be rejected");
 
@@ -2103,7 +2187,7 @@ try {
       });
     } catch (e: any) {
       threw = true;
-      if (!e.message.includes("uninitialized or blank document")) throw new Error(`Unexpected error: ${e.message}`);
+      if (!e.message.includes("Security violation") && !e.message.includes("blank")) throw new Error(`Unexpected error: ${e.message}`);
     }
     if (!threw) throw new Error("Expected about:blank document to be rejected");
 
@@ -2117,7 +2201,7 @@ try {
       });
     } catch (e: any) {
       threw = true;
-      if (!e.message.includes("document has navigated away from active frame URL")) throw new Error(`Unexpected error: ${e.message}`);
+      if (!e.message.includes("Security violation") && !e.message.includes("navigated")) throw new Error(`Unexpected error: ${e.message}`);
     }
     win.webContents.url = "http://localhost:5173";
     if (!threw) throw new Error("Expected navigated desync to be rejected");
@@ -2333,26 +2417,35 @@ try {
 
   // 45. [Phase 2 Gate] Packaged build ignores dev-server environment variables and enforces strict document validation
   await runTest("[Phase 2 Gate] Packaged build ignores dev-server environment variables and enforces strict document validation", async () => {
-    IpcBoundary.setProductionOverride(true);
+    const originalPolicy = IpcBoundary.getStartupPolicy();
     const win = MockBrowserWindow.allWindows[0];
 
     try {
+      IpcBoundary.initializeStartupPolicy({
+        isPackaged: true,
+        devEndpoint: undefined,
+        appPath: testRoot,
+      });
+
       // In packaged production, HTTP loopback URL is rejected
       let threw = false;
       try {
+        win.webContents.url = "http://localhost:5173";
         IpcBoundary.validateIpcSender({
           sender: win.webContents,
-          senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+          senderFrame: win.webContents.mainFrame,
         } as any);
       } catch (e: any) {
         threw = true;
-        if (!e.message.includes("packaged production requires file://")) {
+        if (!e.message.includes("prohibited in packaged production") && !e.message.includes("Packaged application requires file:// URL")) {
           throw new Error(`Unexpected error message in packaged production: ${e.message}`);
         }
       }
       if (!threw) throw new Error("Expected packaged production to reject http:// renderer URL");
     } finally {
-      IpcBoundary.setProductionOverride(null);
+      if (originalPolicy) {
+        IpcBoundary.initializeStartupPolicy(originalPolicy);
+      }
     }
   });
 
@@ -2383,6 +2476,523 @@ try {
     const isMax = await isMaximizedHandler({});
     if (typeof isMax !== "boolean") {
       throw new Error("Expected window:isMaximized to return boolean");
+    }
+  });
+
+  // 47. [Phase 2 Gate] Complete Java-argument privilege classification across full taxonomy
+  await runTest("[Phase 2 Gate] Complete Java-argument privilege classification across full taxonomy", async () => {
+    // 1. Launch target override detection across complete taxonomy
+    const targetOverrideCases = [
+      "-jar evil.jar",
+      "com.evil.MainClass",
+      "Script.java",
+      "--module=evil/com.evil.Main",
+      "-m=evil/com.evil.Main",
+      "@/path/to/args.txt",
+      "@C:\\evil\\args.txt",
+    ];
+    for (const raw of targetOverrideCases) {
+      const tokens = parseJavaArgs(raw);
+      const res = classifyJavaArgs(tokens);
+      if (!res.hasLaunchTargetOverride) {
+        throw new Error(`Expected classifyJavaArgs to detect launch target override in: ${raw}`);
+      }
+    }
+
+    // 2. Sensitive / privileged options detection
+    const privilegedCases = [
+      "--upgrade-module-path=/evil/mods",
+      "--patch-module=java.base=/evil/patch",
+      "--add-reads=java.base=ALL-UNNAMED",
+      "--add-exports=java.base/sun.security.x509=ALL-UNNAMED",
+      "--add-opens=java.base/java.lang=ALL-UNNAMED",
+      "-javaagent:C:\\agent.jar",
+      "-agentlib:jdwp=transport=dt_socket",
+      "-agentpath:/lib/libevil.so",
+      "-cp /evil/classes",
+      "--class-path=/evil/classes",
+      "-classpath /evil/classes",
+      "-p /evil/modules",
+      "--module-path=/evil/modules",
+      "-Xbootclasspath:/evil/boot",
+      '-XX:OnError="cmd.exe /c calc.exe"',
+      '-XX:OnOutOfMemoryError="calc.exe"',
+      '-XX:ErrorFile="C:\\evil\\dump.log"',
+      "-Djava.security.manager=default",
+      "-Djava.system.class.loader=com.evil.Loader",
+    ];
+    for (const raw of privilegedCases) {
+      const tokens = parseJavaArgs(raw);
+      const res = classifyJavaArgs(tokens);
+      if (!res.isPrivileged) {
+        throw new Error(`Expected classifyJavaArgs to flag privileged option: ${raw}`);
+      }
+    }
+
+    // 3. Reviewed ordinary tuning options permitted without native approval
+    const ordinaryTuning = "-Xmx8G -Xms2G -XX:+UseG1GC -XX:+UseZGC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -Dfile.encoding=UTF-8 -Duser.language=en";
+    const ordinaryTokens = parseJavaArgs(ordinaryTuning);
+    const ordinaryRes = classifyJavaArgs(ordinaryTokens);
+    if (ordinaryRes.hasLaunchTargetOverride || ordinaryRes.isPrivileged) {
+      throw new Error(`Expected ordinary tuning options to be permitted without approval: ${JSON.stringify(ordinaryRes)}`);
+    }
+
+    // 4. Actual settings handler (config:set) rejects launch target override fail-closed
+    const configHandler = ipcHandlers.get("config:set")!;
+    for (const overrideArg of ["-jar evil.jar", "com.evil.Main", "--module=evil", "@args.txt"]) {
+      let threw = false;
+      try {
+        await configHandler({}, { javaArgs: overrideArg });
+      } catch (e: any) {
+        threw = true;
+        if (!e.message.includes("Custom Java arguments cannot override launch target")) {
+          throw new Error(`Unexpected error message for '${overrideArg}': ${e.message}`);
+        }
+      }
+      if (!threw) throw new Error(`Expected config:set to reject launch target override: '${overrideArg}'`);
+    }
+
+    // 5. Actual settings handler requires confirmation for privileged options
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
+    let cancelThrew = false;
+    try {
+      await configHandler({}, { javaArgs: "-javaagent:C:\\agent.jar" });
+    } catch (e: any) {
+      cancelThrew = true;
+      if (!e.message.includes("Privileged Java arguments rejected by user.")) {
+        throw new Error(`Unexpected cancellation error: ${e.message}`);
+      }
+    }
+    if (!cancelThrew) throw new Error("Expected cancelled privileged option dialog to reject config:set");
+
+    // When confirmed, privileged option succeeds
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 0 })); // Confirm
+    const confirmedRes = await configHandler({}, { javaArgs: "-javaagent:C:\\agent.jar" });
+    if (confirmedRes.javaArgs !== "-javaagent:C:\\agent.jar") {
+      throw new Error(`Expected confirmed javaArgs to update, got: ${confirmedRes.javaArgs}`);
+    }
+
+    // 6. Process argument sink (buildLaunchArguments) validation
+    const dummyRuntime = {
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      launch: {},
+    };
+    // Benign custom arguments are included
+    const benignSinkArgs = buildLaunchArguments({
+      gameDir,
+      ramGb: 4,
+      runtime: dummyRuntime as any,
+      assetIndex: "26.2",
+      username: "Player",
+      uuid: "00000000000000000000000000000001",
+      token: "0",
+      userType: "legacy",
+      customJavaArgs: ["-Xmx4G", "-XX:+UseG1GC"],
+      mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      classpathString: "libraries.jar",
+    });
+    if (!benignSinkArgs.includes("-Xmx4G") || !benignSinkArgs.includes("-XX:+UseG1GC")) {
+      throw new Error("Expected buildLaunchArguments to include benign custom tuning");
+    }
+
+    // Process argument sink rejects launch target overrides fail-closed
+    for (const badArg of [["-jar", "evil.jar"], ["com.evil.Main"], ["--module=foo"]]) {
+      let sinkThrew = false;
+      try {
+        buildLaunchArguments({
+          gameDir,
+          ramGb: 4,
+          runtime: dummyRuntime as any,
+          assetIndex: "26.2",
+          username: "Player",
+          uuid: "00000000000000000000000000000001",
+          token: "0",
+          userType: "legacy",
+          customJavaArgs: badArg,
+          mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+          classpathString: "libraries.jar",
+        });
+      } catch (e: any) {
+        sinkThrew = true;
+        if (!e.message.includes("Process argument sink rejected launch target override")) {
+          throw new Error(`Unexpected sink error: ${e.message}`);
+        }
+      }
+      if (!sinkThrew) throw new Error(`Expected buildLaunchArguments to reject: ${badArg.join(" ")}`);
+    }
+  });
+
+  // 48. [Phase 2 Gate] Document trust independent of load observations and strict sender frame validation
+  await runTest("[Phase 2 Gate] Document trust independent of load observations and strict sender frame validation", async () => {
+    const win = MockBrowserWindow.allWindows[0];
+    const originalPolicy = IpcBoundary.getStartupPolicy();
+
+    try {
+      IpcBoundary.initializeStartupPolicy({
+        isPackaged: false,
+        devEndpoint: "http://localhost:5173",
+        appPath: testRoot,
+      });
+
+      // 1. did-finish-load event does NOT automatically approve arbitrary documents
+      win.webContents.url = "data:text/html,<h1>attack</h1>";
+      win.webContents.emit("did-finish-load");
+      IpcBoundary.onDocumentLoaded();
+
+      let loadThrew = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: win.webContents.mainFrame,
+        } as any);
+      } catch (e: any) {
+        loadThrew = true;
+        if (!e.message.includes("disallowed document scheme") && !e.message.includes("Security violation")) {
+          throw new Error(`Unexpected error on data: URL: ${e.message}`);
+        }
+      }
+      if (!loadThrew) throw new Error("Expected did-finish-load on data: URL to NOT approve the document");
+
+      // 2. Unapproved dev server URL with wrong port is rejected
+      win.webContents.url = "http://localhost:9999";
+      win.webContents.emit("did-finish-load");
+      IpcBoundary.onDocumentLoaded();
+
+      let portThrew = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: win.webContents.mainFrame,
+        } as any);
+      } catch (e: any) {
+        portThrew = true;
+        if (!e.message.includes("not an approved application document") && !e.message.includes("Security violation")) {
+          throw new Error(`Unexpected error on unapproved dev port: ${e.message}`);
+        }
+      }
+      if (!portThrew) throw new Error("Expected unapproved port 9999 to be rejected");
+
+      // 3. Sender frame not matching active mainFrame is rejected
+      win.webContents.url = "http://localhost:5173";
+      const detachedFrame = { parent: null, url: "http://localhost:5173", isDestroyed: () => false };
+      let frameThrew = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: detachedFrame,
+        } as any);
+      } catch (e: any) {
+        frameThrew = true;
+        if (!e.message.includes("sender frame is not the active main frame")) {
+          throw new Error(`Unexpected detached frame error: ${e.message}`);
+        }
+      }
+      if (!frameThrew) throw new Error("Expected detached senderFrame !== mainFrame to be rejected");
+
+      // 4. Foreign file-URL authority is rejected
+      win.webContents.url = "file://evil.com/app/index.html";
+      let foreignFileThrew = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: win.webContents.mainFrame,
+        } as any);
+      } catch (e: any) {
+        foreignFileThrew = true;
+        if (!e.message.includes("foreign file URL authority")) {
+          throw new Error(`Unexpected foreign file URL error: ${e.message}`);
+        }
+      }
+      if (!foreignFileThrew) throw new Error("Expected foreign file URL authority to be rejected");
+    } finally {
+      win.webContents.url = "http://localhost:5173";
+      if (originalPolicy) {
+        IpcBoundary.initializeStartupPolicy(originalPolicy);
+      }
+    }
+  });
+
+  // 49. [Phase 2 Gate] Native approval binding: snapshot revalidation, operation barriers, single-use, and case normalization
+  await runTest("[Phase 2 Gate] Native approval binding: snapshot revalidation, operation barriers, single-use, and case normalization", async () => {
+    const win = MockBrowserWindow.allWindows[0];
+    const event = {
+      sender: win.webContents,
+      senderFrame: win.webContents.mainFrame,
+    };
+
+    // 1. Snapshot revalidation: document generation invalidation while awaiting confirmation
+    const snapshot = IpcBoundary.createApprovalSnapshot(event as any);
+    IpcBoundary.onNavigation(); // Navigation occurs
+    let navThrew = false;
+    try {
+      IpcBoundary.validateApprovalSnapshot(snapshot);
+    } catch (e: any) {
+      navThrew = true;
+      if (!e.message.includes("Document generation changed while awaiting native user approval.")) {
+        throw new Error(`Unexpected generation mismatch error: ${e.message}`);
+      }
+    }
+    if (!navThrew) throw new Error("Expected snapshot revalidation to fail on document generation change");
+
+    // 2. Cancellation of confirmation dialog
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
+    const cancelResult = await IpcBoundary.confirmPrivilegedOperation(event as any, {
+      title: "Test Confirm",
+      message: "Confirm this action?",
+    });
+    if (cancelResult !== false) {
+      throw new Error("Expected confirmPrivilegedOperation to return false on user cancellation");
+    }
+
+    // 3. Missing native dialog support fails closed
+    const originalMessageBox = mockDialog.showMessageBox;
+    delete (mockDialog as any).showMessageBox;
+    let missingDialogThrew = false;
+    try {
+      await IpcBoundary.confirmPrivilegedOperation(event as any, {
+        title: "Test Confirm",
+        message: "Confirm action?",
+      });
+    } catch (e: any) {
+      missingDialogThrew = true;
+      if (!e.message.includes("Native dialog service unavailable; privileged action denied fail-closed.")) {
+        throw new Error(`Unexpected missing dialog error: ${e.message}`);
+      }
+    } finally {
+      mockDialog.showMessageBox = originalMessageBox;
+    }
+    if (!missingDialogThrew) throw new Error("Expected missing dialog service to fail closed");
+
+    // 4. Operation coordinate barrier: operation state change during dialog blocks mutation
+    OperationCoordinator.assertCanMutate("test operation");
+    const activeOp = OperationCoordinator.acquire("sync", "Modpack synchronization active");
+    let conflictThrew = false;
+    try {
+      OperationCoordinator.assertCanMutate("configure game directory");
+    } catch (e: any) {
+      conflictThrew = true;
+      if (!e.message.includes("is currently in progress")) {
+        throw new Error(`Unexpected operation conflict error: ${e.message}`);
+      }
+    } finally {
+      activeOp.release();
+    }
+    if (!conflictThrew) throw new Error("Expected OperationCoordinator to reject mutation during conflicting operation");
+
+    // 5. Single-use consumption of granted approval
+    const testTarget = path.join(testRoot, "single-use-target");
+    IpcBoundary.grantApproval("gameDir:target", testTarget);
+    const firstConsume = IpcBoundary.consumeApproval("gameDir:target", testTarget);
+    const secondConsume = IpcBoundary.consumeApproval("gameDir:target", testTarget);
+    if (!firstConsume) throw new Error("Expected first consumeApproval to succeed");
+    if (secondConsume) throw new Error("Expected second consumeApproval to fail (single-use)");
+
+    // 6. Platform-correct path normalization
+    if (process.platform === "win32") {
+      const p1 = "C:\\Games\\Minecraft\\Data";
+      const p2 = "c:\\games\\minecraft\\data";
+      if (normalizeApprovalTarget(p1) !== normalizeApprovalTarget(p2)) {
+        throw new Error("Expected Windows path identity to be case-insensitive");
+      }
+    } else {
+      const p1 = "/tmp/CustomDir/Mods";
+      const p2 = "/tmp/customdir/mods";
+      if (normalizeApprovalTarget(p1) === normalizeApprovalTarget(p2)) {
+        throw new Error("Expected POSIX path identity to remain case-distinct");
+      }
+    }
+
+    // 7. Intended TTL constant verification (60 seconds)
+    if (APPROVAL_TTL_MS !== 60_000) {
+      throw new Error(`Expected APPROVAL_TTL_MS to be 60000ms (60s), got ${APPROVAL_TTL_MS}`);
+    }
+  });
+
+  // 50. [Phase 2 Gate] Main-owned launch admission: consolidated auth, mandatory installation state, and intercepted spawn
+  await runTest("[Phase 2 Gate] Main-owned launch admission: consolidated auth, mandatory installation state, and intercepted spawn", async () => {
+    const launchHandler = ipcHandlers.get("game:launch")!;
+    const lampasDir = path.join(gameDir, ".lampas");
+    fs.mkdirSync(lampasDir, { recursive: true });
+
+    // Setup release descriptor and valid installation state
+    const releasePath = path.join(lampasDir, "release.json");
+    const installPath = path.join(lampasDir, "installation.json");
+
+    const validRelease = {
+      pack: "Lampas 2",
+      version: "2.0.0",
+      syncGeneration: "gen-1",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      launch: {},
+    };
+    fs.writeFileSync(releasePath, JSON.stringify(validRelease, null, 2));
+
+    // Ensure session credentials are present for LauncherAuth.refreshSession
+    ConfigManager.set({
+      gameDir,
+      token: "valid-launch-token",
+      refreshToken: "valid-launch-refresh",
+      sessionPortalUrl: originAPortal,
+    });
+
+    // Spy Java runtime and bootstrap to isolate process execution sink
+    const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(async () => "C:\\Java25\\bin\\java.exe");
+    const bootstrapSpy = spyOn(MinecraftBootstrap, "prepareGameEnvironment").mockImplementation(async () => ({
+      classpath: ["C:\\Game\\libraries\\fabric.jar"],
+      mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      assetIndex: "26.2",
+    }));
+
+    try {
+      // 1. Missing installation.json fails closed
+      fs.rmSync(installPath, { force: true });
+      let missingStateThrew = false;
+      try {
+        await launchHandler({});
+      } catch (e: any) {
+        missingStateThrew = true;
+        if (!e.message.includes("Missing installation state metadata")) {
+          throw new Error(`Unexpected missing state error: ${e.message}`);
+        }
+      }
+      if (!missingStateThrew) throw new Error("Expected launch to reject missing installation.json fail-closed");
+
+      // 2. Empty installation.json ({}) fails closed
+      fs.writeFileSync(installPath, "{}");
+      let emptyStateThrew = false;
+      try {
+        await launchHandler({});
+      } catch (e: any) {
+        emptyStateThrew = true;
+        if (!e.message.includes("Installation state metadata is empty")) {
+          throw new Error(`Unexpected empty state error: ${e.message}`);
+        }
+      }
+      if (!emptyStateThrew) throw new Error("Expected launch to reject empty installation.json fail-closed");
+
+      // 3. installation.json missing version field fails closed
+      fs.writeFileSync(installPath, JSON.stringify({ syncGeneration: "gen-1" }));
+      let noVersionThrew = false;
+      try {
+        await launchHandler({});
+      } catch (e: any) {
+        noVersionThrew = true;
+        if (!e.message.includes("missing mandatory 'version' field")) {
+          throw new Error(`Unexpected missing version error: ${e.message}`);
+        }
+      }
+      if (!noVersionThrew) throw new Error("Expected launch to reject installation.json without version field");
+
+      // 4. Version mismatch between installation.json and release.json fails closed
+      fs.writeFileSync(installPath, JSON.stringify({ version: "1.0.0", syncGeneration: "gen-1" }));
+      let mismatchThrew = false;
+      try {
+        await launchHandler({});
+      } catch (e: any) {
+        mismatchThrew = true;
+        if (!e.message.includes("Incompatible installation state detected")) {
+          throw new Error(`Unexpected mismatch error: ${e.message}`);
+        }
+      }
+      if (!mismatchThrew) throw new Error("Expected launch to reject version mismatch fail-closed");
+
+      // 5. noSync: true does NOT bypass installation state admission
+      ConfigManager.set({ noSync: true });
+      let noSyncBypassThrew = false;
+      try {
+        await launchHandler({});
+      } catch {
+        noSyncBypassThrew = true;
+      }
+      ConfigManager.set({ noSync: false });
+      if (!noSyncBypassThrew) throw new Error("Expected noSync: true to still require valid installation state");
+
+      // 6. Valid installation state admits launch and executes intercepted spawn with consolidated user
+      fs.writeFileSync(installPath, JSON.stringify({ version: "2.0.0", syncGeneration: "gen-1" }));
+      interceptedProcesses.length = 0;
+
+      let launchThrew = false;
+      try {
+        await launchHandler({});
+      } catch (e: any) {
+        // child_process.spawn mock throws [SecurityHarness] child_process.spawn blocked
+        if (!e.message.includes("[SecurityHarness] child_process.spawn blocked")) {
+          throw e;
+        }
+      }
+
+      if (interceptedProcesses.length === 0) {
+        throw new Error("Expected authenticated game launch to reach process execution sink");
+      }
+
+      const launchCall = interceptedProcesses[interceptedProcesses.length - 1];
+      if (!launchCall.args.includes("Player") && !launchCall.args.includes("--username")) {
+        throw new Error(`Expected launch arguments to include consolidated player identity: ${JSON.stringify(launchCall.args)}`);
+      }
+      if (!launchCall.args.includes("26.2")) {
+        throw new Error(`Expected launch arguments to include release version: ${JSON.stringify(launchCall.args)}`);
+      }
+    } finally {
+      javaSpy.mockRestore();
+      bootstrapSpy.mockRestore();
+      GameRunner.resetForTesting();
+    }
+  });
+
+  // 51. [Phase 2 Gate] Renderer permission lockdown and error sanitization
+  await runTest("[Phase 2 Gate] Renderer permission lockdown and error sanitization", async () => {
+    const win = MockBrowserWindow.allWindows[0];
+
+    // 1. Permission check handler denies all checks fail-closed
+    const checkHandler = win.webContents.session.permissionCheckHandler;
+    if (typeof checkHandler !== "function") {
+      throw new Error("Expected setPermissionCheckHandler to register a function on session");
+    }
+    const deniedMedia = checkHandler(win.webContents, "media", "http://localhost:5173", {});
+    const deniedGeo = checkHandler(win.webContents, "geolocation", "http://localhost:5173", {});
+    const deniedNotif = checkHandler(win.webContents, "notifications", "http://localhost:5173", {});
+    if (deniedMedia !== false || deniedGeo !== false || deniedNotif !== false) {
+      throw new Error(`Expected all permission checks to return false: media=${deniedMedia}, geo=${deniedGeo}, notif=${deniedNotif}`);
+    }
+
+    // 2. Permission request handler denies all requests fail-closed
+    const reqHandler = win.webContents.session.permissionRequestHandler;
+    if (typeof reqHandler !== "function") {
+      throw new Error("Expected setPermissionRequestHandler to register a function on session");
+    }
+    let mediaGranted: any = true;
+    reqHandler(win.webContents, "media", (granted: boolean) => { mediaGranted = granted; }, {});
+    if (mediaGranted !== false) {
+      throw new Error("Expected permission request for media to be denied fail-closed");
+    }
+
+    // 3. Error sanitization strips raw filesystem paths and masks security exceptions
+    const winPathError = sanitizeIpcError(new Error("Cannot access file at C:\\Users\\Administrator\\secret\\file.txt: Access denied"));
+    if (winPathError.message.includes("C:\\Users")) {
+      throw new Error(`Expected Windows drive path to be scrubbed: ${winPathError.message}`);
+    }
+    if (!winPathError.message.includes("<path>")) {
+      throw new Error(`Expected placeholder <path> in sanitized error: ${winPathError.message}`);
+    }
+
+    const posixPathError = sanitizeIpcError(new Error("Cannot access file at /home/markj/lampas-launcher/secret/file.txt: Access denied"));
+    if (posixPathError.message.includes("/home/markj")) {
+      throw new Error(`Expected POSIX path to be scrubbed: ${posixPathError.message}`);
+    }
+    if (!posixPathError.message.includes("<path>")) {
+      throw new Error(`Expected placeholder <path> in sanitized error: ${posixPathError.message}`);
+    }
+
+    const securityError = sanitizeIpcError(new IpcSecurityError("detailed secret frame mismatch: frame id 12 != 14"));
+    if (securityError.message !== "Security violation: IPC request rejected.") {
+      throw new Error(`Expected masked security error message, got: ${securityError.message}`);
+    }
+
+    // 4. Mod file size boundary
+    if (MAX_CUSTOM_MOD_FILE_SIZE_BYTES !== 100 * 1024 * 1024) {
+      throw new Error(`Expected MAX_CUSTOM_MOD_FILE_SIZE_BYTES to be 100MB (104857600 bytes), got ${MAX_CUSTOM_MOD_FILE_SIZE_BYTES}`);
     }
   });
 

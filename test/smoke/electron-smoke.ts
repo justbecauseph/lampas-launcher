@@ -163,12 +163,13 @@ async function main() {
     const initialized = combinedOutput.includes("Lampas Launcher initialized");
     const handlersReady = combinedOutput.includes("[Smoke Test] All handlers registered; initiating graceful shutdown");
     const roundTripPassed = combinedOutput.includes("[Smoke Test] Renderer & preload verification round-trip passed");
+    const adversarialPassed = combinedOutput.includes("[Smoke Test] Real Electron adversarial boundary checks passed");
     const cleanExit = electronResult.code === 0 && !electronResult.timedOut;
 
     results.push({
       name: "Real Electron Execution: Unpacked dev/dist execution",
-      passed: cleanExit && initialized && handlersReady && roundTripPassed,
-      details: `Exit code: ${electronResult.code}, timedOut: ${electronResult.timedOut}, init: ${initialized}, handlers: ${handlersReady}, roundTrip: ${roundTripPassed}`,
+      passed: cleanExit && initialized && handlersReady && roundTripPassed && adversarialPassed,
+      details: `Exit code: ${electronResult.code}, timedOut: ${electronResult.timedOut}, init: ${initialized}, handlers: ${handlersReady}, roundTrip: ${roundTripPassed}, adversarial: ${adversarialPassed}`,
     });
   } else {
     results.push({
@@ -195,12 +196,13 @@ async function main() {
     const pkgInit = combinedPkg.includes("Lampas Launcher initialized");
     const pkgReady = combinedPkg.includes("[Smoke Test] All handlers registered; initiating graceful shutdown");
     const pkgRoundTrip = combinedPkg.includes("[Smoke Test] Renderer & preload verification round-trip passed");
+    const pkgAdversarial = combinedPkg.includes("[Smoke Test] Real Electron adversarial boundary checks passed");
     const pkgClean = pkgResult.code === 0 && !pkgResult.timedOut;
 
     results.push({
       name: "Packaged Distribution: Execution & ASAR verification",
-      passed: asarValid && pkgClean && pkgInit && pkgReady && pkgRoundTrip,
-      details: `ASAR size: ${(fs.statSync(asarPath).size / (1024 * 1024)).toFixed(2)} MB, exit code: ${pkgResult.code}, init: ${pkgInit}, handlers: ${pkgReady}, roundTrip: ${pkgRoundTrip}`,
+      passed: asarValid && pkgClean && pkgInit && pkgReady && pkgRoundTrip && pkgAdversarial,
+      details: `ASAR size: ${(fs.statSync(asarPath).size / (1024 * 1024)).toFixed(2)} MB, exit code: ${pkgResult.code}, init: ${pkgInit}, handlers: ${pkgReady}, roundTrip: ${pkgRoundTrip}, adversarial: ${pkgAdversarial}`,
     });
   } else {
     results.push({

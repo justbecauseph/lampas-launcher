@@ -12,13 +12,14 @@ import { ServerStatusClient } from "./server-status";
 import { OperationCoordinator, safeSend as safeSendToWindow } from "./operations";
 import { BoundedLogBatchTransport } from "./game-log-stream";
 import {
-  confirmPrivilegedOperation,
+  classifyJavaArgs,
   IpcBoundary,
   IpcSchemas,
   IpcSecurityError,
-  isPrivilegedJavaArg,
+  IpcValidationError,
   registerSecureHandler,
   registerSecureListener,
+  validateModPaths,
 } from "./ipc-boundary";
 import type {
   DirectoryMoveProgress,
@@ -95,7 +96,72 @@ function createWindow() {
 
   IpcBoundary.setMainWindow(mainWindow);
 
-  // Packaged vs development renderer loading
+  // Navigation, redirect, window open, webview, and permission lockdown
+  mainWindow.webContents.setWindowOpenHandler?.(({ url }) => {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      try {
+        const validUrl = validateWebUrl(url);
+        shell.openExternal(validUrl);
+      } catch (err: any) {
+        LauncherLogger.warn(`[Window Open] Rejected URL: ${err?.message || err}`);
+      }
+    }
+    return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    event.preventDefault();
+    LauncherLogger.warn(`[Navigation] Blocked attempt to navigate window to: ${url}`);
+  });
+
+  mainWindow.webContents.on("will-redirect", (event, url) => {
+    event.preventDefault();
+    LauncherLogger.warn(`[Redirect] Blocked attempt to redirect window to: ${url}`);
+  });
+
+  mainWindow.webContents.on("will-attach-webview", (event) => {
+    event.preventDefault();
+    LauncherLogger.warn("[Security] Denied attempt to attach webview");
+  });
+
+  mainWindow.webContents.session?.setPermissionRequestHandler((_webContents, permission, callback) => {
+    LauncherLogger.warn(`[Permissions] Denied permission request: ${permission}`);
+    callback(false);
+  });
+
+  mainWindow.webContents.session?.setPermissionCheckHandler?.((_webContents, permission, requestingOrigin) => {
+    LauncherLogger.warn(`[Permissions] Denied permission check: ${permission} from ${requestingOrigin}`);
+    return false;
+  });
+
+  mainWindow.webContents.session?.webRequest?.onHeadersReceived?.((details, callback) => {
+    const responseHeaders = { ...details.responseHeaders };
+    const csp =
+      "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none';";
+    responseHeaders["Content-Security-Policy"] = [csp];
+    responseHeaders["X-Content-Type-Options"] = ["nosniff"];
+    responseHeaders["X-Frame-Options"] = ["DENY"];
+    callback({ responseHeaders });
+  });
+
+  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    LauncherLogger.info(`[Renderer Console] (level ${level}) ${message} (${sourceId}:${line})`);
+  });
+
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    LauncherLogger.error(`[Renderer Crash] Render process gone: ${JSON.stringify(details)}`);
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+    IpcBoundary.setMainWindow(null);
+  });
+
+  // Packaged vs development renderer loading (installed AFTER all security protections)
   const isPackaged = IpcBoundary.isPackagedProduction();
   const prodPath = path.join(__dirname, "renderer/index.html");
 
@@ -132,71 +198,18 @@ function createWindow() {
       mainWindow.loadFile(devFallback);
     }
   }
-
-  // Navigation, redirect, window open, webview, and permission lockdown
-  mainWindow.webContents.setWindowOpenHandler?.(({ url }) => {
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      try {
-        const validUrl = validateWebUrl(url);
-        shell.openExternal(validUrl);
-      } catch (err: any) {
-        LauncherLogger.warn(`[Window Open] Rejected URL: ${err?.message || err}`);
-      }
-    }
-    return { action: "deny" };
-  });
-
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    event.preventDefault();
-    LauncherLogger.warn(`[Navigation] Blocked attempt to navigate window to: ${url}`);
-  });
-
-  mainWindow.webContents.on("will-redirect", (event, url) => {
-    event.preventDefault();
-    LauncherLogger.warn(`[Redirect] Blocked attempt to redirect window to: ${url}`);
-  });
-
-  mainWindow.webContents.on("will-attach-webview", (event) => {
-    event.preventDefault();
-    LauncherLogger.warn("[Security] Denied attempt to attach webview");
-  });
-
-  mainWindow.webContents.session?.setPermissionRequestHandler((_webContents, permission, callback) => {
-    LauncherLogger.warn(`[Permissions] Denied permission request: ${permission}`);
-    callback(false);
-  });
-
-  mainWindow.webContents.session?.webRequest?.onHeadersReceived?.((details, callback) => {
-    const responseHeaders = { ...details.responseHeaders };
-    const csp =
-      "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none';";
-    responseHeaders["Content-Security-Policy"] = [csp];
-    responseHeaders["X-Content-Type-Options"] = ["nosniff"];
-    responseHeaders["X-Frame-Options"] = ["DENY"];
-    callback({ responseHeaders });
-  });
-
-  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    LauncherLogger.info(`[Renderer Console] (level ${level}) ${message} (${sourceId}:${line})`);
-  });
-
-  mainWindow.webContents.on("render-process-gone", (_event, details) => {
-    LauncherLogger.error(`[Renderer Crash] Render process gone: ${JSON.stringify(details)}`);
-  });
-
-  mainWindow.once("ready-to-show", () => {
-    mainWindow?.show();
-  });
-
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-    IpcBoundary.setMainWindow(null);
-  });
 }
 
 app.whenReady().then(async () => {
   LauncherLogger.init();
   LauncherLogger.info(`Lampas Launcher initialized (App: ${app.getName()} ${app.getVersion()})`);
+
+  // Establish main-owned startup policy for document trust
+  IpcBoundary.initializeStartupPolicy({
+    isPackaged: Boolean(app.isPackaged),
+    appPath: typeof app.getAppPath === "function" ? app.getAppPath() : path.resolve(__dirname, ".."),
+    devEndpoint: !app.isPackaged ? process.env.VITE_DEV_SERVER_URL || "http://localhost:5173" : null,
+  });
 
   if (!app.isPackaged) {
     PortalPolicy.configureDevelopmentPolicy({
@@ -450,14 +463,14 @@ app.whenReady().then(async () => {
 
   // IPC Handlers: Config
   registerSecureHandler("config:get", IpcSchemas.noArgs, () => toRendererSettingsDto(ConfigManager.get()));
-  registerSecureHandler("config:set", IpcSchemas.configSet, async (_, newConfig) => {
+  registerSecureHandler("config:set", IpcSchemas.configSet, async (event, newConfig) => {
     OperationCoordinator.assertCanMutate("update configuration");
 
     // Privileged setting: javaPath
     if (newConfig.javaPath !== undefined && newConfig.javaPath !== ConfigManager.get().javaPath && newConfig.javaPath.trim() !== "") {
       const hasApproval = IpcBoundary.consumeApproval("config:javaPath", newConfig.javaPath);
       if (!hasApproval) {
-        const confirmed = await confirmPrivilegedOperation(mainWindow, {
+        const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
           title: "Confirm Custom Java Executable",
           message: "Set custom Java executable?",
           detail: `Custom Java binary path:\n${newConfig.javaPath}`,
@@ -472,14 +485,17 @@ app.whenReady().then(async () => {
     // Privileged setting: privileged javaArgs
     if (newConfig.javaArgs !== undefined && newConfig.javaArgs.trim() !== "") {
       const parsedArgs = parseJavaArgs(newConfig.javaArgs);
-      const privilegedArgs = parsedArgs.filter(isPrivilegedJavaArg);
-      if (privilegedArgs.length > 0) {
+      const classification = classifyJavaArgs(parsedArgs);
+      if (classification.hasLaunchTargetOverride) {
+        throw new IpcValidationError("Custom Java arguments cannot override launch target or main class.");
+      }
+      if (classification.isPrivileged) {
         const hasApproval = IpcBoundary.consumeApproval("config:privilegedJavaArgs", newConfig.javaArgs);
         if (!hasApproval) {
-          const confirmed = await confirmPrivilegedOperation(mainWindow, {
+          const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
             title: "Security Warning: Privileged Java Arguments",
-            message: "The specified Java arguments contain privileged code-loading flags that can execute arbitrary code.",
-            detail: `Detected flags:\n${privilegedArgs.join("\n")}\n\nFull arguments:\n${newConfig.javaArgs}\n\nDo you want to allow these arguments?`,
+            message: "The specified Java arguments contain privileged or sensitive flags that can execute arbitrary code.",
+            detail: `Detected flags:\n${classification.privilegedReasons.join("\n")}\n\nFull arguments:\n${newConfig.javaArgs}\n\nDo you want to allow these arguments?`,
             confirmButtonText: "Allow",
           });
           if (!confirmed) {
@@ -489,31 +505,38 @@ app.whenReady().then(async () => {
       }
     }
 
+    // Recheck operation coordination after asynchronous approval
+    OperationCoordinator.assertCanMutate("update configuration");
     return toRendererSettingsDto(ConfigManager.set(newConfig));
   });
 
   // IPC Handlers: Game Directory
   registerSecureHandler("gameDir:getStatus", IpcSchemas.noArgs, () => GameDirectoryManager.getStatus());
-  registerSecureHandler("gameDir:browse", IpcSchemas.gameDirBrowse, async (_, defaultPath) => {
-    const result = await dialog.showOpenDialog(mainWindow!, {
+  registerSecureHandler("gameDir:browse", IpcSchemas.gameDirBrowse, async (event, defaultPath) => {
+    if (!dialog?.showOpenDialog) {
+      throw new IpcSecurityError("Native dialog service unavailable; browse action denied fail-closed.");
+    }
+    const snapshot = IpcBoundary.createApprovalSnapshot(event);
+    const result = await dialog.showOpenDialog(snapshot.window, {
       title: "Select Minecraft Installation Directory",
       defaultPath: defaultPath || ConfigManager.get().gameDir,
       properties: ["openDirectory", "createDirectory"],
     });
+    IpcBoundary.validateApprovalSnapshot(snapshot);
     if (!result.canceled && result.filePaths.length > 0) {
       for (const p of result.filePaths) {
-        IpcBoundary.grantApproval("gameDir:target", p);
+        IpcBoundary.grantApproval("gameDir:target", p, snapshot.generation);
       }
     }
     return { canceled: result.canceled, filePaths: result.filePaths };
   });
   registerSecureHandler("gameDir:validate", IpcSchemas.gameDirValidate, (_, targetPath, currentPath) =>
     GameDirectoryManager.validateTarget(targetPath, currentPath));
-  registerSecureHandler("gameDir:configure", IpcSchemas.gameDirTarget, async (_, targetPath) => {
+  registerSecureHandler("gameDir:configure", IpcSchemas.gameDirTarget, async (event, targetPath) => {
     OperationCoordinator.assertCanMutate("configure game directory");
     const hasApproval = IpcBoundary.consumeApproval("gameDir:target", targetPath);
     if (!hasApproval) {
-      const confirmed = await confirmPrivilegedOperation(mainWindow, {
+      const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
         title: "Confirm Minecraft Installation Directory",
         message: "Configure Minecraft installation directory?",
         detail: `The application will configure its installation at:\n${targetPath}`,
@@ -523,13 +546,15 @@ app.whenReady().then(async () => {
         throw new Error("Configuration cancelled by user.");
       }
     }
+    OperationCoordinator.assertCanMutate("configure game directory");
     const updated = await GameDirectoryManager.configureInitial(targetPath);
     return toRendererSettingsDto(updated);
   });
-  registerSecureHandler("gameDir:move", IpcSchemas.gameDirTarget, async (_, targetPath) => {
+  registerSecureHandler("gameDir:move", IpcSchemas.gameDirTarget, async (event, targetPath) => {
+    OperationCoordinator.assertCanMutate("move game directory");
     const hasApproval = IpcBoundary.consumeApproval("gameDir:target", targetPath);
     if (!hasApproval) {
-      const confirmed = await confirmPrivilegedOperation(mainWindow, {
+      const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
         title: "Confirm Installation Move",
         message: "Move Minecraft installation directory?",
         detail: `The existing installation and data will be moved to:\n${targetPath}`,
@@ -539,6 +564,7 @@ app.whenReady().then(async () => {
         throw new Error("Move cancelled by user.");
       }
     }
+    OperationCoordinator.assertCanMutate("move game directory");
     const op = OperationCoordinator.acquire("move", `Move installation to ${targetPath}`);
     const throttledProgress = op.createThrottledProgress<DirectoryMoveProgress>(
       (progress) => safeSend("gameDir:moveProgress", progress),
@@ -617,22 +643,26 @@ app.whenReady().then(async () => {
   registerSecureHandler("sync:getInstalledRuntime", IpcSchemas.noArgs, () => {
     const config = ConfigManager.get();
     const releasePath = path.join(config.gameDir, ".lampas", "release.json");
-    if (fs.existsSync(releasePath)) {
+    const statePath = path.join(config.gameDir, ".lampas", "installation.json");
+    if (fs.existsSync(releasePath) && fs.existsSync(statePath)) {
       try {
         const release = JSON.parse(fs.readFileSync(releasePath, "utf-8"));
-        const statePath = path.join(config.gameDir, ".lampas", "installation.json");
-        if (fs.existsSync(statePath)) {
-          const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-          if (state.version && release.version && state.version !== release.version) {
-            return null;
-          }
-          if (
-            state.syncGeneration &&
-            release.syncGeneration &&
-            state.syncGeneration !== release.syncGeneration
-          ) {
-            return null;
-          }
+        const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+        if (!state || typeof state !== "object" || !state.version || typeof state.version !== "string") {
+          return null;
+        }
+        if (!release || typeof release !== "object" || !release.version || typeof release.version !== "string") {
+          return null;
+        }
+        if (state.version !== release.version) {
+          return null;
+        }
+        if (
+          state.syncGeneration &&
+          release.syncGeneration &&
+          state.syncGeneration !== release.syncGeneration
+        ) {
+          return null;
         }
         if (release?.minecraft && release?.loader?.version) {
           return {
@@ -650,26 +680,44 @@ app.whenReady().then(async () => {
   });
 
   // IPC Handlers: Mods
-  registerSecureHandler("mods:browseAndAdd", IpcSchemas.noArgs, async () => {
+  registerSecureHandler("mods:browseAndAdd", IpcSchemas.noArgs, async (event) => {
     OperationCoordinator.assertCanMutate("add client mods");
-    const result = await dialog.showOpenDialog(mainWindow!, {
+    if (!dialog?.showOpenDialog) {
+      throw new IpcSecurityError("Native dialog service unavailable; file selection denied fail-closed.");
+    }
+    const snapshot = IpcBoundary.createApprovalSnapshot(event);
+    const result = await dialog.showOpenDialog(snapshot.window, {
       title: "Add local client mods",
       filters: [{ name: "Minecraft mods", extensions: ["jar"] }],
       properties: ["openFile", "multiSelections"],
     });
-    if (result.canceled || result.filePaths.length === 0) {
+    IpcBoundary.validateApprovalSnapshot(snapshot);
+    OperationCoordinator.assertCanMutate("add client mods");
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
       return ClientModManager.list();
     }
+    validateModPaths(result.filePaths);
     for (const p of result.filePaths) {
-      IpcBoundary.grantApproval("mod:import", p);
+      IpcBoundary.grantApproval("mod:import", p, snapshot.generation);
+    }
+    for (const p of result.filePaths) {
+      if (!IpcBoundary.consumeApproval("mod:import", p)) {
+        throw new IpcSecurityError("Mod import approval was invalidated or expired.");
+      }
     }
     return ClientModManager.add(result.filePaths);
   });
-  registerSecureHandler("mods:addPaths", IpcSchemas.modPaths, async (_, paths) => {
+  registerSecureHandler("mods:addPaths", IpcSchemas.modPaths, async (event, paths) => {
     OperationCoordinator.assertCanMutate("add client mods");
-    const unapproved = paths.filter((p) => !IpcBoundary.consumeApproval("mod:import", p));
+    validateModPaths(paths);
+    const unapproved: string[] = [];
+    for (const p of paths) {
+      if (!IpcBoundary.consumeApproval("mod:import", p)) {
+        unapproved.push(p);
+      }
+    }
     if (unapproved.length > 0) {
-      const confirmed = await confirmPrivilegedOperation(mainWindow, {
+      const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
         title: "Confirm Mod Import",
         message: "Import local client mod(s)?",
         detail: `Are you sure you want to import the following mod file(s)?\n${unapproved.join("\n")}`,
@@ -678,6 +726,7 @@ app.whenReady().then(async () => {
       if (!confirmed) {
         throw new Error("Mod import cancelled by user.");
       }
+      OperationCoordinator.assertCanMutate("add client mods");
     }
     return ClientModManager.add(paths);
   });
@@ -752,7 +801,60 @@ app.whenReady().then(async () => {
           throw new Error("window.lampas or window.lampas.utils.getAppVersion is undefined in renderer context");
         }
         LauncherLogger.info("[Smoke Test] Renderer & preload verification round-trip passed");
+
+        // Real Electron adversarial boundary checks
+        const adversarialCheck = await mainWindow.webContents.executeJavaScript(`
+          (async () => {
+            // 1. Node integration disabled
+            if (typeof require !== 'undefined' || typeof process !== 'undefined' || typeof Buffer !== 'undefined') {
+              return { passed: false, reason: "Node integration leaked into renderer" };
+            }
+            // 2. Raw IPC not leaked on global
+            if (typeof window.ipcRenderer !== 'undefined' || typeof window.electron !== 'undefined') {
+              return { passed: false, reason: "Raw Electron IPC leaked into renderer" };
+            }
+            // 3. Unknown settings field rejected
+            let rejectedSchema = false;
+            try {
+              await window.lampas.config.set({ maliciousField: "attack" });
+            } catch (err) {
+              if (err && err.message && err.message.includes("maliciousField")) {
+                rejectedSchema = true;
+              }
+            }
+            if (!rejectedSchema) {
+              return { passed: false, reason: "Adversarial schema config:set did not reject malicious field" };
+            }
+            // 4. Arbitrary local path open rejected
+            let rejectedPath = false;
+            try {
+              await window.lampas.utils.openPath("C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\cmd.exe");
+            } catch (err) {
+              if (err && err.message && (err.message.includes("Refusing to open unapproved path") || err.message.includes("unapproved path"))) {
+                rejectedPath = true;
+              }
+            }
+            if (!rejectedPath) {
+              return { passed: false, reason: "Adversarial openPath did not reject arbitrary local path" };
+            }
+            // 5. Native permission query rejected
+            try {
+              const perm = await navigator.permissions.query({ name: 'geolocation' });
+              if (perm.state !== 'denied') {
+                return { passed: false, reason: "Expected permission state to be 'denied', got " + perm.state };
+              }
+            } catch {}
+            return { passed: true };
+          })()
+        `);
+
+        if (!adversarialCheck || !adversarialCheck.passed) {
+          throw new Error(`Adversarial boundary check failed: ${adversarialCheck?.reason || "unknown"}`);
+        }
+        LauncherLogger.info("[Smoke Test] Real Electron adversarial boundary checks passed");
+        console.log("[Smoke Test] Real Electron adversarial boundary checks passed");
       } catch (smokeErr: any) {
+        console.error(`[Smoke Test] Verification failed: ${smokeErr?.message || smokeErr}`);
         LauncherLogger.error(`[Smoke Test] Verification failed: ${smokeErr?.message || smokeErr}`);
         process.exitCode = 1;
       } finally {

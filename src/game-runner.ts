@@ -9,6 +9,7 @@ import { JavaRuntimeManager } from "./java-runtime";
 import { isValidServerAddress, verifyRequiredResourcePacks } from "./resource-packs";
 import { validateRuntimeDefinition } from "./runtime-definition";
 import { ProcessLogFramer } from "./game-log-stream";
+import { classifyJavaArgs, parseJavaArgs } from "./ipc-boundary";
 import type { GameLogEntry, ReleaseDescriptor, UserProfile } from "./types";
 
 function generateOfflineUuid(username: string): string {
@@ -49,17 +50,23 @@ export class GameRunner {
 
     try {
       const config = ConfigManager.get();
-      if (!user || (!config.token && !config.refreshToken)) {
-        throw new Error("Authentication required: Please log in with your Lampas Portal account before playing.");
+      let activeUser: UserProfile;
+
+      if (user && user.minecraftUuid && user.minecraftUuid !== "00000000-0000-0000-0000-000000000000") {
+        // Consolidated authentication: use main-verified user identity
+        activeUser = user;
+      } else {
+        if (!config.token && !config.refreshToken) {
+          throw new Error("Authentication required: Please log in with your Lampas Portal account before playing.");
+        }
+        log("INFO", "Refreshing authentication tokens via Lampas Portal...");
+        const refreshed = await LauncherAuth.refreshSession(config.portalUrl);
+        if (!refreshed.valid || !refreshed.user) {
+          throw new Error("Session expired or invalid: Please log in with your Lampas Portal account.");
+        }
+        activeUser = refreshed.user;
       }
 
-      log("INFO", "Refreshing authentication tokens via Lampas Portal...");
-      const refreshed = await LauncherAuth.refreshSession(config.portalUrl);
-      if (!refreshed.valid || !refreshed.user) {
-        throw new Error("Session expired or invalid: Please log in with your Lampas Portal account.");
-      }
-
-      const activeUser = refreshed.user;
       const activeConfig = ConfigManager.get();
       const username = activeUser.minecraftUsername || activeUser.name;
       const uuid = activeUser.minecraftUuid;
@@ -79,45 +86,70 @@ export class GameRunner {
       let release: ReleaseDescriptor | null = releaseOverride || null;
       if (!release) {
         const stateReleasePath = path.join(gameDir, ".lampas", "release.json");
-        if (fs.existsSync(stateReleasePath)) {
-          try {
-            release = JSON.parse(fs.readFileSync(stateReleasePath, "utf-8"));
-          } catch {}
+        if (!fs.existsSync(stateReleasePath)) {
+          throw new Error(
+            "No installed Lampas release found. Please synchronize or repair your modpack installation first."
+          );
+        }
+        try {
+          release = JSON.parse(fs.readFileSync(stateReleasePath, "utf-8"));
+        } catch {
+          throw new Error(
+            "Release descriptor is corrupted. Please synchronize or repair your modpack installation first."
+          );
         }
       }
 
-      if (!release) {
+      if (!release || typeof release !== "object" || Object.keys(release).length === 0) {
         throw new Error(
           "No installed Lampas release found. Please synchronize or repair your modpack installation first."
         );
       }
+      if (!release.version || typeof release.version !== "string") {
+        throw new Error(
+          "Release descriptor metadata is missing mandatory 'version' field. Please synchronize or repair."
+        );
+      }
 
-      // Cross-validate release descriptor with installation state to prevent launching incompatible states
+      // Mandatory installed-state evidence validation
       if (!releaseOverride) {
         const stateFilePath = path.join(gameDir, ".lampas", "installation.json");
-        if (fs.existsSync(stateFilePath)) {
-          let installedState: any;
-          try {
-            installedState = JSON.parse(fs.readFileSync(stateFilePath, "utf-8"));
-          } catch {
-            throw new Error(
-              "Installation state metadata is corrupted. Please synchronize or repair your modpack installation first."
-            );
-          }
-          if (installedState.version && release.version && installedState.version !== release.version) {
-            throw new Error(
-              `Incompatible installation state detected: installed version '${installedState.version}' does not match release descriptor '${release.version}'. Please synchronize or repair.`
-            );
-          }
-          if (
-            installedState.syncGeneration &&
-            release.syncGeneration &&
-            installedState.syncGeneration !== release.syncGeneration
-          ) {
-            throw new Error(
-              `Incompatible installation generation detected: installed generation '${installedState.syncGeneration}' does not match release descriptor '${release.syncGeneration}'. Please synchronize or repair.`
-            );
-          }
+        if (!fs.existsSync(stateFilePath)) {
+          throw new Error(
+            "Missing installation state metadata: No installed modpack found. Please synchronize or repair your modpack installation first."
+          );
+        }
+        let installedState: any;
+        try {
+          installedState = JSON.parse(fs.readFileSync(stateFilePath, "utf-8"));
+        } catch {
+          throw new Error(
+            "Installation state metadata is corrupted. Please synchronize or repair your modpack installation first."
+          );
+        }
+        if (!installedState || typeof installedState !== "object" || Object.keys(installedState).length === 0) {
+          throw new Error(
+            "Installation state metadata is empty. Please synchronize or repair your modpack installation first."
+          );
+        }
+        if (!installedState.version || typeof installedState.version !== "string") {
+          throw new Error(
+            "Installation state metadata is missing mandatory 'version' field. Please synchronize or repair."
+          );
+        }
+        if (installedState.version && release.version && installedState.version !== release.version) {
+          throw new Error(
+            `Incompatible installation state detected: installed version '${installedState.version}' does not match release descriptor '${release.version}'. Please synchronize or repair.`
+          );
+        }
+        if (
+          installedState.syncGeneration &&
+          release.syncGeneration &&
+          installedState.syncGeneration !== release.syncGeneration
+        ) {
+          throw new Error(
+            `Incompatible installation generation detected: installed generation '${installedState.syncGeneration}' does not match release descriptor '${release.syncGeneration}'. Please synchronize or repair.`
+          );
         }
       }
 
@@ -154,54 +186,27 @@ export class GameRunner {
     const classpathString = classpath.join(cpSeparator);
 
     const customJavaArgs = parseJavaArgs(activeConfig.javaArgs || "");
-    const jvmArgs = [
-      `-Xmx${ramGb}G`,
-      `-Xms${Math.min(2, ramGb)}G`,
-      "-XX:+UseZGC",
-      "-XX:+ParallelRefProcEnabled",
-      "-XX:MaxGCPauseMillis=200",
-      "-XX:+UnlockExperimentalVMOptions",
-      "-XX:+DisableExplicitGC",
-      "-XX:+AlwaysPreTouch",
-      "-Dfabric.disableTelemetry=true",
-      `-Djava.library.path=${path.join(gameDir, "natives")}`,
-      `-Dminecraft.applet.TargetDirectory=${gameDir}`,
-      ...customJavaArgs,
-      "-cp",
-      classpathString,
-      mainClass,
-      "--username",
-      username,
-      "--version",
-      runtime.minecraft,
-      "--gameDir",
-      gameDir,
-      "--assetsDir",
-      path.join(gameDir, "assets"),
-      "--assetIndex",
-      assetIndex,
-      "--uuid",
-      rawUuid,
-      "--accessToken",
-      token,
-      "--userType",
-      userType,
-      "--versionType",
-      "release",
-      "--userProperties",
-      "{}",
-    ];
-
-    // Quick Play: Direct server connection
-    if (release?.launch?.autoConnect && release.launch.server) {
-      const serverAddr = release.launch.server.trim();
-      if (!isValidServerAddress(serverAddr)) {
-        log("ERROR", `Invalid auto-connect server address configured: '${serverAddr}'`);
-        throw new Error(`Malformed auto-connect server address: '${serverAddr}'`);
-      }
-      log("INFO", `Direct connect enabled: automatically connecting to ${serverAddr}...`);
-      jvmArgs.push("--quickPlayMultiplayer", serverAddr);
+    const autoConnectServer =
+      release?.launch?.autoConnect && release.launch.server ? release.launch.server.trim() : undefined;
+    if (autoConnectServer && !isValidServerAddress(autoConnectServer)) {
+      log("ERROR", `Invalid auto-connect server address configured: '${autoConnectServer}'`);
+      throw new Error(`Malformed auto-connect server address: '${autoConnectServer}'`);
     }
+
+    const jvmArgs = buildLaunchArguments({
+      gameDir,
+      ramGb,
+      runtime,
+      assetIndex,
+      username,
+      uuid: rawUuid,
+      token,
+      userType,
+      customJavaArgs,
+      mainClass,
+      classpathString,
+      autoConnectServer,
+    });
 
     log("INFO", `Starting Minecraft client via ${mainClass}...`);
 
@@ -346,38 +351,71 @@ export class GameRunner {
   }
 }
 
-export function parseJavaArgs(value: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-  let escaped = false;
-
-  const input = value.trim();
-  for (let index = 0; index < input.length; index++) {
-    const char = input[index];
-    if (escaped) {
-      current += char;
-      escaped = false;
-    } else if (char === "\\") {
-      const next = input[index + 1];
-      if (next === "\\" || next === '"' || next === "'" || /\s/.test(next || "")) escaped = true;
-      else current += char;
-    } else if (quote) {
-      if (char === quote) quote = null;
-      else current += char;
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (/\s/.test(char)) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-    } else {
-      current += char;
-    }
+export function buildLaunchArguments(options: {
+  gameDir: string;
+  ramGb: number;
+  runtime: any;
+  assetIndex: string;
+  username: string;
+  uuid: string;
+  token: string;
+  userType: string;
+  customJavaArgs: string[];
+  mainClass: string;
+  classpathString: string;
+  autoConnectServer?: string;
+}): string[] {
+  const classification = classifyJavaArgs(options.customJavaArgs);
+  if (classification.hasLaunchTargetOverride) {
+    throw new Error(
+      `Process argument sink rejected launch target override: custom Java arguments contain an unauthorized launch target override: ${classification.launchTargetViolations.join(", ")}`
+    );
   }
-  if (escaped) current += "\\";
-  if (quote) throw new Error("Custom Java arguments contain an unclosed quote.");
-  if (current) args.push(current);
-  return args;
+
+  const rawUuid = options.uuid.replace(/-/g, "");
+  const jvmArgs = [
+    `-Xmx${options.ramGb}G`,
+    `-Xms${Math.min(2, options.ramGb)}G`,
+    "-XX:+UseZGC",
+    "-XX:+ParallelRefProcEnabled",
+    "-XX:MaxGCPauseMillis=200",
+    "-XX:+UnlockExperimentalVMOptions",
+    "-XX:+DisableExplicitGC",
+    "-XX:+AlwaysPreTouch",
+    "-Dfabric.disableTelemetry=true",
+    `-Djava.library.path=${path.join(options.gameDir, "natives")}`,
+    `-Dminecraft.applet.TargetDirectory=${options.gameDir}`,
+    ...options.customJavaArgs,
+    "-cp",
+    options.classpathString,
+    options.mainClass,
+    "--username",
+    options.username,
+    "--version",
+    options.runtime.minecraft,
+    "--gameDir",
+    options.gameDir,
+    "--assetsDir",
+    path.join(options.gameDir, "assets"),
+    "--assetIndex",
+    options.assetIndex,
+    "--uuid",
+    rawUuid,
+    "--accessToken",
+    options.token,
+    "--userType",
+    options.userType,
+    "--versionType",
+    "release",
+    "--userProperties",
+    "{}",
+  ];
+
+  if (options.autoConnectServer) {
+    jvmArgs.push("--quickPlayMultiplayer", options.autoConnectServer);
+  }
+
+  return jvmArgs;
 }
+
+export { parseJavaArgs, classifyJavaArgs } from "./ipc-boundary";
