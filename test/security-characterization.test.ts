@@ -3,93 +3,24 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as http from "node:http";
 
 // Disposable test directories
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sec-char-"));
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
 
-// Tracked calls for Electron harness
-const ipcHandlers = new Map<string, Function>();
-const ipcListeners = new Map<string, Function>();
-const openedPaths: string[] = [];
-const openedExternals: string[] = [];
-
-class MockWebContents {
-  id = 1;
-  on() { return this; }
-  once() { return this; }
-  send() {}
-  isLoading() { return false; }
-  isDestroyed() { return false; }
-}
-
-class MockBrowserWindow {
-  static allWindows: MockBrowserWindow[] = [];
-  static getAllWindows(): MockBrowserWindow[] {
-    return MockBrowserWindow.allWindows;
-  }
-  webContents = new MockWebContents();
-  isDestroyed() { return false; }
-  isMaximized() { return false; }
-  minimize() {}
-  maximize() {}
-  unmaximize() {}
-  close() {}
-  destroy() {}
-  loadURL() {}
-  loadFile() {}
-  show() {}
-  on() { return this; }
-  once() { return this; }
-  constructor() {
-    MockBrowserWindow.allWindows.push(this);
-  }
-}
-
-const mockShell = {
-  openPath: mock(async (targetPath: string) => {
-    openedPaths.push(targetPath);
-    return "";
-  }),
-  openExternal: mock(async (url: string) => {
-    openedExternals.push(url);
-  }),
-};
-
-let readyResolver: () => void;
-const readyPromise = new Promise<void>((resolve) => {
-  readyResolver = resolve;
-});
-
-const electronHarness = {
+// Minimal parent-process Electron mock for pure config path resolution
+mock.module("electron", () => ({
   app: {
     getPath: (name: string) => (name === "userData" ? userDataDir : testRoot),
     getName: () => "Lampas Launcher",
     getVersion: () => "1.3.0",
-    whenReady: () => readyPromise,
-    on: () => {},
-    quit: () => {},
   },
-  BrowserWindow: MockBrowserWindow,
-  ipcMain: {
-    handle: (channel: string, handler: Function) => {
-      ipcHandlers.set(channel, handler);
-    },
-    on: (channel: string, listener: Function) => {
-      ipcListeners.set(channel, listener);
-    },
-  },
-  shell: mockShell,
-  nativeImage: { createFromPath: () => ({}) },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
   dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
-};
+}));
 
-mock.module("mock-electron-sec-harness", () => electronHarness);
-mock.module("electron", () => electronHarness);
-
-// Load modules
+// Load modules under test
 const { LauncherLogger, LauncherLoggerService } = await import("../src/logger");
 const { ConfigManager, normalizePortalUrl } = await import("../src/config");
 const { isPathProtected, isSafeRelativePath } = await import("../src/sync");
@@ -97,35 +28,6 @@ const { GameDirectoryManager } = await import("../src/game-directory");
 const { FabricMetaResolver } = await import("../src/fabric-meta");
 const { downloadVerified } = await import("../src/file-transfer");
 const { ProcessLogFramer } = await import("../src/game-log-stream");
-
-// Load production LauncherAuth via an isolated runner file in testRoot to bypass
-// Bun's process-wide mock.module("../src/auth") cached from game-runner.test.ts
-const authSrcPath = path.resolve(__dirname, "../src/auth.ts");
-const authSourceCode = fs.readFileSync(authSrcPath, "utf-8");
-const srcDirPath = path.resolve(__dirname, "../src").replace(/\\/g, "/");
-const transformedAuthCode = authSourceCode
-  .replace(/from "\.\//g, `from "${srcDirPath}/`)
-  .replace('from "electron"', 'from "mock-electron-sec-harness"');
-const tempAuthRunner = path.join(testRoot, "real-auth-runner.ts");
-fs.writeFileSync(tempAuthRunner, transformedAuthCode, "utf-8");
-const authModule = await import(tempAuthRunner);
-const LauncherAuth = authModule.LauncherAuth;
-
-// Load production main.ts to trigger actual IPC registrations through the mock harness.
-// We rewrite 'from "electron"' to 'from "mock-electron-sec-harness"' to account for Bun's
-// process-wide module-mock caching where prior test suites only mock { app, shell }.
-const mainSrcPath = path.resolve(__dirname, "../src/main.ts");
-const mainSourceCode = fs.readFileSync(mainSrcPath, "utf-8");
-const transformedMainCode = mainSourceCode
-  .replace(/from "\.\//g, `from "${srcDirPath}/`)
-  .replace('from "electron"', 'from "mock-electron-sec-harness"');
-
-const tempMainRunner = path.join(testRoot, "main-harness-runner.ts");
-fs.writeFileSync(tempMainRunner, transformedMainCode, "utf-8");
-await import(tempMainRunner);
-readyResolver!();
-// Await registration microtasks
-await new Promise((r) => setTimeout(r, 80));
 
 let activeHttpServers: Array<{ stop: (closeActive?: boolean) => Promise<void> | void }> = [];
 
@@ -135,10 +37,6 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  openedPaths.length = 0;
-  openedExternals.length = 0;
-  mockShell.openPath.mockClear();
-  mockShell.openExternal.mockClear();
   ConfigManager.resetForTesting();
   GameDirectoryManager.resetForTesting();
 
@@ -172,9 +70,6 @@ afterAll(async () => {
   try {
     await LauncherLogger.close();
   } catch {}
-  for (const win of MockBrowserWindow.allWindows) {
-    try { win.destroy(); } catch {}
-  }
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
@@ -187,204 +82,70 @@ describe("Phase 0 Security Characterization — SEC-01: Portal Destination & Cre
   });
 
   test("normalizePortalUrl allows HTTP bypass when '127.0.0.1' is in query or path", () => {
-    const bypassUrl = "http://attacker.invalid/auth?ip=127.0.0.1";
-    expect(normalizePortalUrl(bypassUrl)).toBe("http://attacker.invalid/auth?ip=127.0.0.1");
+    const queryBypass = "http://attacker.invalid/login?returnTo=127.0.0.1";
+    const pathBypass = "http://attacker.invalid/api/127.0.0.1/auth";
+    expect(normalizePortalUrl(queryBypass)).toBe(queryBypass);
+    expect(normalizePortalUrl(pathBypass)).toBe(pathBypass);
   });
 
   test("normalizePortalUrl allows HTTP bypass when scheme is uppercase HTTP://", () => {
-    const bypassUrl = "HTTP://remote.example.com";
-    expect(normalizePortalUrl(bypassUrl)).toBe("HTTP://remote.example.com");
-  });
-
-  test("[Service-Level] LauncherAuth.verifySession forwards bearer credentials to caller-supplied portalUrl override", async () => {
-    let capturedAuthHeader: string | null = null;
-    let capturedUrl: string | null = null;
-
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(req) {
-        capturedUrl = req.url;
-        capturedAuthHeader = req.headers.get("Authorization");
-        return Response.json({
-          valid: true,
-          user: {
-            id: "u1",
-            name: "Player",
-            minecraftUsername: "Player",
-            minecraftUuid: "00000000-0000-0000-0000-000000000001",
-          },
-        });
-      },
-    });
-    activeHttpServers.push(server);
-
-    const attackerPortal = `http://127.0.0.1:${server.port}`;
-    const result = await LauncherAuth.verifySession(attackerPortal);
-
-    expect(result.valid).toBe(true);
-    expect(capturedUrl).toBe(`${attackerPortal}/api/v1/auth/verify`);
-    expect(capturedAuthHeader).toBe("Bearer syn-test-bearer-token-12345");
-  });
-
-  test("[Service-Level] LauncherAuth.refreshSession forwards refresh token and bearer credentials to caller-supplied portalUrl override", async () => {
-    let capturedBody: any = null;
-    let capturedUrl: string | null = null;
-
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(req) {
-        capturedUrl = req.url;
-        capturedBody = await req.json();
-        return Response.json({
-          token: "new-token-999",
-          refreshToken: "new-refresh-888",
-          user: {
-            id: "u1",
-            name: "Player",
-            minecraftUsername: "Player",
-            minecraftUuid: "00000000-0000-0000-0000-000000000001",
-          },
-        });
-      },
-    });
-    activeHttpServers.push(server);
-
-    const attackerPortal = `http://127.0.0.1:${server.port}`;
-    const result = await LauncherAuth.refreshSession(attackerPortal);
-
-    expect(result.valid).toBe(true);
-    expect(capturedUrl).toBe(`${attackerPortal}/api/v1/auth/refresh`);
-    expect(capturedBody.refreshToken).toBe("syn-test-refresh-token-67890");
-    expect(capturedBody.token).toBe("syn-test-bearer-token-12345");
-  });
-
-  test("[IPC-Level] auth:verify production handler forwards caller-supplied portalUrl override to transport sink", async () => {
-    let capturedAuthHeader: string | null = null;
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(req) {
-        capturedAuthHeader = req.headers.get("Authorization");
-        return Response.json({
-          valid: true,
-          user: {
-            id: "u1",
-            name: "Player",
-            minecraftUsername: "Player",
-            minecraftUuid: "00000000-0000-0000-0000-000000000001",
-          },
-        });
-      },
-    });
-    activeHttpServers.push(server);
-
-    const attackerPortal = `http://127.0.0.1:${server.port}`;
-    const handler = ipcHandlers.get("auth:verify");
-    expect(handler).toBeDefined();
-
-    const response = await handler!({}, attackerPortal);
-    expect(response.valid).toBe(true);
-    expect(capturedAuthHeader).toBe("Bearer syn-test-bearer-token-12345");
-  });
-
-  test("[IPC-Level] auth:refresh production handler forwards caller-supplied portalUrl override to transport sink", async () => {
-    let capturedBody: any = null;
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(req) {
-        capturedBody = await req.json();
-        return Response.json({
-          token: "new-token-111",
-          refreshToken: "new-refresh-222",
-          user: {
-            id: "u1",
-            name: "Player",
-            minecraftUsername: "Player",
-            minecraftUuid: "00000000-0000-0000-0000-000000000001",
-          },
-        });
-      },
-    });
-    activeHttpServers.push(server);
-
-    const attackerPortal = `http://127.0.0.1:${server.port}`;
-    const handler = ipcHandlers.get("auth:refresh");
-    expect(handler).toBeDefined();
-
-    ConfigManager.set({
-      token: "syn-test-bearer-token-12345",
-      refreshToken: "syn-test-refresh-token-67890",
-    });
-
-    const response = await handler!({}, attackerPortal);
-    expect(response.valid).toBe(true);
-    expect(capturedBody.refreshToken).toBe("syn-test-refresh-token-67890");
-    expect(capturedBody.token).toBe("syn-test-bearer-token-12345");
+    const upperHttp = "HTTP://dev.lampas.town";
+    expect(normalizePortalUrl(upperHttp)).toBe("HTTP://dev.lampas.town");
   });
 });
 
-describe("Phase 0 Security Characterization — SEC-02: Broad IPC & Production OS Opener Handler", () => {
-  test("[IPC-Level] utils:openPath production handler invokes shell.openPath for non-HTTP targets", async () => {
-    const handler = ipcHandlers.get("utils:openPath");
-    expect(handler).toBeDefined();
-
-    // Call real handler with non-HTTP target (e.g. calc.exe)
-    await handler!({}, "calc.exe");
-
-    expect(mockShell.openPath).toHaveBeenCalledWith("calc.exe");
-    expect(mockShell.openExternal).not.toHaveBeenCalledWith("calc.exe");
-  });
-
-  test("[IPC-Level] utils:openPath production handler invokes shell.openExternal for HTTP(S) targets", async () => {
-    const handler = ipcHandlers.get("utils:openPath");
-    expect(handler).toBeDefined();
-
-    await handler!({}, "https://lampas.town/mods/example");
-
-    expect(mockShell.openExternal).toHaveBeenCalledWith("https://lampas.town/mods/example");
-    expect(mockShell.openPath).not.toHaveBeenCalledWith("https://lampas.town/mods/example");
-  });
-
-  test("[IPC-Level] config:set production handler permits arbitrary runtime fields like javaPath and javaArgs", async () => {
-    const handler = ipcHandlers.get("config:set");
-    expect(handler).toBeDefined();
-
-    const result = await handler!({}, {
-      javaPath: "C:\\untrusted\\custom-java.exe",
-      javaArgs: "-javaagent:C:\\untrusted\\agent.jar",
+describe("Phase 0 Security Characterization — Isolated Boundary Harness (SEC-01, SEC-02)", () => {
+  test("Executes boundary characterizations in isolated child process with complete Electron mock", () => {
+    const boundaryScript = path.resolve(__dirname, "security-boundary-characterization.ts");
+    const proc = Bun.spawnSync([process.execPath, "run", boundaryScript], {
+      cwd: path.resolve(__dirname, ".."),
+      env: { ...process.env, NODE_ENV: "test" },
     });
 
-    expect(result.javaPath).toBe("C:\\untrusted\\custom-java.exe");
-    expect(result.javaArgs).toBe("-javaagent:C:\\untrusted\\agent.jar");
-  });
+    if (proc.exitCode !== 0) {
+      console.error(proc.stderr.toString());
+    }
+    expect(proc.exitCode).toBe(0);
 
-  test("Registration harness confirms 35 ipcMain.handle registrations and 1 ipcMain.on registration in main.ts", () => {
-    expect(ipcHandlers.size).toBe(35);
-    expect(ipcListeners.size).toBe(1);
-    expect(ipcListeners.has("game:logAck")).toBe(true);
+    const stdout = proc.stdout.toString();
+    const sentinel = "__BOUNDARY_RESULTS__:";
+    const jsonStart = stdout.indexOf(sentinel);
+    expect(jsonStart).toBeGreaterThanOrEqual(0);
+    const parsed = JSON.parse(stdout.slice(jsonStart + sentinel.length).trim().split("\n")[0]);
+
+    expect(parsed.totalPassed).toBe(8);
+    expect(parsed.tests.length).toBe(8);
+    for (const t of parsed.tests) {
+      expect(t.passed).toBe(true);
+    }
   });
 });
 
 describe("Phase 0 Security Characterization — SEC-03: Plaintext Credential Persistence", () => {
   test("ConfigManager persists authentication secrets in unencrypted plaintext JSON", () => {
+    const fakeToken = "sensitive_jwt_token_header.payload.signature";
+    const fakeRefresh = "sensitive_refresh_token_string";
+    const fakeMinecraft = "sensitive_mc_access_token";
+
     ConfigManager.set({
-      token: "super-secret-portal-jwt-token",
-      refreshToken: "super-secret-refresh-uuid",
-      minecraftAccessToken: "super-secret-mc-session-token",
+      token: fakeToken,
+      refreshToken: fakeRefresh,
+      minecraftAccessToken: fakeMinecraft,
     });
 
-    const configFilePath = path.join(userDataDir, "config.json");
-    expect(fs.existsSync(configFilePath)).toBe(true);
+    const configPath = path.join(userDataDir, "config.json");
+    expect(fs.existsSync(configPath)).toBe(true);
 
-    const rawFileContent = fs.readFileSync(configFilePath, "utf-8");
-    const parsedOnDisk = JSON.parse(rawFileContent);
+    const content = fs.readFileSync(configPath, "utf-8");
+    const parsed = JSON.parse(content);
 
-    expect(parsedOnDisk.token).toBe("super-secret-portal-jwt-token");
-    expect(parsedOnDisk.refreshToken).toBe("super-secret-refresh-uuid");
-    expect(parsedOnDisk.minecraftAccessToken).toBe("super-secret-mc-session-token");
+    expect(parsed.token).toBe(fakeToken);
+    expect(parsed.refreshToken).toBe(fakeRefresh);
+    expect(parsed.minecraftAccessToken).toBe(fakeMinecraft);
+
+    expect(content).toContain(fakeToken);
+    expect(content).toContain(fakeRefresh);
+    expect(content).toContain(fakeMinecraft);
   });
 });
 
@@ -400,6 +161,7 @@ describe("Phase 0 Security Characterization — SEC-04: Path Containment & Owner
     expect(isPathProtected("Saves/level.dat")).toBe(false);
     expect(isPathProtected("SAVES/level.dat")).toBe(false);
     expect(isPathProtected("Screenshots/1.png")).toBe(false);
+    expect(isPathProtected("Logs/latest.log")).toBe(false);
   });
 
   test("Internal launcher state directory (.lampas) is not protected from pack manifest paths", () => {
@@ -420,20 +182,22 @@ describe("Phase 0 Security Characterization — SEC-04: Path Containment & Owner
       const resolved = path.join(gameDir, relTraversal);
       expect(path.resolve(resolved)).toBe(path.resolve(outsideSentinelFile));
     } finally {
-      fs.rmSync(outsideSentinelDir, { recursive: true, force: true });
+      if (fs.existsSync(outsideSentinelDir)) {
+        fs.rmSync(outsideSentinelDir, { recursive: true, force: true });
+      }
     }
   });
 });
 
 describe("Phase 0 Security Characterization — SEC-05: Move Recovery Recursive Deletion of Staging", () => {
   test("recoverInterruptedMove recursively deletes arbitrary unvalidated staging path in 'preparing' phase", async () => {
-    const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-staging-"));
-    const victimFile = path.join(outsideVictimDir, "important-document.docx");
-    fs.writeFileSync(victimFile, "vital user data");
+    const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-dir-"));
+    const victimFile = path.join(outsideVictimDir, "important-user-document.txt");
+    fs.writeFileSync(victimFile, "do-not-delete-this-data", "utf-8");
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     const maliciousJournal = {
-      operationId: "op-corrupt-staging",
+      opId: "op-corrupt-staging",
       phase: "preparing",
       source: path.join(gameDir, "nonexistent-src"),
       target: path.join(gameDir, "nonexistent-dst"),
@@ -456,7 +220,7 @@ describe("Phase 0 Security Characterization — SEC-05: Move Recovery Recursive 
 
 describe("Phase 0 Security Characterization — SEC-06: Executable Verification Fails Open", () => {
   test("FabricMetaResolver returns metadata without checksums when sidecar 404s", async () => {
-    const mockRuntime = {
+    const runtime = {
       minecraft: "26.2",
       loader: { type: "fabric" as const, version: "0.19.3" },
     };
@@ -466,28 +230,32 @@ describe("Phase 0 Security Characterization — SEC-06: Executable Verification 
       if (urlStr.endsWith(".sha256") || urlStr.endsWith(".sha1")) {
         return new Response("Not Found", { status: 404 });
       }
-      return Response.json({
-        loader: { version: "0.19.3", maven: "net.fabricmc:fabric-loader:0.19.3" },
-        intermediary: { version: "26.2", maven: "net.fabricmc:intermediary:26.2" },
-        launcherMeta: {
-          mainClass: { client: "net.fabricmc.loader.impl.launch.knot.KnotClient" },
-          libraries: {
-            common: [
-              { name: "net.fabricmc:sponge-mixin:0.15.3+mixin.0.8.7" },
-            ],
+      if (urlStr.includes("meta.fabricmc.net")) {
+        return Response.json({
+          loader: { maven: "net.fabricmc:fabric-loader:0.19.3", version: "0.19.3", stable: true },
+          intermediary: { maven: "net.fabricmc:intermediary:26.2", version: "26.2", stable: true },
+          launcherMeta: {
+            libraries: {
+              client: [],
+              common: [
+                {
+                  name: "net.fabricmc:sponge-mixin:0.15.3+mixin.0.8.7",
+                  url: "https://maven.fabricmc.net/",
+                },
+              ],
+            },
+            mainClass: { client: "net.fabricmc.loader.impl.launch.knot.KnotClient" },
           },
-        },
-      });
+        });
+      }
+      return new Response("Not Found", { status: 404 });
     };
 
-    const result = await FabricMetaResolver.resolveFabricRuntime(mockRuntime, undefined, {
-      fetchFn: mockFetch,
-      timeoutMs: 1000,
-      resolveSidecars: true,
+    const result = await FabricMetaResolver.resolveFabricRuntime(runtime, undefined, {
+      fetchFn: mockFetch as any,
     });
-
     expect(result.libraries.length).toBeGreaterThan(0);
-    const spongeLib = result.libraries.find((l) => l.name.includes("sponge-mixin"));
+    const spongeLib = result.libraries.find((l: any) => l.name.includes("sponge-mixin"));
     expect(spongeLib).toBeDefined();
     expect(spongeLib?.sha256).toBeUndefined();
     expect(spongeLib?.sha1).toBeUndefined();

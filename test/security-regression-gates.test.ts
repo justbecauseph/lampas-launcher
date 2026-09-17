@@ -25,6 +25,8 @@ mock.module("electron", () => ({
     getName: () => "Lampas Launcher",
     getVersion: () => "1.3.0",
   },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
+  dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
 const { ConfigManager, normalizePortalUrl } = await import("../src/config");
@@ -50,7 +52,7 @@ afterAll(async () => {
 });
 
 describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-01, SEC-02)", () => {
-  test.skip("[Phase 1 Gate] normalizePortalUrl strictly enforces HTTPS and rejects HTTP lookalike bypasses", () => {
+  test.skip("[Phase 1 Gate] URL helper: normalizePortalUrl strictly enforces HTTPS and rejects HTTP lookalike bypasses", () => {
     // Target invariant:
     // Only exact loopback origins (http://localhost or http://127.0.0.1 with port) may use HTTP.
     // Lookalike hosts, embedded IPs, and scheme case tricks must be rejected or upgraded to HTTPS.
@@ -59,22 +61,24 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
     expect(normalizePortalUrl("HTTP://portal.lampas.town")).toBe("https://portal.lampas.town");
   });
 
-  test.todo("[Phase 1 Gate] Web link sink rejects non-HTTP protocols and never passes them to shell.openPath");
+  test.todo("[Phase 1 Gate] Operation-level: Web link sink rejects non-HTTP protocols and never passes them to shell.openPath");
 });
 
 describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)", () => {
-  test.todo("[Phase 2 Gate] IPC handlers validate top-level sender frame and reject unauthorized callers");
-  test.todo("[Phase 2 Gate] config:set enforces strict allowlist schema rejecting unapproved runtime fields");
+  test.todo("[Phase 2 Gate] Operation-level: IPC handlers validate top-level sender frame and reject unauthorized callers");
+  test.todo("[Phase 2 Gate] Operation-level: config:set enforces strict allowlist schema rejecting unapproved runtime fields");
 });
 
 describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (SEC-03, SEC-08)", () => {
-  test.skip("[Phase 3 Gate] config.json on disk contains no plaintext tokens or credentials", () => {
-    // Establish a synthetic session with sensitive tokens
-    ConfigManager.save({
+  test.skip("[Phase 3 Gate] Persistence: config.json on disk contains no plaintext tokens or credentials", () => {
+    // Establish a synthetic session with sensitive tokens using actual baseline persistence API
+    const written = ConfigManager.set({
       token: "syn-test-bearer-token-12345",
       refreshToken: "syn-test-refresh-token-67890",
       minecraftAccessToken: "syn-test-mc-token-abcdef",
     });
+    // Prove fixture setup succeeds and returns written values
+    expect(written.token).toBe("syn-test-bearer-token-12345");
 
     // Target invariant:
     // Stored credentials must be encrypted via OS-backed storage (DPAPI on Windows / libsecret on Linux)
@@ -82,45 +86,46 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
     const configPath = path.join(userDataDir, "config.json");
     expect(fs.existsSync(configPath)).toBe(true);
     const raw = fs.readFileSync(configPath, "utf-8");
+    // Expected negative assertion: against baseline, ConfigManager.set writes plaintext tokens,
+    // so this assertion fails directly at the plaintext-disclosure check, not a TypeError or import error.
     expect(raw).not.toContain("syn-test-bearer-token-12345");
     expect(raw).not.toContain("syn-test-refresh-token-67890");
     expect(raw).not.toContain("syn-test-mc-token-abcdef");
   });
 
-  test.todo("[Phase 3 Gate] Authentication lifecycle uses session epochs and ignores late arrivals after logout");
+  test.todo("[Phase 3 Gate] Operation-level: Authentication lifecycle uses session epochs and ignores late arrivals after logout");
 });
 
 describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recovery (SEC-04, SEC-05)", () => {
-  test.skip("[Phase 4 Gate] isPathProtected normalizes dot-aliases before checking protected namespaces to deny pack mutation", () => {
-    // Target invariant: Pack manifest operations must not be authorized to overwrite or delete
-    // user data via traversal aliases. 'mods/../saves/world.txt' must resolve into protected
-    // 'saves/' namespace and return true (protected / unauthorized for pack mutation).
+  test.skip("[Phase 4 Gate] Path helper: isPathProtected normalizes dot-aliases before checking protected namespaces", () => {
+    // Target invariant: Dot-alias traversal 'mods/../saves/world.txt' must resolve into protected
+    // 'saves/' namespace and return true (protected).
     expect(isPathProtected("mods/../saves/world.txt")).toBe(true);
   });
 
-  test.skip("[Phase 4 Gate] isPathProtected performs case-insensitive comparison on Windows to deny pack mutation", () => {
+  test.skip("[Phase 4 Gate] Path helper: isPathProtected performs case-insensitive comparison on Windows", () => {
     // Target invariant: On Windows, case variations of protected namespaces ('Saves/', 'SAVES/')
-    // must be recognized as protected to prevent pack-driven overwrite or deletion of user data.
+    // must be recognized as protected.
     expect(isPathProtected("SAVES/world.txt")).toBe(true);
     expect(isPathProtected("Saves/world.txt")).toBe(true);
   });
 
-  test.skip("[Phase 4 Gate] Internal launcher namespaces (.lampas) are reserved to deny pack file mutations", () => {
-    // Target invariant: The launcher internal state directory (.lampas/) must be protected from
-    // manifest-driven deletion or overwriting by remote pack files.
+  test.skip("[Phase 4 Gate] Path helper: isPathProtected reserves internal launcher namespaces (.lampas)", () => {
+    // Target invariant: The launcher internal state directory (.lampas/) must be protected.
     expect(isPathProtected(".lampas/installation.json")).toBe(true);
   });
 
-  test.todo("[Phase 4 Gate] Move recovery rejects unverified staging paths outside approved launcher staging");
+  test.todo("[Phase 4 Gate] Operation-level: Client sync pipeline blocks unauthorized file mutations in protected paths");
+  test.todo("[Phase 4 Gate] Operation-level: Move recovery rejects unverified staging paths outside approved launcher staging");
 });
 
 describe("Phase 5 Regression Gate — Integrity Checks Fail Closed & Fallback Policy (SEC-06, SEC-07, SEC-11)", () => {
-  test.todo("[Phase 5 Gate] FabricMetaResolver fails closed when sidecar checksum resolution fails");
-  test.todo("[Phase 5 Gate] syncClient does not swallow 410 REVOKED releases into local pipeline fallback");
+  test.todo("[Phase 5 Gate] Operation-level: FabricMetaResolver fails closed when sidecar checksum resolution fails");
+  test.todo("[Phase 5 Gate] Operation-level: syncClient does not swallow 410 REVOKED releases into local pipeline fallback");
 });
 
 describe("Phase 6 Regression Gate — Log Minimization & Redaction (SEC-09, SEC-10)", () => {
-  test.skip("[Phase 6 Gate] LauncherLoggerService.sanitize redacts underscore credential keys and URL query codes", () => {
+  test.skip("[Phase 6 Gate] Redaction helper: LauncherLoggerService.sanitize redacts underscore credential keys and URL query codes", () => {
     // Target invariant:
     // Underscore fields (refresh_token, access_token) and URL query secrets (?code=..., ?token=...) must be redacted.
     expect(LauncherLoggerService.sanitize('{"refresh_token": "secret123"}')).toContain("[REDACTED]");
@@ -128,9 +133,9 @@ describe("Phase 6 Regression Gate — Log Minimization & Redaction (SEC-09, SEC-
     expect(LauncherLoggerService.sanitize('--accessToken secret123')).toContain("[REDACTED]");
   });
 
-  test.todo("[Phase 6 Gate] ProcessLogFramer sanitizes bounded records before truncation");
+  test.todo("[Phase 6 Gate] Operation-level: ProcessLogFramer sanitizes bounded records before truncation");
 });
 
 describe("Phase 7 Regression Gate — Release Pipeline, Artifact Signing & CI Controls (SEC-12)", () => {
-  test.todo("[Phase 7 Gate] Production release workflow enforces signed checksum manifests and build provenance");
+  test.todo("[Phase 7 Gate] Operation-level: Production release workflow enforces signed checksum manifests and build provenance");
 });
