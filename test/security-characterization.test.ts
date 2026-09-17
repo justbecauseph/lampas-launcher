@@ -95,19 +95,40 @@ describe("Phase 0 Security Characterization — SEC-01: Portal Destination & Cre
 });
 
 describe("Phase 0 Security Characterization — Isolated Boundary Harness (SEC-01, SEC-02)", () => {
-  test("Executes boundary characterizations in isolated child process with complete Electron mock", () => {
+  test("Executes boundary characterizations in isolated child process with complete Electron mock", async () => {
     const boundaryScript = path.resolve(__dirname, "security-boundary-characterization.ts");
-    const proc = Bun.spawnSync([process.execPath, "run", boundaryScript], {
+    const proc = Bun.spawn([process.execPath, "run", boundaryScript], {
       cwd: path.resolve(__dirname, ".."),
       env: { ...process.env, NODE_ENV: "test" },
+      stdout: "pipe",
+      stderr: "pipe",
     });
 
-    if (proc.exitCode !== 0) {
-      console.error(proc.stderr.toString());
-    }
-    expect(proc.exitCode).toBe(0);
+    let timedOut = false;
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      try { proc.kill(); } catch {}
+    }, 15000);
 
-    const stdout = proc.stdout.toString();
+    const [stdoutBytes, stderrBytes, exitCode] = await Promise.all([
+      new Response(proc.stdout).arrayBuffer(),
+      new Response(proc.stderr).arrayBuffer(),
+      proc.exited,
+    ]);
+    clearTimeout(timeoutHandle);
+
+    const stdout = Buffer.from(stdoutBytes).toString("utf-8");
+    const stderr = Buffer.from(stderrBytes).toString("utf-8");
+
+    if (timedOut) {
+      throw new Error(`Boundary test child process timed out after 15s. Stderr: ${stderr}\nStdout: ${stdout}`);
+    }
+    if (exitCode !== 0) {
+      console.error("[Boundary Child Process Stderr]", stderr);
+      console.error("[Boundary Child Process Stdout]", stdout);
+    }
+    expect(exitCode).toBe(0);
+
     const sentinel = "__BOUNDARY_RESULTS__:";
     const jsonStart = stdout.indexOf(sentinel);
     expect(jsonStart).toBeGreaterThanOrEqual(0);

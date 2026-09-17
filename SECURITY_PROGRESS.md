@@ -158,7 +158,7 @@ Every IPC channel registered in `src/main.ts` was audited directly against the r
 | 28 | `sync:getInstalledRuntime` | `handle` | 290 | None | None | None | Reads local `.lampas/release.json` and `.lampas/installation.json` | `InstalledRuntimeDto \| null` (matches preload) |
 | 29 | `mods:browseAndAdd` | `handle` | 325 | None | None | None | Opens native open-file dialog; copies selected `.jar` files into `gameDir/mods/` | `ClientModState[]` (matches preload) |
 | 30 | `mods:addPaths` | `handle` | 334 | None | None | `paths: string[]` | Copies arbitrary filesystem paths into `gameDir/mods/` | `ClientModState[]` (matches preload) |
-| 31 | `mods:setOfficialEnabled` | `handle` | 338 | None | None | `id: string, enabled: boolean` | Updates `disabledClientMods` array in `config.json` | `ClientModState[]` (matches preload) |
+| 31 | `mods:setOfficialEnabled` | `handle` | 338 | None | None | `id: string, enabled: boolean` | Updates `disabledClientMods` array in `config.json` | **Divergence:** Main returns `string[]` (disabled mod IDs), preload declares `Promise<void>` |
 | 32 | `mods:setCustomEnabled` | `handle` | 342 | None | None | `filename: string, enabled: boolean` | Renames file between `.jar` and `.jar.disabled` on disk | `ClientModState[]` (matches preload) |
 | 33 | `mods:removeCustom` | `handle` | 346 | None | None | `filename: string` | Deletes file from `gameDir/mods/` | `ClientModState[]` (matches preload) |
 | 34 | `game:launch` | `handle` | 352 | None | None | `user: UserProfile \| null, releaseOverride?: any` | Spawns Minecraft child process via `OperationCoordinator` | `boolean` (matches preload `Promise<boolean>`) |

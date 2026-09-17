@@ -15,38 +15,53 @@ import * as path from "node:path";
  * unskipped and become required passing criteria.
  */
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sec-gates-"));
-const userDataDir = path.join(testRoot, "user-data");
-const gameDir = path.join(testRoot, "game");
+let testRoot: string;
+let userDataDir: string;
+let gameDir: string;
+let ConfigManager: any;
+let normalizePortalUrl: any;
+let isPathProtected: any;
+let LauncherLogger: any;
+let LauncherLoggerService: any;
 
-mock.module("electron", () => ({
-  app: {
-    getPath: (name: string) => (name === "userData" ? userDataDir : testRoot),
-    getName: () => "Lampas Launcher",
-    getVersion: () => "1.3.0",
-  },
-  shell: { openPath: async () => "", openExternal: async () => undefined },
-  dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
-}));
-
-const { ConfigManager, normalizePortalUrl } = await import("../src/config");
-const { isPathProtected } = await import("../src/sync");
-const { LauncherLogger, LauncherLoggerService } = await import("../src/logger");
-
-beforeAll(() => {
+beforeAll(async () => {
+  testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sec-gates-"));
+  userDataDir = path.join(testRoot, "user-data");
+  gameDir = path.join(testRoot, "game");
   fs.mkdirSync(userDataDir, { recursive: true });
   fs.mkdirSync(gameDir, { recursive: true });
+
+  mock.module("electron", () => ({
+    app: {
+      getPath: (name: string) => (name === "userData" ? userDataDir : testRoot),
+      getName: () => "Lampas Launcher",
+      getVersion: () => "1.3.0",
+    },
+    shell: { openPath: async () => "", openExternal: async () => undefined },
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
+  }));
+
+  const configMod = await import("../src/config");
+  ConfigManager = configMod.ConfigManager;
+  normalizePortalUrl = configMod.normalizePortalUrl;
+
+  const syncMod = await import("../src/sync");
+  isPathProtected = syncMod.isPathProtected;
+
+  const loggerMod = await import("../src/logger");
+  LauncherLogger = loggerMod.LauncherLogger;
+  LauncherLoggerService = loggerMod.LauncherLoggerService;
 });
 
 beforeEach(() => {
-  ConfigManager.resetForTesting();
+  ConfigManager?.resetForTesting();
 });
 
 afterAll(async () => {
   try {
-    await LauncherLogger.close();
+    await LauncherLogger?.close();
   } catch {}
-  if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
+  if (testRoot && path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
 });

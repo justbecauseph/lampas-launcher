@@ -9,8 +9,15 @@ import { mock } from "bun:test";
  *
  * Runs in a clean child process to characteristically exercise unchanged production
  * src/main.ts and src/auth.ts with complete Electron mocks, free from parent-process
- * module-mock caching (such as game-runner.test.ts mocking ../src/auth or bootstrap
- * mocking electron).
+ * module-mock caching.
+ *
+ * Test Harness Invariants:
+ * 1. Fixture-only outbound request policy: unapproved network destinations are blocked
+ *    and recorded as test-failing violations.
+ * 2. Unintended process execution interception: child_process calls are intercepted.
+ * 3. OS opener interception: shell.openPath and shell.openExternal are tracked without OS launches.
+ * 4. Guaranteed cleanup: all startup, import, registration, request, and assertion failures
+ *    reach full teardown of servers, loggers, windows, and temporary files.
  */
 
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-boundary-test-"));
@@ -25,6 +32,58 @@ const ipcHandlers = new Map<string, Function>();
 const ipcListeners = new Map<string, Function>();
 const openedPaths: string[] = [];
 const openedExternals: string[] = [];
+const interceptedProcesses: Array<{ command: string; args: any[] }> = [];
+
+// Intercept unintended process execution
+mock.module("node:child_process", () => ({
+  spawn: (command: string, args: any[] = []) => {
+    interceptedProcesses.push({ command, args });
+    throw new Error(`[SecurityHarness] child_process.spawn blocked for: ${command}`);
+  },
+  exec: (command: string) => {
+    interceptedProcesses.push({ command, args: [] });
+    throw new Error(`[SecurityHarness] child_process.exec blocked for: ${command}`);
+  },
+  execFile: (command: string, args: any[] = []) => {
+    interceptedProcesses.push({ command, args });
+    throw new Error(`[SecurityHarness] child_process.execFile blocked for: ${command}`);
+  },
+  fork: (modulePath: string, args: any[] = []) => {
+    interceptedProcesses.push({ command: modulePath, args });
+    throw new Error(`[SecurityHarness] child_process.fork blocked for: ${modulePath}`);
+  },
+}));
+
+// Outbound request policy
+const allowedDestinations = new Set<string>();
+const attemptedViolations: string[] = [];
+
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  let urlStr: string;
+  if (typeof input === "string") {
+    urlStr = input;
+  } else if (input instanceof URL) {
+    urlStr = input.href;
+  } else {
+    urlStr = input.url;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    attemptedViolations.push(urlStr);
+    throw new Error(`[OutboundPolicyViolation] Malformed request URL: ${urlStr}`);
+  }
+
+  if (!allowedDestinations.has(parsed.origin) && !allowedDestinations.has(parsed.host)) {
+    attemptedViolations.push(urlStr);
+    throw new Error(`[OutboundPolicyViolation] Request to unapproved destination: ${urlStr}`);
+  }
+
+  return originalFetch(input, init);
+}) as any;
 
 class MockWebContents {
   id = 1;
@@ -97,31 +156,6 @@ mock.module("electron", () => ({
   dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
-// Load production modules directly and unchanged
-const { ConfigManager } = await import("../src/config");
-const { LauncherAuth } = await import("../src/auth");
-const { LauncherLogger } = await import("../src/logger");
-
-// Import production main.ts to register IPC channels
-await import("../src/main");
-
-// Signal readiness and await deterministic registration of all 36 channels
-readyResolver!();
-
-await new Promise<void>((resolve, reject) => {
-  const deadline = Date.now() + 5000;
-  const poll = () => {
-    if (ipcHandlers.size >= 35 && ipcListeners.size >= 1) {
-      resolve();
-    } else if (Date.now() > deadline) {
-      reject(new Error(`Timed out waiting for IPC registrations (handlers: ${ipcHandlers.size}, listeners: ${ipcListeners.size})`));
-    } else {
-      setTimeout(poll, 5);
-    }
-  };
-  poll();
-});
-
 const results = {
   totalPassed: 0,
   tests: [] as Array<{ name: string; passed: boolean; error?: string }>,
@@ -139,97 +173,131 @@ function runTest(name: string, fn: () => void | Promise<void>) {
   })();
 }
 
-// 1. Inbound IPC Registration Inventory
-await runTest("Registration harness confirms 35 handles and 1 on channel", () => {
-  if (ipcHandlers.size !== 35) throw new Error(`Expected 35 handles, got ${ipcHandlers.size}`);
-  if (ipcListeners.size !== 1) throw new Error(`Expected 1 listener, got ${ipcListeners.size}`);
-  if (!ipcListeners.has("game:logAck")) throw new Error("Missing game:logAck listener");
-});
-
-// 2. Production utils:openPath handler invokes shell.openPath for local paths
-await runTest("utils:openPath calls shell.openPath for local paths", async () => {
-  openedPaths.length = 0;
-  openedExternals.length = 0;
-  const handler = ipcHandlers.get("utils:openPath")!;
-  const testFile = path.join(testRoot, "dummy.txt");
-  await handler({}, testFile);
-  if (openedPaths.length !== 1 || openedPaths[0] !== testFile) {
-    throw new Error(`Expected openedPaths to contain [${testFile}], got: ${JSON.stringify(openedPaths)}`);
-  }
-  if (openedExternals.length !== 0) {
-    throw new Error(`Expected openedExternals to be empty, got: ${JSON.stringify(openedExternals)}`);
-  }
-});
-
-// 3. Production utils:openPath handler invokes shell.openExternal for HTTP(S) targets
-await runTest("utils:openPath calls shell.openExternal for HTTP(S) paths", async () => {
-  openedPaths.length = 0;
-  openedExternals.length = 0;
-  const handler = ipcHandlers.get("utils:openPath")!;
-  const testUrl = "https://dev.lampas.town/releases";
-  await handler({}, testUrl);
-  if (openedExternals.length !== 1 || openedExternals[0] !== testUrl) {
-    throw new Error(`Expected openedExternals to contain [${testUrl}], got: ${JSON.stringify(openedExternals)}`);
-  }
-  if (openedPaths.length !== 0) {
-    throw new Error(`Expected openedPaths to be empty, got: ${JSON.stringify(openedPaths)}`);
-  }
-});
-
-// 4. Production config:set handler permits arbitrary runtime fields
-await runTest("config:set permits javaPath and javaArgs", async () => {
-  const handler = ipcHandlers.get("config:set")!;
-  const patch = {
-    javaPath: "C:\\untrusted\\custom-java.exe",
-    javaArgs: "-javaagent:C:\\untrusted\\agent.jar",
-  };
-  const dto = await handler({}, patch);
-  if (dto.javaPath !== patch.javaPath || dto.javaArgs !== patch.javaArgs) {
-    throw new Error(`DTO did not retain patch: ${JSON.stringify(dto)}`);
-  }
-  const current = ConfigManager.get();
-  if ((current as any).javaPath !== patch.javaPath || current.javaArgs !== patch.javaArgs) {
-    throw new Error(`ConfigManager did not persist patch: ${JSON.stringify(current)}`);
-  }
-});
-
-// Loopback HTTP fixture for credential routing
-interface CapturedRequest {
-  method: string;
-  url: string;
-  headers: http.IncomingHttpHeaders;
-  body: string;
-}
-
-let capturedRequests: CapturedRequest[] = [];
-let mockServerResponse: { status: number; body: any } = {
-  status: 200,
-  body: { valid: true, user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" } },
-};
-
-const server = http.createServer((req, res) => {
-  let bodyChunks: Buffer[] = [];
-  req.on("data", (chunk) => bodyChunks.push(chunk));
-  req.on("end", () => {
-    capturedRequests.push({
-      method: req.method || "",
-      url: req.url || "",
-      headers: req.headers,
-      body: Buffer.concat(bodyChunks).toString("utf-8"),
-    });
-    res.writeHead(mockServerResponse.status, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(mockServerResponse.body));
-  });
-});
-
-await new Promise<void>((resolve) => {
-  server.listen(0, "127.0.0.1", () => resolve());
-});
-
-const serverPort = (server.address() as any).port;
-const attackerPortal = `http://127.0.0.1:${serverPort}`;
+let server: http.Server | null = null;
+let LauncherLogger: any = null;
 
 try {
+  // Load production modules directly and unchanged
+  const configMod = await import("../src/config");
+  const authMod = await import("../src/auth");
+  const loggerMod = await import("../src/logger");
+  const ConfigManager = configMod.ConfigManager;
+  const LauncherAuth = authMod.LauncherAuth;
+  LauncherLogger = loggerMod.LauncherLogger;
+
+  // Import production main.ts to register IPC channels
+  await import("../src/main");
+
+  // Signal readiness and await deterministic registration of all 36 channels
+  readyResolver!();
+
+  await new Promise<void>((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    const poll = () => {
+      if (ipcHandlers.size >= 35 && ipcListeners.size >= 1) {
+        resolve();
+      } else if (Date.now() > deadline) {
+        reject(new Error(`Timed out waiting for IPC registrations (handlers: ${ipcHandlers.size}, listeners: ${ipcListeners.size})`));
+      } else {
+        setTimeout(poll, 5);
+      }
+    };
+    poll();
+  });
+
+  // 1. Inbound IPC Registration Inventory
+  await runTest("Registration harness confirms 35 handles and 1 on channel", () => {
+    if (ipcHandlers.size !== 35) throw new Error(`Expected 35 handles, got ${ipcHandlers.size}`);
+    if (ipcListeners.size !== 1) throw new Error(`Expected 1 listener, got ${ipcListeners.size}`);
+    if (!ipcListeners.has("game:logAck")) throw new Error("Missing game:logAck listener");
+  });
+
+  // 2. Production utils:openPath handler invokes shell.openPath for local paths
+  await runTest("utils:openPath calls shell.openPath for local paths", async () => {
+    openedPaths.length = 0;
+    openedExternals.length = 0;
+    const handler = ipcHandlers.get("utils:openPath")!;
+    const testFile = path.join(testRoot, "dummy.txt");
+    await handler({}, testFile);
+    if (openedPaths.length !== 1 || openedPaths[0] !== testFile) {
+      throw new Error(`Expected openedPaths to contain [${testFile}], got: ${JSON.stringify(openedPaths)}`);
+    }
+    if (openedExternals.length !== 0) {
+      throw new Error(`Expected openedExternals to be empty, got: ${JSON.stringify(openedExternals)}`);
+    }
+  });
+
+  // 3. Production utils:openPath handler invokes shell.openExternal for HTTP(S) targets
+  await runTest("utils:openPath calls shell.openExternal for HTTP(S) paths", async () => {
+    openedPaths.length = 0;
+    openedExternals.length = 0;
+    const handler = ipcHandlers.get("utils:openPath")!;
+    const testUrl = "https://dev.lampas.town/releases";
+    await handler({}, testUrl);
+    if (openedExternals.length !== 1 || openedExternals[0] !== testUrl) {
+      throw new Error(`Expected openedExternals to contain [${testUrl}], got: ${JSON.stringify(openedExternals)}`);
+    }
+    if (openedPaths.length !== 0) {
+      throw new Error(`Expected openedPaths to be empty, got: ${JSON.stringify(openedPaths)}`);
+    }
+  });
+
+  // 4. Production config:set handler permits arbitrary runtime fields
+  await runTest("config:set permits javaPath and javaArgs", async () => {
+    const handler = ipcHandlers.get("config:set")!;
+    const patch = {
+      javaPath: "C:\\untrusted\\custom-java.exe",
+      javaArgs: "-javaagent:C:\\untrusted\\agent.jar",
+    };
+    const dto = await handler({}, patch);
+    if (dto.javaPath !== patch.javaPath || dto.javaArgs !== patch.javaArgs) {
+      throw new Error(`DTO did not retain patch: ${JSON.stringify(dto)}`);
+    }
+    const current = ConfigManager.get();
+    if ((current as any).javaPath !== patch.javaPath || current.javaArgs !== patch.javaArgs) {
+      throw new Error(`ConfigManager did not persist patch: ${JSON.stringify(current)}`);
+    }
+  });
+
+  // Loopback HTTP fixture for credential routing
+  interface CapturedRequest {
+    method: string;
+    url: string;
+    headers: http.IncomingHttpHeaders;
+    body: string;
+  }
+
+  let capturedRequests: CapturedRequest[] = [];
+  let mockServerResponse: { status: number; body: any } = {
+    status: 200,
+    body: { valid: true, user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" } },
+  };
+
+  server = http.createServer((req, res) => {
+    let bodyChunks: Buffer[] = [];
+    req.on("data", (chunk) => bodyChunks.push(chunk));
+    req.on("end", () => {
+      capturedRequests.push({
+        method: req.method || "",
+        url: req.url || "",
+        headers: req.headers,
+        body: Buffer.concat(bodyChunks).toString("utf-8"),
+      });
+      res.writeHead(mockServerResponse.status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(mockServerResponse.body));
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    server!.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  const serverPort = (server.address() as any).port;
+  const attackerPortal = `http://127.0.0.1:${serverPort}`;
+
+  // Allow the owned fixture endpoint in the outbound request policy
+  allowedDestinations.add(`http://127.0.0.1:${serverPort}`);
+
   // Set synthetic credentials
   ConfigManager.set({
     token: "syn-test-bearer-token-12345",
@@ -336,16 +404,42 @@ try {
       throw new Error(`Unexpected body refreshToken: ${parsedBody.refreshToken}`);
     }
   });
+
+  // Assert outbound request policy compliance: zero unapproved network attempts
+  if (attemptedViolations.length > 0) {
+    throw new Error(`[OutboundPolicyViolation] Forbidden outbound request attempts detected: ${JSON.stringify(attemptedViolations)}`);
+  }
+} catch (fatalError: any) {
+  console.error("[Fatal Boundary Harness Error]", fatalError);
+  results.tests.push({
+    name: "Fatal Harness Setup / Execution",
+    passed: false,
+    error: fatalError?.message || String(fatalError),
+  });
 } finally {
-  // Teardown owned resources
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  try { await LauncherLogger.close(); } catch {}
+  // Guaranteed teardown of owned resources
+  if (server) {
+    try {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+    } catch {}
+  }
+  if (LauncherLogger) {
+    try {
+      await LauncherLogger.close();
+    } catch {}
+  }
   for (const win of MockBrowserWindow.allWindows) {
-    try { win.destroy(); } catch {}
+    try {
+      win.destroy();
+    } catch {}
   }
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
-    fs.rmSync(testRoot, { recursive: true, force: true });
+    try {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    } catch {}
   }
+  // Restore original fetch
+  globalThis.fetch = originalFetch;
 }
 
 // Output JSON summary for machine parsing
