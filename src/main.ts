@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ConfigManager } from "./config";
+import { ConfigManager, validateWebUrl } from "./config";
 import { LauncherAuth } from "./auth";
 import { LauncherSync } from "./sync";
 import { GameRunner, parseJavaArgs } from "./game-runner";
@@ -150,10 +150,78 @@ app.whenReady().then(async () => {
   // IPC Handlers: Utils
   ipcMain.handle("utils:getAppVersion", () => app.getVersion());
   ipcMain.handle("utils:openPath", async (_, targetPath: string) => {
-    if (targetPath) {
-      if (/^https?:\/\//i.test(targetPath)) await shell.openExternal(targetPath);
-      else await shell.openPath(targetPath);
+    if (typeof targetPath !== "string" || !targetPath.trim()) {
+      throw new Error("Target path must be a non-empty string.");
     }
+    const trimmed = targetPath.trim();
+
+    // 1. If web URL (http/https), validate and open externally
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(trimmed)) {
+      const validUrl = validateWebUrl(trimmed);
+      await shell.openExternal(validUrl);
+      return validUrl;
+    }
+
+    // 2. Local path handling: strictly constrain to approved known launcher locations
+    const config = ConfigManager.get();
+    const approvedPaths = new Map<string, string>([
+      ["gameDir", path.resolve(config.gameDir)],
+      ["modsDir", path.resolve(path.join(config.gameDir, "mods"))],
+      ["logsDir", path.resolve(LauncherLogger.getLogsDir())],
+      ["launcherLog", path.resolve(LauncherLogger.getLogPath())],
+      ["minecraftLog", path.resolve(path.join(config.gameDir, "logs", "latest.log"))],
+    ]);
+
+    if (approvedPaths.has(trimmed)) {
+      const resolved = approvedPaths.get(trimmed)!;
+      await shell.openPath(resolved);
+      return resolved;
+    }
+
+    const resolvedTarget = path.resolve(trimmed);
+    const isApproved = Array.from(approvedPaths.values()).some((p) => p === resolvedTarget);
+    if (isApproved) {
+      await shell.openPath(resolvedTarget);
+      return resolvedTarget;
+    }
+
+    throw new Error(`Refusing to open unapproved path '${targetPath}'. Only validated web URLs and known launcher locations may be opened.`);
+  });
+  ipcMain.handle("utils:openSourcePage", async (_, url: string) => {
+    const validatedUrl = validateWebUrl(url);
+    await shell.openExternal(validatedUrl);
+    return validatedUrl;
+  });
+  ipcMain.handle("utils:openKnownLocation", async (_, location: string) => {
+    const config = ConfigManager.get();
+    let targetPath: string;
+    switch (location) {
+      case "gameDir":
+        targetPath = config.gameDir;
+        break;
+      case "modsDir":
+        targetPath = path.join(config.gameDir, "mods");
+        if (!fs.existsSync(targetPath)) {
+          fs.mkdirSync(targetPath, { recursive: true });
+        }
+        break;
+      case "logsDir":
+        targetPath = LauncherLogger.getLogsDir();
+        break;
+      case "launcherLog":
+        targetPath = LauncherLogger.getLogPath();
+        break;
+      case "minecraftLog":
+        targetPath = path.join(config.gameDir, "logs", "latest.log");
+        if (!fs.existsSync(targetPath)) {
+          throw new Error("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
+        }
+        break;
+      default:
+        throw new Error(`Unknown location '${location}'. Permitted locations: gameDir, modsDir, logsDir, launcherLog, minecraftLog`);
+    }
+    await shell.openPath(targetPath);
+    return targetPath;
   });
   ipcMain.handle("utils:getLogPath", () => LauncherLogger.getLogPath());
   ipcMain.handle("utils:openLogsDir", async () => {
@@ -229,17 +297,17 @@ app.whenReady().then(async () => {
   });
 
   // IPC Handlers: Auth
-  ipcMain.handle("auth:login", async (_, portalUrl) => {
-    const res = await LauncherAuth.loginWithPortal(portalUrl);
+  ipcMain.handle("auth:login", async () => {
+    const res = await LauncherAuth.loginWithPortal();
     return { user: toRendererUserProfile(res.user)! };
   });
   ipcMain.handle("auth:logout", () => LauncherAuth.logout());
-  ipcMain.handle("auth:verify", async (_, portalUrl) => {
-    const res = await LauncherAuth.verifySession(portalUrl);
+  ipcMain.handle("auth:verify", async () => {
+    const res = await LauncherAuth.verifySession();
     return { valid: res.valid, user: toRendererUserProfile(res.user) };
   });
-  ipcMain.handle("auth:refresh", async (_, portalUrl) => {
-    const res = await LauncherAuth.refreshSession(portalUrl);
+  ipcMain.handle("auth:refresh", async () => {
+    const res = await LauncherAuth.refreshSession();
     return { valid: res.valid, user: toRendererUserProfile(res.user) };
   });
 

@@ -720,7 +720,9 @@ function updateGameDirUI(newGameDir) {
 }
 
 async function openGameDir() {
-  if (currentConfig?.gameDir && window.lampas.utils?.openPath) {
+  if (window.lampas.utils?.openKnownLocation) {
+    await window.lampas.utils.openKnownLocation("gameDir");
+  } else if (currentConfig?.gameDir && window.lampas.utils?.openPath) {
     await window.lampas.utils.openPath(currentConfig.gameDir);
   }
 }
@@ -1415,7 +1417,13 @@ function renderMods() {
     .join("");
 
   modsGrid.querySelectorAll(".js-source-link").forEach((button) => {
-    button.onclick = () => window.lampas.utils.openPath(button.dataset.sourceUrl);
+    button.onclick = () => {
+      if (window.lampas.utils?.openSourcePage && button.dataset.sourceUrl) {
+        window.lampas.utils.openSourcePage(button.dataset.sourceUrl);
+      } else if (button.dataset.sourceUrl) {
+        window.lampas.utils.openPath(button.dataset.sourceUrl);
+      }
+    };
   });
   modsGrid.querySelectorAll(".js-mod-toggle").forEach((toggle) => {
     toggle.onchange = async () => {

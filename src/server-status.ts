@@ -93,9 +93,12 @@ export function parseServerStatus(value: unknown): ServerStatus {
 export class ServerStatusClient {
   static async getStatus(options: ServerStatusRequestOptions = {}): Promise<ServerStatus> {
     const config = ConfigManager.get();
-    if (!config.token) throw new Error("Portal session is not available");
+    const portalUrl = normalizePortalUrl(config.portalUrl);
+    if (!config.token || !config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
+      throw new Error("Portal session is not available");
+    }
 
-    const url = `${normalizePortalUrl(config.portalUrl)}/api/v1/server/status`;
+    const url = `${portalUrl}/api/v1/server/status`;
     const timeoutMs = options.timeoutMs ?? SERVER_STATUS_TIMEOUT_MS;
     const fetchImpl = options.fetchImpl ?? fetch;
     const controller = new AbortController();
@@ -110,9 +113,16 @@ export class ServerStatusClient {
           Accept: "application/json",
           Authorization: `Bearer ${config.token}`,
         },
+        redirect: "manual",
         signal: controller.signal,
       });
       const durationMs = Date.now() - startedAt;
+
+      if (response.status >= 300 && response.status < 400) {
+        LauncherLogger.logApiResponse("GET", url, response.status, durationMs, "Redirect rejected");
+        throw new Error("Server status request rejected unexpected redirect");
+      }
+
       if (!response.ok) {
         LauncherLogger.logApiResponse("GET", url, response.status, durationMs, response.statusText);
         throw new Error(`Server status request failed (${response.status})`);

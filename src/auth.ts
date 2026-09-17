@@ -18,9 +18,12 @@ function generatePkce() {
 }
 
 export class LauncherAuth {
-  static async loginWithPortal(portalUrlOverride?: string): Promise<{ token: string; user: UserProfile }> {
+  private static activeLoginSessionId: number = 0;
+
+  static async loginWithPortal(_portalUrlOverride?: string): Promise<{ token: string; user: UserProfile }> {
+    const loginEpoch = ++LauncherAuth.activeLoginSessionId;
     const config = ConfigManager.get();
-    const portalUrl = normalizePortalUrl(portalUrlOverride || config.portalUrl);
+    const portalUrl = normalizePortalUrl(config.portalUrl);
     const { verifier, challenge } = generatePkce();
     const state = randomBytes(16).toString("hex");
 
@@ -38,6 +41,17 @@ export class LauncherAuth {
               server.close();
               LauncherLogger.error("OAuth callback error: State mismatch or missing auth code");
               reject(new Error("State mismatch or missing auth code"));
+              return;
+            }
+
+            // Phase 1 Security: Late authentication results cannot reinstall an obsolete-origin session
+            const currentConfig = ConfigManager.get();
+            if (loginEpoch !== LauncherAuth.activeLoginSessionId || normalizePortalUrl(currentConfig.portalUrl) !== portalUrl) {
+              res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+              res.end("<h3>Authentication Failed: Portal destination was changed or session was cancelled.</h3>");
+              server.close();
+              LauncherLogger.warn("[Auth] Rejected late OAuth callback: active portal changed or login was superseded.");
+              reject(new Error("Authentication session was invalidated or portal changed during login flow"));
               return;
             }
 
@@ -85,7 +99,7 @@ export class LauncherAuth {
 
             server.close();
 
-            // Exchange authorization code for token
+            // Exchange authorization code for token (reject redirects via redirect: "manual")
             const exchangeUrl = `${portalUrl}/api/v1/auth/exchange`;
             const startTime = Date.now();
             LauncherLogger.logApiRequest("POST", exchangeUrl, { code: "[REDACTED]" });
@@ -94,8 +108,13 @@ export class LauncherAuth {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ code, code_verifier: verifier }),
+              redirect: "manual",
             });
             const durationMs = Date.now() - startTime;
+
+            if (resp.status >= 300 && resp.status < 400) {
+              throw new Error("Authentication exchange rejected unexpected redirect.");
+            }
 
             if (!resp.ok) {
               let errMsg = `Token exchange failed (${resp.status})`;
@@ -126,6 +145,7 @@ export class LauncherAuth {
               token: json.token,
               refreshToken: json.refreshToken || undefined,
               minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
+              sessionPortalUrl: portalUrl,
             });
 
             LauncherLogger.info(`[Auth Success] Logged in as ${user.minecraftUsername} (UUID: ${user.minecraftUuid})`);
@@ -159,13 +179,19 @@ export class LauncherAuth {
     });
   }
 
-  static async refreshSession(portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
+  static async refreshSession(_portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
     const config = ConfigManager.get();
     if (!config.token && !config.refreshToken) {
       return { valid: false };
     }
 
-    const portalUrl = normalizePortalUrl(portalUrlOverride || config.portalUrl);
+    const portalUrl = normalizePortalUrl(config.portalUrl);
+
+    // Phase 1 Security: Session Origin Binding
+    if (!config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
+      LauncherLogger.warn(`[Auth Refresh] Session bound to '${config.sessionPortalUrl}' does not match active portal '${portalUrl}'`);
+      return { valid: false };
+    }
 
     // 1. Attempt token refresh via /api/v1/auth/refresh
     try {
@@ -183,8 +209,14 @@ export class LauncherAuth {
           refreshToken: config.refreshToken,
           token: config.token,
         }),
+        redirect: "manual",
       });
       const durationMs = Date.now() - startTime;
+
+      if (resp.status >= 300 && resp.status < 400) {
+        LauncherLogger.warn(`[Auth Refresh] Rejected unexpected redirect (${resp.status})`);
+        return { valid: false };
+      }
 
       if (resp.ok) {
         const json = await resp.json();
@@ -193,7 +225,7 @@ export class LauncherAuth {
         const user = json.user;
         if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
           LauncherLogger.warn("[Auth Refresh] Session invalid: user lacks bound Minecraft UUID");
-          ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined });
+          ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
           return { valid: false };
         }
 
@@ -205,6 +237,7 @@ export class LauncherAuth {
           token: newToken,
           refreshToken: newRefreshToken,
           minecraftAccessToken: newMcToken,
+          sessionPortalUrl: portalUrl,
         });
 
         return {
@@ -221,16 +254,23 @@ export class LauncherAuth {
     }
 
     // 2. Fallback to /api/v1/auth/verify
-    return this.verifySession(portalUrl);
+    return this.verifySession();
   }
 
-  static async verifySession(portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile }> {
+  static async verifySession(_portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile }> {
     const config = ConfigManager.get();
     if (!config.token && !config.refreshToken) {
       return { valid: false };
     }
 
-    const portalUrl = normalizePortalUrl(portalUrlOverride || config.portalUrl);
+    const portalUrl = normalizePortalUrl(config.portalUrl);
+
+    // Phase 1 Security: Session Origin Binding
+    if (!config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
+      LauncherLogger.warn(`[Auth Verify] Session bound to '${config.sessionPortalUrl}' does not match active portal '${portalUrl}'`);
+      return { valid: false };
+    }
+
     const verifyUrl = `${portalUrl}/api/v1/auth/verify`;
 
     try {
@@ -242,8 +282,15 @@ export class LauncherAuth {
         headers: {
           Authorization: `Bearer ${config.token}`,
         },
+        redirect: "manual",
       });
       const durationMs = Date.now() - startTime;
+
+      if (resp.status >= 300 && resp.status < 400) {
+        LauncherLogger.warn(`[Auth Verify] Rejected unexpected redirect (${resp.status})`);
+        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
+        return { valid: false };
+      }
 
       if (!resp.ok) {
         LauncherLogger.logApiResponse("POST", verifyUrl, resp.status, durationMs);
@@ -259,8 +306,13 @@ export class LauncherAuth {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ refreshToken: config.refreshToken }),
+              redirect: "manual",
             });
             const refreshDur = Date.now() - refreshStart;
+
+            if (refreshResp.status >= 300 && refreshResp.status < 400) {
+              throw new Error("Refresh rejected unexpected redirect");
+            }
 
             if (refreshResp.ok) {
               const json = await refreshResp.json();
@@ -268,13 +320,14 @@ export class LauncherAuth {
 
               const user = json.user;
               if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
-                ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined });
+                ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
                 return { valid: false };
               }
               ConfigManager.set({
                 token: json.token,
                 refreshToken: json.refreshToken || config.refreshToken,
                 minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
+                sessionPortalUrl: portalUrl,
               });
               return { valid: true, user };
             } else {
@@ -285,7 +338,7 @@ export class LauncherAuth {
           }
         }
 
-        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined });
+        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
         return { valid: false };
       }
 
@@ -294,13 +347,14 @@ export class LauncherAuth {
 
       const user = json.user;
       if (!json.valid || !user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
-        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined });
+        ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
         return { valid: false };
       }
 
       if (user?.minecraftAccessToken) {
         ConfigManager.set({
           minecraftAccessToken: user.minecraftAccessToken,
+          sessionPortalUrl: portalUrl,
         });
       }
       return {
@@ -314,6 +368,7 @@ export class LauncherAuth {
   }
 
   static logout() {
-    ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined });
+    LauncherAuth.activeLoginSessionId++;
+    ConfigManager.set({ token: undefined, refreshToken: undefined, minecraftAccessToken: undefined, sessionPortalUrl: undefined });
   }
 }

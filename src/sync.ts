@@ -77,10 +77,10 @@ export class LauncherSync {
     runtime: MinecraftRuntimeDefinition;
   }> {
     const config = ConfigManager.get();
-    if (!config.token) {
+    const portalUrl = normalizePortalUrl(config.portalUrl);
+    if (!config.token || !config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
       throw new Error("Authentication required: Please log in with your Lampas Portal account.");
     }
-    const portalUrl = normalizePortalUrl(config.portalUrl);
     const channel = config.selectedChannel || "stable";
     const gameDir = config.gameDir;
 

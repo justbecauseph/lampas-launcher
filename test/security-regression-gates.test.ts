@@ -20,6 +20,8 @@ let userDataDir: string;
 let gameDir: string;
 let ConfigManager: any;
 let normalizePortalUrl: any;
+let validateWebUrl: any;
+let LauncherAuth: any;
 let isPathProtected: any;
 let LauncherLogger: any;
 let LauncherLoggerService: any;
@@ -44,6 +46,11 @@ beforeAll(async () => {
   const configMod = await import("../src/config");
   ConfigManager = configMod.ConfigManager;
   normalizePortalUrl = configMod.normalizePortalUrl;
+  validateWebUrl = configMod.validateWebUrl;
+
+  const authPath = path.resolve(__dirname, "../src/auth.ts").replace(/\\/g, "/");
+  const authMod = await import(`file://${authPath}?sec_gates=${Date.now()}`);
+  LauncherAuth = authMod.LauncherAuth;
 
   const syncMod = await import("../src/sync");
   isPathProtected = syncMod.isPathProtected;
@@ -67,16 +74,70 @@ afterAll(async () => {
 });
 
 describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-01, SEC-02)", () => {
-  test.skip("[Phase 1 Gate] URL helper: normalizePortalUrl strictly enforces HTTPS and rejects HTTP lookalike bypasses", () => {
+  test("[Phase 1 Gate] URL helper: normalizePortalUrl strictly enforces HTTPS and rejects HTTP lookalike bypasses", () => {
     // Target invariant:
     // Only exact loopback origins (http://localhost or http://127.0.0.1 with port) may use HTTP.
     // Lookalike hosts, embedded IPs, and scheme case tricks must be rejected or upgraded to HTTPS.
     expect(() => normalizePortalUrl("http://localhost.attacker.invalid")).toThrow();
     expect(() => normalizePortalUrl("http://attacker.invalid/foo?bar=127.0.0.1")).toThrow();
     expect(normalizePortalUrl("HTTP://portal.lampas.town")).toBe("https://portal.lampas.town");
+    expect(() => normalizePortalUrl("https://attacker.invalid")).toThrow();
+    expect(() => normalizePortalUrl("https://user:pass@dev.lampas.town")).toThrow();
+    expect(() => normalizePortalUrl("https://dev.lampas.town/api/v1")).toThrow();
+    expect(() => normalizePortalUrl("https://dev.lampas.town?query=1")).toThrow();
+    expect(() => normalizePortalUrl("https://dev.lampas.town#hash")).toThrow();
+    expect(normalizePortalUrl("http://localhost:3000")).toBe("http://localhost:3000");
+    expect(normalizePortalUrl("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
   });
 
-  test.todo("[Phase 1 Gate] Operation-level: Web link sink rejects non-HTTP protocols and never passes them to shell.openPath");
+  test("[Phase 1 Gate] Operation-level: Web link sink rejects non-HTTP protocols and never passes them to shell.openPath", () => {
+    // validateWebUrl must strictly permit HTTP/HTTPS only
+    expect(validateWebUrl("https://lampas.town/mods")).toBe("https://lampas.town/mods");
+    expect(validateWebUrl("http://lampas.town/about")).toBe("http://lampas.town/about");
+    expect(() => validateWebUrl("file:///C:/Windows/System32/calc.exe")).toThrow();
+    expect(() => validateWebUrl("javascript:alert(1)")).toThrow();
+    expect(() => validateWebUrl("powershell -Command calc.exe")).toThrow();
+    expect(() => validateWebUrl("data:text/html,<html>")).toThrow();
+    expect(() => validateWebUrl("https://user:pass@lampas.town")).toThrow();
+    expect(() => validateWebUrl("   ")).toThrow();
+  });
+
+  test("[Phase 1 Gate] Session origin binding: ConfigManager binds credentials to sessionPortalUrl and wipes credentials on unapproved remote origin change", () => {
+    ConfigManager.set({
+      portalUrl: "https://dev.lampas.town",
+      sessionPortalUrl: "https://dev.lampas.town",
+      token: "syn-test-token",
+      refreshToken: "syn-test-refresh",
+    });
+    let config = ConfigManager.get();
+    expect(config.token).toBe("syn-test-token");
+    expect(config.sessionPortalUrl).toBe("https://dev.lampas.town");
+
+    // Changing to a different portal wipes credentials
+    ConfigManager.set({ portalUrl: "https://portal.lampas.town" });
+    config = ConfigManager.get();
+    expect(config.token).toBeUndefined();
+    expect(config.refreshToken).toBeUndefined();
+    expect(config.sessionPortalUrl).toBeUndefined();
+  });
+
+  test("[Phase 1 Gate] Legacy migration: ConfigManager.get invalidates unbound credentials from disk", () => {
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: "https://dev.lampas.town",
+      token: "legacy-unbound-token",
+      refreshToken: "legacy-unbound-refresh",
+      minecraftAccessToken: "legacy-unbound-mc-token",
+    }));
+
+    ConfigManager.resetForTesting();
+    const loaded = ConfigManager.get();
+
+    expect(loaded.token).toBeUndefined();
+    expect(loaded.refreshToken).toBeUndefined();
+    expect(loaded.minecraftAccessToken).toBeUndefined();
+    expect(loaded.sessionPortalUrl).toBeUndefined();
+  });
 });
 
 describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)", () => {

@@ -107,6 +107,9 @@ const api: LampasApi = {
   utils: {
     getAppVersion: (): Promise<string> => ipcRenderer.invoke("utils:getAppVersion"),
     openPath: (targetPath: string): Promise<string> => ipcRenderer.invoke("utils:openPath", targetPath),
+    openSourcePage: (url: string): Promise<string> => ipcRenderer.invoke("utils:openSourcePage", url),
+    openKnownLocation: (location: "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog"): Promise<string> =>
+      ipcRenderer.invoke("utils:openKnownLocation", location),
     getLogPath: (): Promise<string> => ipcRenderer.invoke("utils:getLogPath"),
     openLogsDir: (): Promise<string> => ipcRenderer.invoke("utils:openLogsDir"),
     openLogFile: (): Promise<string> => ipcRenderer.invoke("utils:openLogFile"),

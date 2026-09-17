@@ -75,26 +75,26 @@ afterAll(async () => {
   }
 });
 
-describe("Phase 0 Security Characterization — SEC-01: Portal Destination & Credential Routing", () => {
-  test("normalizePortalUrl allows HTTP bypass when 'localhost' is part of domain name", () => {
+describe("Phase 1 Security Verification — SEC-01: Portal Destination & Credential Routing", () => {
+  test("normalizePortalUrl rejects HTTP bypass when 'localhost' is part of domain name", () => {
     const bypassUrl = "http://localhost.attacker.invalid";
-    expect(normalizePortalUrl(bypassUrl)).toBe("http://localhost.attacker.invalid");
+    expect(() => normalizePortalUrl(bypassUrl)).toThrow();
   });
 
-  test("normalizePortalUrl allows HTTP bypass when '127.0.0.1' is in query or path", () => {
+  test("normalizePortalUrl rejects HTTP bypass when '127.0.0.1' is in query or path", () => {
     const queryBypass = "http://attacker.invalid/login?returnTo=127.0.0.1";
     const pathBypass = "http://attacker.invalid/api/127.0.0.1/auth";
-    expect(normalizePortalUrl(queryBypass)).toBe(queryBypass);
-    expect(normalizePortalUrl(pathBypass)).toBe(pathBypass);
+    expect(() => normalizePortalUrl(queryBypass)).toThrow();
+    expect(() => normalizePortalUrl(pathBypass)).toThrow();
   });
 
-  test("normalizePortalUrl allows HTTP bypass when scheme is uppercase HTTP://", () => {
+  test("normalizePortalUrl upgrades scheme when uppercase HTTP:// is supplied for approved host", () => {
     const upperHttp = "HTTP://dev.lampas.town";
-    expect(normalizePortalUrl(upperHttp)).toBe("HTTP://dev.lampas.town");
+    expect(normalizePortalUrl(upperHttp)).toBe("https://dev.lampas.town");
   });
 });
 
-describe("Phase 0 Security Characterization — Isolated Boundary Harness (SEC-01, SEC-02)", () => {
+describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, SEC-02)", () => {
   test("Executes boundary characterizations in isolated child process with complete Electron mock", async () => {
     const boundaryScript = path.resolve(__dirname, "security-boundary-characterization.ts");
     const proc = Bun.spawn([process.execPath, "run", boundaryScript], {
@@ -134,8 +134,8 @@ describe("Phase 0 Security Characterization — Isolated Boundary Harness (SEC-0
     expect(jsonStart).toBeGreaterThanOrEqual(0);
     const parsed = JSON.parse(stdout.slice(jsonStart + sentinel.length).trim().split("\n")[0]);
 
-    expect(parsed.totalPassed).toBe(8);
-    expect(parsed.tests.length).toBe(8);
+    expect(parsed.totalPassed).toBe(11);
+    expect(parsed.tests.length).toBe(11);
     for (const t of parsed.tests) {
       expect(t.passed).toBe(true);
     }

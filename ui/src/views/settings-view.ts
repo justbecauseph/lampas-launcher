@@ -254,7 +254,9 @@ export function initSettingsView(options: SettingsViewOptions): {
   // Open Game Directory in file explorer
   if (btnSettingsOpenDir) {
     btnSettingsOpenDir.onclick = async () => {
-      if (currentConfig?.gameDir && window.lampas?.utils?.openPath) {
+      if (window.lampas?.utils?.openKnownLocation) {
+        await window.lampas.utils.openKnownLocation("gameDir");
+      } else if (currentConfig?.gameDir && window.lampas?.utils?.openPath) {
         await window.lampas.utils.openPath(currentConfig.gameDir);
       }
     };

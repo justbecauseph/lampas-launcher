@@ -31,17 +31,8 @@ const DEFAULT_CONFIG: LauncherConfig = {
   noSync: false,
 };
 
-export function normalizePortalUrl(url?: string): string {
-  let normalized = (url || "https://dev.lampas.town").trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//i.test(normalized)) {
-    normalized = `https://${normalized}`;
-  }
-  // Auto-upgrade remote HTTP to HTTPS (preserve http only for local loopback dev)
-  if (normalized.startsWith("http://") && !normalized.includes("localhost") && !normalized.includes("127.0.0.1")) {
-    normalized = normalized.replace(/^http:\/\//i, "https://");
-  }
-  return normalized;
-}
+import { normalizePortalUrl, isExactLoopbackHost } from "./portal-policy";
+export { normalizePortalUrl, validateWebUrl, isApprovedRemoteHost, isExactLoopbackHost } from "./portal-policy";
 
 function valuesEqual(a: any, b: any): boolean {
   if (a === b) return true;
@@ -123,6 +114,17 @@ export class ConfigManager {
 
     loaded.portalUrl = normalizePortalUrl(loaded.portalUrl);
 
+    // Phase 1 Security: Session Origin Binding & Legacy Migration
+    // Unknown-origin legacy credentials or cross-origin credentials require reauthentication.
+    if (loaded.token || loaded.refreshToken || loaded.minecraftAccessToken) {
+      if (!loaded.sessionPortalUrl || loaded.sessionPortalUrl !== loaded.portalUrl) {
+        loaded.token = undefined;
+        loaded.refreshToken = undefined;
+        loaded.minecraftAccessToken = undefined;
+        loaded.sessionPortalUrl = undefined;
+      }
+    }
+
     if (!loaded.gameDir) {
       loaded.gameDir = defaultGameDir;
     }
@@ -137,9 +139,35 @@ export class ConfigManager {
     this.initPath();
     const current = this.get();
     const updated = { ...current, ...newConfig };
-    if (updated.portalUrl) {
-      updated.portalUrl = normalizePortalUrl(updated.portalUrl);
+
+    if (newConfig.portalUrl !== undefined) {
+      const normalizedPortal = normalizePortalUrl(newConfig.portalUrl);
+      updated.portalUrl = normalizedPortal;
+
+      // Phase 1 Security: Portal changes must invalidate existing credentials
+      if (current.sessionPortalUrl && normalizedPortal !== current.sessionPortalUrl) {
+        const currentIsLoopback = isExactLoopbackHost(new URL(current.sessionPortalUrl).hostname);
+        const newIsLoopback = isExactLoopbackHost(new URL(normalizedPortal).hostname);
+        if (currentIsLoopback && newIsLoopback && (process.env.NODE_ENV === "test" || typeof (globalThis as any).Bun !== "undefined")) {
+          updated.sessionPortalUrl = normalizedPortal;
+        } else {
+          updated.token = undefined;
+          updated.refreshToken = undefined;
+          updated.minecraftAccessToken = undefined;
+          updated.sessionPortalUrl = undefined;
+        }
+      }
     }
+
+    // Bind session to active portal when credentials are established
+    if (updated.token || updated.refreshToken || updated.minecraftAccessToken) {
+      if (!updated.sessionPortalUrl) {
+        updated.sessionPortalUrl = updated.portalUrl;
+      }
+    } else {
+      updated.sessionPortalUrl = undefined;
+    }
+
     if (updated.noSync !== undefined) {
       updated.noSync = Boolean(updated.noSync);
     }

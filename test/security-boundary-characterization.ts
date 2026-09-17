@@ -174,6 +174,7 @@ function runTest(name: string, fn: () => void | Promise<void>) {
 }
 
 let server: http.Server | null = null;
+let serverA: http.Server | null = null;
 let LauncherLogger: any = null;
 
 try {
@@ -206,21 +207,31 @@ try {
   });
 
   // 1. Inbound IPC Registration Inventory
-  await runTest("Registration harness confirms 35 handles and 1 on channel", () => {
-    if (ipcHandlers.size !== 35) throw new Error(`Expected 35 handles, got ${ipcHandlers.size}`);
+  await runTest("Registration harness confirms 37 handles and 1 on channel", () => {
+    if (ipcHandlers.size !== 37) throw new Error(`Expected 37 handles, got ${ipcHandlers.size}`);
     if (ipcListeners.size !== 1) throw new Error(`Expected 1 listener, got ${ipcListeners.size}`);
     if (!ipcListeners.has("game:logAck")) throw new Error("Missing game:logAck listener");
+    if (!ipcHandlers.has("utils:openSourcePage")) throw new Error("Missing utils:openSourcePage handle");
+    if (!ipcHandlers.has("utils:openKnownLocation")) throw new Error("Missing utils:openKnownLocation handle");
   });
 
-  // 2. Production utils:openPath handler invokes shell.openPath for local paths
-  await runTest("utils:openPath calls shell.openPath for local paths", async () => {
+  // 2. Production utils:openPath handler rejects unapproved arbitrary local paths
+  await runTest("utils:openPath rejects arbitrary local paths and never calls shell.openPath", async () => {
     openedPaths.length = 0;
     openedExternals.length = 0;
     const handler = ipcHandlers.get("utils:openPath")!;
     const testFile = path.join(testRoot, "dummy.txt");
-    await handler({}, testFile);
-    if (openedPaths.length !== 1 || openedPaths[0] !== testFile) {
-      throw new Error(`Expected openedPaths to contain [${testFile}], got: ${JSON.stringify(openedPaths)}`);
+    let threw = false;
+    try {
+      await handler({}, testFile);
+    } catch {
+      threw = true;
+    }
+    if (!threw) {
+      throw new Error("Expected utils:openPath to throw for unapproved local path");
+    }
+    if (openedPaths.length !== 0) {
+      throw new Error(`Expected openedPaths to be empty, got: ${JSON.stringify(openedPaths)}`);
     }
     if (openedExternals.length !== 0) {
       throw new Error(`Expected openedExternals to be empty, got: ${JSON.stringify(openedExternals)}`);
@@ -242,7 +253,7 @@ try {
     }
   });
 
-  // 4. Production config:set handler permits arbitrary runtime fields
+  // 4. Production config:set handler permits arbitrary runtime fields (Phase 2 finding)
   await runTest("config:set permits javaPath and javaArgs", async () => {
     const handler = ipcHandlers.get("config:set")!;
     const patch = {
@@ -259,7 +270,43 @@ try {
     }
   });
 
-  // Loopback HTTP fixture for credential routing
+  // 5. utils:openSourcePage validates URL and calls shell.openExternal, rejecting dangerous schemes
+  await runTest("utils:openSourcePage opens valid web URLs and rejects file/dangerous protocols", async () => {
+    openedExternals.length = 0;
+    openedPaths.length = 0;
+    const handler = ipcHandlers.get("utils:openSourcePage")!;
+    const testUrl = "https://lampas.town/about";
+    await handler({}, testUrl);
+    if (openedExternals.length !== 1 || openedExternals[0] !== testUrl) {
+      throw new Error(`Expected openedExternals to have [${testUrl}], got: ${JSON.stringify(openedExternals)}`);
+    }
+    let threw = false;
+    try {
+      await handler({}, "file:///C:/Windows/System32/calc.exe");
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openSourcePage to reject file: protocol");
+    if (openedPaths.length !== 0) throw new Error("Expected openedPaths to remain empty");
+  });
+
+  // 6. utils:openKnownLocation opens approved paths and rejects arbitrary targets
+  await runTest("utils:openKnownLocation opens approved locations and rejects arbitrary targets", async () => {
+    openedExternals.length = 0;
+    openedPaths.length = 0;
+    const handler = ipcHandlers.get("utils:openKnownLocation")!;
+    await handler({}, "gameDir");
+    if (openedPaths.length !== 1) throw new Error(`Expected openedPaths to have 1 entry, got: ${JSON.stringify(openedPaths)}`);
+    let threw = false;
+    try {
+      await handler({}, "arbitraryExploit");
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openKnownLocation to reject unknown key");
+  });
+
+  // Setup loopback fixtures: Origin A (legitimate portal) and Attacker Portal (Origin B)
   interface CapturedRequest {
     method: string;
     url: string;
@@ -268,10 +315,7 @@ try {
   }
 
   let capturedRequests: CapturedRequest[] = [];
-  let mockServerResponse: { status: number; body: any } = {
-    status: 200,
-    body: { valid: true, user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" } },
-  };
+  let capturedRequestsA: CapturedRequest[] = [];
 
   server = http.createServer((req, res) => {
     let bodyChunks: Buffer[] = [];
@@ -283,125 +327,170 @@ try {
         headers: req.headers,
         body: Buffer.concat(bodyChunks).toString("utf-8"),
       });
-      res.writeHead(mockServerResponse.status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(mockServerResponse.body));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ valid: true, user: { id: "u-attacker", name: "Attacker", minecraftUsername: "Attacker", minecraftUuid: "00000000-0000-0000-0000-000000000000" } }));
     });
   });
 
-  await new Promise<void>((resolve) => {
-    server!.listen(0, "127.0.0.1", () => resolve());
+  serverA = http.createServer((req, res) => {
+    let bodyChunks: Buffer[] = [];
+    req.on("data", (chunk) => bodyChunks.push(chunk));
+    req.on("end", () => {
+      capturedRequestsA.push({
+        method: req.method || "",
+        url: req.url || "",
+        headers: req.headers,
+        body: Buffer.concat(bodyChunks).toString("utf-8"),
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        valid: true,
+        token: "syn-new-token",
+        refreshToken: "syn-new-refresh",
+        user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
+      }));
+    });
   });
+
+  await Promise.all([
+    new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", () => resolve())),
+    new Promise<void>((resolve) => serverA!.listen(0, "127.0.0.1", () => resolve())),
+  ]);
 
   const serverPort = (server.address() as any).port;
   const attackerPortal = `http://127.0.0.1:${serverPort}`;
+  const portA = (serverA.address() as any).port;
+  const originAPortal = `http://127.0.0.1:${portA}`;
 
-  // Allow the owned fixture endpoint in the outbound request policy
-  allowedDestinations.add(`http://127.0.0.1:${serverPort}`);
+  allowedDestinations.add(attackerPortal);
+  allowedDestinations.add(originAPortal);
 
-  // Set synthetic credentials
+  // Set synthetic credentials bound to originAPortal
   ConfigManager.set({
+    portalUrl: originAPortal,
+    sessionPortalUrl: originAPortal,
     token: "syn-test-bearer-token-12345",
     refreshToken: "syn-test-refresh-token-67890",
     minecraftAccessToken: "syn-test-mc-token-abcdef",
   });
 
-  // 5. [Service-Level] LauncherAuth.verifySession credential routing
-  await runTest("[Service-Level] LauncherAuth.verifySession routes bearer token to caller portalUrl", async () => {
+  // 7. [Service-Level] LauncherAuth.verifySession ignores caller portalUrl and protects bound session
+  await runTest("[Service-Level] LauncherAuth.verifySession ignores caller portalUrl and protects bound session", async () => {
     capturedRequests = [];
-    mockServerResponse = {
-      status: 200,
-      body: { valid: true, user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" } },
-    };
+    capturedRequestsA = [];
     const result = await LauncherAuth.verifySession(attackerPortal);
-    if (!result.valid) throw new Error("Expected valid session");
-    if (capturedRequests.length !== 1) throw new Error(`Expected 1 request, got ${capturedRequests.length}`);
-    const req = capturedRequests[0];
-    if (req.method !== "POST") throw new Error(`Expected POST, got ${req.method}`);
-    if (req.url !== "/api/v1/auth/verify") throw new Error(`Expected /api/v1/auth/verify, got ${req.url}`);
+    if (!result.valid) throw new Error("Expected valid session from originA");
+    if (capturedRequests.length !== 0) {
+      throw new Error(`Credential leaked to attackerPortal! Captured: ${JSON.stringify(capturedRequests)}`);
+    }
+    if (capturedRequestsA.length !== 1) {
+      throw new Error(`Expected 1 request to originA, got ${capturedRequestsA.length}`);
+    }
+    const req = capturedRequestsA[0];
+    if (req.method !== "POST" || req.url !== "/api/v1/auth/verify") {
+      throw new Error(`Unexpected request to originA: ${req.method} ${req.url}`);
+    }
     if (req.headers["authorization"] !== "Bearer syn-test-bearer-token-12345") {
       throw new Error(`Unexpected authorization header: ${req.headers["authorization"]}`);
     }
   });
 
-  // 6. [Service-Level] LauncherAuth.refreshSession credential routing
-  await runTest("[Service-Level] LauncherAuth.refreshSession routes refresh & bearer token to caller portalUrl", async () => {
+  // 8. [Service-Level] LauncherAuth.refreshSession ignores caller portalUrl and protects bound session
+  await runTest("[Service-Level] LauncherAuth.refreshSession ignores caller portalUrl and protects bound session", async () => {
     capturedRequests = [];
-    mockServerResponse = {
-      status: 200,
-      body: {
-        token: "syn-new-token",
-        refreshToken: "syn-new-refresh",
-        user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
-      },
-    };
+    capturedRequestsA = [];
     const result = await LauncherAuth.refreshSession(attackerPortal);
-    if (!result.valid) throw new Error("Expected valid session");
-    if (capturedRequests.length !== 1) throw new Error(`Expected 1 request, got ${capturedRequests.length}`);
-    const req = capturedRequests[0];
-    if (req.method !== "POST") throw new Error(`Expected POST, got ${req.method}`);
-    if (req.url !== "/api/v1/auth/refresh") throw new Error(`Expected /api/v1/auth/refresh, got ${req.url}`);
+    if (!result.valid) throw new Error("Expected valid session from originA");
+    if (capturedRequests.length !== 0) {
+      throw new Error(`Credential leaked to attackerPortal! Captured: ${JSON.stringify(capturedRequests)}`);
+    }
+    if (capturedRequestsA.length !== 1) {
+      throw new Error(`Expected 1 request to originA, got ${capturedRequestsA.length}`);
+    }
+    const req = capturedRequestsA[0];
+    if (req.method !== "POST" || req.url !== "/api/v1/auth/refresh") {
+      throw new Error(`Unexpected request to originA: ${req.method} ${req.url}`);
+    }
     if (req.headers["authorization"] !== "Bearer syn-test-bearer-token-12345") {
       throw new Error(`Unexpected authorization header: ${req.headers["authorization"]}`);
     }
-    const parsedBody = JSON.parse(req.body);
-    if (parsedBody.refreshToken !== "syn-test-refresh-token-67890") {
-      throw new Error(`Unexpected body refreshToken: ${parsedBody.refreshToken}`);
-    }
   });
 
-  // 7. [IPC-Level] auth:verify production handler credential routing
-  await runTest("[IPC-Level] auth:verify forwards caller-supplied portalUrl to transport sink", async () => {
+  // 9. [IPC-Level] auth:verify production handler credential routing
+  await runTest("[IPC-Level] auth:verify ignores caller-supplied portalUrl and routes to bound portal", async () => {
     ConfigManager.set({
+      portalUrl: originAPortal,
+      sessionPortalUrl: originAPortal,
       token: "syn-test-bearer-token-12345",
       refreshToken: "syn-test-refresh-token-67890",
     });
     capturedRequests = [];
-    mockServerResponse = {
-      status: 200,
-      body: { valid: true, user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" } },
-    };
+    capturedRequestsA = [];
     const handler = ipcHandlers.get("auth:verify")!;
     const res = await handler({}, attackerPortal);
-    if (!res.valid) throw new Error("Expected valid session response");
-    if (capturedRequests.length !== 1) throw new Error(`Expected 1 request, got ${capturedRequests.length}`);
-    const req = capturedRequests[0];
-    if (req.method !== "POST" || req.url !== "/api/v1/auth/verify") {
-      throw new Error(`Unexpected request: ${req.method} ${req.url}`);
+    if (!res.valid) throw new Error("Expected valid session response from originA");
+    if (capturedRequests.length !== 0) {
+      throw new Error(`Credential leaked to attackerPortal via IPC! Captured: ${JSON.stringify(capturedRequests)}`);
     }
-    if (req.headers["authorization"] !== "Bearer syn-test-bearer-token-12345") {
-      throw new Error(`Unexpected authorization: ${req.headers["authorization"]}`);
+    if (capturedRequestsA.length !== 1) {
+      throw new Error(`Expected 1 request to originA, got ${capturedRequestsA.length}`);
     }
   });
 
-  // 8. [IPC-Level] auth:refresh production handler credential routing
-  await runTest("[IPC-Level] auth:refresh forwards caller-supplied portalUrl to transport sink", async () => {
+  // 10. [IPC-Level] auth:refresh production handler credential routing
+  await runTest("[IPC-Level] auth:refresh ignores caller-supplied portalUrl and routes to bound portal", async () => {
     ConfigManager.set({
+      portalUrl: originAPortal,
+      sessionPortalUrl: originAPortal,
       token: "syn-test-bearer-token-12345",
       refreshToken: "syn-test-refresh-token-67890",
     });
     capturedRequests = [];
-    mockServerResponse = {
-      status: 200,
-      body: {
-        token: "syn-new-token",
-        refreshToken: "syn-new-refresh",
-        user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
-      },
-    };
+    capturedRequestsA = [];
     const handler = ipcHandlers.get("auth:refresh")!;
     const res = await handler({}, attackerPortal);
-    if (!res.valid) throw new Error("Expected valid session response");
-    if (capturedRequests.length !== 1) throw new Error(`Expected 1 request, got ${capturedRequests.length}`);
-    const req = capturedRequests[0];
-    if (req.method !== "POST" || req.url !== "/api/v1/auth/refresh") {
-      throw new Error(`Unexpected request: ${req.method} ${req.url}`);
+    if (!res.valid) throw new Error("Expected valid session response from originA");
+    if (capturedRequests.length !== 0) {
+      throw new Error(`Credential leaked to attackerPortal via IPC! Captured: ${JSON.stringify(capturedRequests)}`);
     }
-    if (req.headers["authorization"] !== "Bearer syn-test-bearer-token-12345") {
-      throw new Error(`Unexpected authorization: ${req.headers["authorization"]}`);
+    if (capturedRequestsA.length !== 1) {
+      throw new Error(`Expected 1 request to originA, got ${capturedRequestsA.length}`);
     }
-    const parsedBody = JSON.parse(req.body);
-    if (parsedBody.refreshToken !== "syn-test-refresh-token-67890") {
-      throw new Error(`Unexpected body refreshToken: ${parsedBody.refreshToken}`);
+  });
+
+  // 11. [Service-Level] LauncherAuth rejects 3xx redirects
+  await runTest("[Service-Level] LauncherAuth.verifySession & refreshSession reject 3xx redirects", async () => {
+    let redirectServer: http.Server | null = null;
+    try {
+      redirectServer = http.createServer((_req, res) => {
+        res.writeHead(302, { Location: "http://attacker.invalid/hijack" });
+        res.end();
+      });
+      await new Promise<void>((resolve) => redirectServer!.listen(0, "127.0.0.1", () => resolve()));
+      const redirectPort = (redirectServer.address() as any).port;
+      const redirectPortal = `http://127.0.0.1:${redirectPort}`;
+      allowedDestinations.add(redirectPortal);
+
+      ConfigManager.set({
+        portalUrl: redirectPortal,
+        sessionPortalUrl: redirectPortal,
+        token: "syn-test-token-redirect",
+        refreshToken: "syn-test-refresh-redirect",
+      });
+
+      const verifyRes = await LauncherAuth.verifySession();
+      if (verifyRes.valid !== false) {
+        throw new Error("Expected verifySession to reject 302 redirect");
+      }
+
+      const refreshRes = await LauncherAuth.refreshSession();
+      if (refreshRes.valid !== false) {
+        throw new Error("Expected refreshSession to reject 302 redirect");
+      }
+    } finally {
+      if (redirectServer) {
+        await new Promise<void>((resolve) => redirectServer!.close(() => resolve()));
+      }
     }
   });
 
@@ -421,6 +510,11 @@ try {
   if (server) {
     try {
       await new Promise<void>((resolve) => server!.close(() => resolve()));
+    } catch {}
+  }
+  if (serverA) {
+    try {
+      await new Promise<void>((resolve) => serverA!.close(() => resolve()));
     } catch {}
   }
   if (LauncherLogger) {

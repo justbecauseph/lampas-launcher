@@ -224,7 +224,11 @@ export function initModsView(options: ModsViewOptions): () => void {
 
       const linkBtn = target.closest<HTMLButtonElement>(".js-source-link");
       if (linkBtn && linkBtn.dataset.sourceUrl) {
-        window.lampas.utils.openPath(linkBtn.dataset.sourceUrl);
+        if (window.lampas.utils.openSourcePage) {
+          window.lampas.utils.openSourcePage(linkBtn.dataset.sourceUrl);
+        } else {
+          window.lampas.utils.openPath(linkBtn.dataset.sourceUrl);
+        }
         return;
       }
 
@@ -403,6 +407,10 @@ export function initModsView(options: ModsViewOptions): () => void {
   // Open Pack Folder Button
   if (btnModsOpenDir) {
     btnModsOpenDir.onclick = async () => {
+      if (window.lampas?.utils?.openKnownLocation) {
+        await window.lampas.utils.openKnownLocation("modsDir");
+        return;
+      }
       let dir = getGameDir?.();
       if (!dir && window.lampas?.config?.get) {
         try {

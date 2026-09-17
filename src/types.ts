@@ -55,6 +55,7 @@ export interface LauncherConfig {
   token?: string;
   refreshToken?: string;
   minecraftAccessToken?: string;
+  sessionPortalUrl?: string;
 }
 
 export interface DirectoryStatus {
@@ -317,7 +318,9 @@ export interface LampasApi {
   };
   utils: {
     getAppVersion: () => Promise<string>;
-    openPath: (targetPath: string) => Promise<string>;
+    openPath: (targetPath: string) => Promise<string | void>;
+    openSourcePage: (url: string) => Promise<string>;
+    openKnownLocation: (location: "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog") => Promise<string>;
     getLogPath: () => Promise<string>;
     openLogsDir: () => Promise<string>;
     openLogFile: () => Promise<string>;
