@@ -15,9 +15,25 @@ import * as path from "node:path";
  * unskipped and become required passing criteria.
  */
 
-let testRoot: string;
-let userDataDir: string;
-let gameDir: string;
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sec-gates-"));
+const userDataDir = path.join(testRoot, "user-data");
+const gameDir = path.join(testRoot, "game");
+
+mock.module("electron", () => ({
+  app: {
+    getPath: (name: string) => (name === "userData" ? userDataDir : testRoot),
+    getName: () => "Lampas Launcher",
+    getVersion: () => "1.3.0",
+  },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
+  dialog: {
+    showOpenDialog: async () => ({ canceled: false, filePaths: [] }),
+    showMessageBox: async () => ({ response: 0 }),
+  },
+  BrowserWindow: class {},
+  ipcMain: { handle: () => {}, on: () => {} },
+}));
+
 let ConfigManager: any;
 let normalizePortalUrl: any;
 let validateWebUrl: any;
@@ -27,23 +43,14 @@ let LauncherLogger: any;
 let LauncherLoggerService: any;
 
 let PortalPolicy: any;
+let IpcBoundary: any;
+let IpcSecurityError: any;
+let IpcValidationError: any;
+let validateConfigSet: any;
 
 beforeAll(async () => {
-  testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sec-gates-"));
-  userDataDir = path.join(testRoot, "user-data");
-  gameDir = path.join(testRoot, "game");
   fs.mkdirSync(userDataDir, { recursive: true });
   fs.mkdirSync(gameDir, { recursive: true });
-
-  mock.module("electron", () => ({
-    app: {
-      getPath: (name: string) => (name === "userData" ? userDataDir : testRoot),
-      getName: () => "Lampas Launcher",
-      getVersion: () => "1.3.0",
-    },
-    shell: { openPath: async () => "", openExternal: async () => undefined },
-    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
-  }));
 
   const configMod = await import("../src/config");
   ConfigManager = configMod.ConfigManager;
@@ -61,6 +68,12 @@ beforeAll(async () => {
   const loggerMod = await import("../src/logger");
   LauncherLogger = loggerMod.LauncherLogger;
   LauncherLoggerService = loggerMod.LauncherLoggerService;
+
+  const boundaryMod = await import("../src/ipc-boundary");
+  IpcBoundary = boundaryMod.IpcBoundary;
+  IpcSecurityError = boundaryMod.IpcSecurityError;
+  IpcValidationError = boundaryMod.IpcValidationError;
+  validateConfigSet = boundaryMod.validateConfigSet;
 });
 
 beforeEach(() => {
@@ -212,8 +225,137 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
 });
 
 describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)", () => {
-  test.todo("[Phase 2 Gate] Operation-level: IPC handlers validate top-level sender frame and reject unauthorized callers");
-  test.todo("[Phase 2 Gate] Operation-level: config:set enforces strict allowlist schema rejecting unapproved runtime fields");
+  test("[Phase 2 Gate] Operation-level: IPC handlers validate top-level sender frame and reject unauthorized callers", () => {
+    // 1. Missing or destroyed main window
+    IpcBoundary.resetForTesting();
+    IpcBoundary.setMainWindow(null);
+    expect(() => IpcBoundary.validateIpcSender({} as any)).toThrow(IpcSecurityError);
+
+    // 2. Setup mock main window
+    const mockWebContents = {
+      id: 1,
+      url: "http://localhost:5173",
+      getURL: () => "http://localhost:5173",
+      isDestroyed: () => false,
+      on: () => {},
+    };
+    const mockWin = {
+      isDestroyed: () => false,
+      webContents: mockWebContents,
+    } as any;
+    IpcBoundary.setMainWindow(mockWin);
+    IpcBoundary.setApprovedDocumentUrl("http://localhost:5173");
+
+    // 3. Foreign webContents rejected
+    expect(() =>
+      IpcBoundary.validateIpcSender({
+        sender: { id: 2, isDestroyed: () => false },
+        senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+      } as any)
+    ).toThrow("caller webContents does not match main window");
+
+    // 4. Missing or destroyed sender frame
+    expect(() =>
+      IpcBoundary.validateIpcSender({
+        sender: mockWebContents,
+        senderFrame: null,
+      } as any)
+    ).toThrow("missing or destroyed sender frame");
+
+    // 5. Child / iframe caller rejected
+    expect(() =>
+      IpcBoundary.validateIpcSender({
+        sender: mockWebContents,
+        senderFrame: { parent: {}, url: "http://localhost:5173", isDestroyed: () => false },
+      } as any)
+    ).toThrow("child frames and subdocuments are not permitted");
+
+    // 6. Blank / uninitialized document rejected
+    expect(() =>
+      IpcBoundary.validateIpcSender({
+        sender: mockWebContents,
+        senderFrame: { parent: null, url: "about:blank", isDestroyed: () => false },
+      } as any)
+    ).toThrow("uninitialized or blank document");
+
+    // 7. Unapproved document URL / origin rejected
+    expect(() =>
+      IpcBoundary.validateIpcSender({
+        sender: mockWebContents,
+        senderFrame: { parent: null, url: "https://attacker.example.com", isDestroyed: () => false },
+      } as any)
+    ).toThrow("not an approved application document");
+
+    // 8. In-window navigation desync rejected
+    mockWebContents.getURL = () => "http://localhost:5173/navigated";
+    expect(() =>
+      IpcBoundary.validateIpcSender({
+        sender: mockWebContents,
+        senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+      } as any)
+    ).toThrow("document has navigated away from active frame URL");
+    mockWebContents.getURL = () => "http://localhost:5173";
+
+    // 9. Valid top-level frame accepted
+    const valid = IpcBoundary.validateIpcSender({
+      sender: mockWebContents,
+      senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+    } as any);
+    expect(valid.sender).toBe(mockWebContents as any);
+    expect(valid.frame.parent).toBeNull();
+
+    // 10. Document generation invalidation: approvals expire immediately on navigation/reload
+    IpcBoundary.grantApproval("test:op", "C:\\allowed\\path");
+    expect(IpcBoundary.hasApproval("test:op", "C:\\allowed\\path")).toBe(true);
+    IpcBoundary.incrementDocumentGeneration();
+    expect(IpcBoundary.hasApproval("test:op", "C:\\allowed\\path")).toBe(false);
+  });
+
+  test("[Phase 2 Gate] Operation-level: config:set enforces strict allowlist schema rejecting unapproved runtime fields", () => {
+    // 1. Non-object payloads rejected
+    expect(() => validateConfigSet(null)).toThrow(IpcValidationError);
+    expect(() => validateConfigSet(undefined)).toThrow(IpcValidationError);
+    expect(() => validateConfigSet("string")).toThrow(IpcValidationError);
+    expect(() => validateConfigSet(123)).toThrow(IpcValidationError);
+    expect(() => validateConfigSet([])).toThrow(IpcValidationError);
+
+    // 2. Unapproved runtime fields rejected fail-closed (no blacklist leakage)
+    expect(() => validateConfigSet({ gameDir: "C:\\forbidden" })).toThrow("Unknown or unauthorized settings field: 'gameDir'");
+    expect(() => validateConfigSet({ gameDirConfigured: true })).toThrow("Unknown or unauthorized settings field: 'gameDirConfigured'");
+    expect(() => validateConfigSet({ token: "leaked_token" })).toThrow("Unknown or unauthorized settings field: 'token'");
+    expect(() => validateConfigSet({ refreshToken: "leaked_refresh" })).toThrow("Unknown or unauthorized settings field: 'refreshToken'");
+    expect(() => validateConfigSet({ minecraftAccessToken: "leaked_mc" })).toThrow("Unknown or unauthorized settings field: 'minecraftAccessToken'");
+    expect(() => validateConfigSet({ sessionPortalUrl: "https://evil.com" })).toThrow("Unknown or unauthorized settings field: 'sessionPortalUrl'");
+    expect(() => validateConfigSet({ unexpectedKey: "any" })).toThrow("Unknown or unauthorized settings field: 'unexpectedKey'");
+
+    // 3. Schema types enforced
+    expect(() => validateConfigSet({ portalUrl: "" })).toThrow("portalUrl must be a non-empty string");
+    expect(() => validateConfigSet({ portalUrl: 123 as any })).toThrow("portalUrl must be a non-empty string");
+    expect(() => validateConfigSet({ selectedChannel: "invalid" as any })).toThrow("selectedChannel must be one of");
+    expect(() => validateConfigSet({ allocatedRamGb: 1 })).toThrow("allocatedRamGb must be an integer between 2 and 64");
+    expect(() => validateConfigSet({ allocatedRamGb: 65 })).toThrow("allocatedRamGb must be an integer between 2 and 64");
+    expect(() => validateConfigSet({ allocatedRamGb: 4.5 })).toThrow("allocatedRamGb must be an integer between 2 and 64");
+    expect(() => validateConfigSet({ noSync: "false" as any })).toThrow("noSync must be a boolean");
+    expect(() => validateConfigSet({ javaPath: 123 as any })).toThrow("javaPath must be a string");
+    expect(() => validateConfigSet({ javaArgs: 123 as any })).toThrow("javaArgs must be a string");
+
+    // 4. Approved runtime fields accepted and sanitized
+    const sanitized = validateConfigSet({
+      portalUrl: "https://dev.lampas.town",
+      selectedChannel: "beta",
+      allocatedRamGb: 8,
+      noSync: true,
+      javaPath: "C:\\Java\\bin\\java.exe",
+      javaArgs: "-Xmx8G -XX:+UseG1GC",
+    });
+
+    expect(sanitized.portalUrl).toBe("https://dev.lampas.town");
+    expect(sanitized.selectedChannel).toBe("beta");
+    expect(sanitized.allocatedRamGb).toBe(8);
+    expect(sanitized.noSync).toBe(true);
+    expect(sanitized.javaPath).toBe("C:\\Java\\bin\\java.exe");
+    expect(sanitized.javaArgs).toBe("-Xmx8G -XX:+UseG1GC");
+  });
 });
 
 describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (SEC-03, SEC-08)", () => {

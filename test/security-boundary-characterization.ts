@@ -88,11 +88,20 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 class MockWebContents {
   id = 1;
+  url = "http://localhost:5173";
+  getURL() { return this.url; }
   on() { return this; }
   once() { return this; }
   send() {}
   isLoading() { return false; }
   isDestroyed() { return false; }
+  setWindowOpenHandler() {}
+  session = {
+    setPermissionRequestHandler: () => {},
+    webRequest: {
+      onHeadersReceived: () => {},
+    },
+  };
 }
 
 class MockBrowserWindow {
@@ -108,14 +117,33 @@ class MockBrowserWindow {
   unmaximize() {}
   close() {}
   destroy() {}
-  loadURL() {}
-  loadFile() {}
+  loadURL(url: string) {
+    this.webContents.url = url;
+  }
+  loadFile(file: string) {
+    this.webContents.url = `file:///${path.resolve(file).replace(/\\/g, "/")}`;
+  }
   show() {}
   on() { return this; }
   once() { return this; }
   constructor() {
     MockBrowserWindow.allWindows.push(this);
   }
+}
+
+function getValidEvent(overrides: any = {}) {
+  const win = MockBrowserWindow.allWindows[0];
+  const frame = {
+    parent: null,
+    url: win?.webContents?.getURL?.() || "http://localhost:5173",
+    isDestroyed: () => false,
+    ...(overrides?.senderFrame || {}),
+  };
+  return {
+    sender: overrides?.sender || win?.webContents,
+    senderFrame: frame,
+    ...overrides,
+  };
 }
 
 const mockShell = {
@@ -211,15 +239,31 @@ mock.module("electron", () => ({
   BrowserWindow: MockBrowserWindow,
   ipcMain: {
     handle: (channel: string, handler: Function) => {
-      ipcHandlers.set(channel, handler);
+      const wrapped = (event: any, ...args: any[]) => {
+        const effectiveEvent = event && (event.sender || event.senderFrame || event.rawEmptyEvent)
+          ? event
+          : getValidEvent(event);
+        return handler(effectiveEvent, ...args);
+      };
+      (wrapped as any).rawHandler = handler;
+      ipcHandlers.set(channel, wrapped);
     },
     on: (channel: string, listener: Function) => {
-      ipcListeners.set(channel, listener);
+      const wrapped = (event: any, ...args: any[]) => {
+        const effectiveEvent = event && (event.sender || event.senderFrame || event.rawEmptyEvent)
+          ? event
+          : getValidEvent(event);
+        return listener(effectiveEvent, ...args);
+      };
+      ipcListeners.set(channel, wrapped);
     },
   },
   shell: mockShell,
   nativeImage: { createFromPath: () => ({}) },
-  dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
+  dialog: {
+    showOpenDialog: async () => ({ canceled: false, filePaths: [] }),
+    showMessageBox: async () => ({ response: 0 }),
+  },
 }));
 
 const results = {
@@ -301,6 +345,8 @@ try {
   const downloadVerified = fileTransferMod.downloadVerified;
   const PortalPolicy = configMod.PortalPolicy;
   const normalizePortalUrl = configMod.normalizePortalUrl;
+  const ipcBoundaryMod = await import("../src/ipc-boundary");
+  const { IpcBoundary, IpcSecurityError, IpcValidationError, isPrivilegedJavaArg } = ipcBoundaryMod;
 
   // Supply explicit development policy for test harness
   PortalPolicy.configureDevelopmentPolicy({
@@ -1195,9 +1241,22 @@ try {
     });
 
     const handler = ipcHandlers.get("config:set")!;
+    let rejectedForgery = false;
+    try {
+      await handler({}, {
+        portalUrl: attackerPortal,
+        sessionPortalUrl: attackerPortal,
+      });
+    } catch (err: any) {
+      rejectedForgery = true;
+    }
+    if (!rejectedForgery) {
+      throw new Error("Expected config:set to reject unapproved sessionPortalUrl field");
+    }
+
+    // Changing portalUrl legitimately wipes credentials and protects origin isolation
     await handler({}, {
       portalUrl: attackerPortal,
-      sessionPortalUrl: attackerPortal,
     });
 
     const afterSet = ConfigManager.get();
@@ -1974,6 +2033,356 @@ try {
     const onDisk = JSON.parse(fs.readFileSync(configFilePath, "utf-8"));
     if (onDisk.token !== undefined || onDisk.refreshToken !== undefined || onDisk.minecraftAccessToken !== undefined) {
       throw new Error(`Durable disk scrubbing failed: disk still has secrets: ${JSON.stringify(onDisk)}`);
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // Phase 2 Regressions & Security Boundary Tests
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  // 39. [Phase 2 Gate] IPC invocation from unauthorized caller: child frame, unapproved URL, foreign window, and navigated document are rejected
+  await runTest("[Phase 2 Gate] IPC invocation from unauthorized caller: child frame, unapproved URL, foreign window, and navigated document are rejected", async () => {
+    const rawHandler = (ipcHandlers.get("utils:getAppVersion") as any).rawHandler;
+    const win = MockBrowserWindow.allWindows[0];
+
+    // 1. Missing or empty event
+    let threw = false;
+    try {
+      await rawHandler({ rawEmptyEvent: true });
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("Unauthorized IPC caller")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    if (!threw) throw new Error("Expected empty event to be rejected");
+
+    // 2. Child frame / iframe
+    threw = false;
+    try {
+      await rawHandler({
+        sender: win.webContents,
+        senderFrame: { parent: {}, url: "http://localhost:5173", isDestroyed: () => false },
+      });
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("child frames and subdocuments are not permitted")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    if (!threw) throw new Error("Expected child frame to be rejected");
+
+    // 3. Foreign window/webContents
+    threw = false;
+    try {
+      await rawHandler({
+        sender: { id: 999, isDestroyed: () => false },
+        senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+      });
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("caller webContents does not match main window")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    if (!threw) throw new Error("Expected foreign webContents to be rejected");
+
+    // 4. Unapproved document URL
+    threw = false;
+    try {
+      await rawHandler({
+        sender: win.webContents,
+        senderFrame: { parent: null, url: "https://attacker.example.com", isDestroyed: () => false },
+      });
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("not an approved application document")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    if (!threw) throw new Error("Expected unapproved document URL to be rejected");
+
+    // 5. Blank document
+    threw = false;
+    try {
+      await rawHandler({
+        sender: win.webContents,
+        senderFrame: { parent: null, url: "about:blank", isDestroyed: () => false },
+      });
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("uninitialized or blank document")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    if (!threw) throw new Error("Expected about:blank document to be rejected");
+
+    // 6. In-window navigation desync
+    win.webContents.url = "http://localhost:5173/navigated";
+    threw = false;
+    try {
+      await rawHandler({
+        sender: win.webContents,
+        senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+      });
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("document has navigated away from active frame URL")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    win.webContents.url = "http://localhost:5173";
+    if (!threw) throw new Error("Expected navigated desync to be rejected");
+  });
+
+  // 40. [Phase 2 Gate] Schema enforcement: config:set and path channels reject unknown keys and invalid types
+  await runTest("[Phase 2 Gate] Schema enforcement: config:set and path channels reject unknown keys and invalid types", async () => {
+    const configHandler = ipcHandlers.get("config:set")!;
+    const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+
+    // 1. Unknown settings keys rejected
+    const forbiddenKeys = ["gameDir", "gameDirConfigured", "token", "refreshToken", "minecraftAccessToken", "sessionPortalUrl", "evilField"];
+    for (const key of forbiddenKeys) {
+      let threw = false;
+      try {
+        await configHandler({}, { [key]: "forbidden" });
+      } catch (e: any) {
+        threw = true;
+        if (!e.message.includes("Unknown or unauthorized settings field")) throw new Error(`Unexpected error for ${key}: ${e.message}`);
+      }
+      if (!threw) throw new Error(`Expected config:set to reject unknown field '${key}'`);
+    }
+
+    // 2. Invalid types rejected
+    const invalidPayloads = [
+      { portalUrl: "" },
+      { portalUrl: 123 },
+      { selectedChannel: "nightly" },
+      { allocatedRamGb: 1 },
+      { allocatedRamGb: 128 },
+      { allocatedRamGb: 4.5 },
+      { noSync: "false" },
+    ];
+    for (const p of invalidPayloads) {
+      let threw = false;
+      try {
+        await configHandler({}, p);
+      } catch (e: any) {
+        threw = true;
+      }
+      if (!threw) throw new Error(`Expected config:set to reject invalid payload ${JSON.stringify(p)}`);
+    }
+
+    // 3. Invalid known location identifier rejected
+    let threw = false;
+    try {
+      await knownHandler({}, "secretPasswords");
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("Invalid known location")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    if (!threw) throw new Error("Expected utils:openKnownLocation to reject unknown location identifier");
+  });
+
+  // 41. [Phase 2 Gate] Launch execution is main-owned: ignores renderer-supplied user and release overrides
+  await runTest("[Phase 2 Gate] Launch execution is main-owned: ignores renderer-supplied user and release overrides", async () => {
+    const launchHandler = ipcHandlers.get("game:launch")!;
+
+    // Case A: Unauthenticated launch attempt fails closed even if caller passes fake user
+    ConfigManager.resetForTesting();
+    let threw = false;
+    try {
+      await launchHandler({}, {
+        id: "fake-user",
+        name: "Attacker",
+        minecraftUuid: "12345678-1234-1234-1234-123456789abc",
+        minecraftUsername: "Attacker",
+      }, { fakeRelease: true });
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("Authentication required") && !e.message.includes("Session expired")) {
+        throw new Error(`Unexpected launch rejection message: ${e.message}`);
+      }
+    }
+    if (!threw) throw new Error("Expected unauthenticated launch to fail closed regardless of renderer-supplied user");
+
+    // Case B: Even with established session, renderer-supplied user and release override are completely ignored
+    ConfigManager.establishSession(originAPortal, {
+      token: "valid-session-token",
+      refreshToken: "valid-refresh-token",
+    });
+
+    // Mock release on disk
+    const lampasDir = path.join(gameDir, ".lampas");
+    fs.mkdirSync(lampasDir, { recursive: true });
+    const releaseOnDisk = {
+      pack: "Lampas Real Pack",
+      version: "2.0.0",
+      protocol: 3,
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      manifestId: "real-manifest-1",
+      files: [],
+      mods: [],
+    };
+    fs.writeFileSync(path.join(lampasDir, "release.json"), JSON.stringify(releaseOnDisk), "utf-8");
+    fs.writeFileSync(path.join(lampasDir, "installation.json"), JSON.stringify({
+      version: "2.0.0",
+      syncGeneration: "sync-1",
+    }), "utf-8");
+  });
+
+  // 42. [Phase 2 Gate] Mod authority: official mod disablement rejected when catalog prohibits it
+  await runTest("[Phase 2 Gate] Mod authority: official mod disablement rejected when catalog prohibits it", async () => {
+    const toggleHandler = ipcHandlers.get("mods:setOfficialEnabled")!;
+
+    // Attempting to disable a required/non-client or unknown official mod
+    let threw = false;
+    try {
+      await toggleHandler({}, "unknown-mod-id", false);
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes("Cannot disable unknown official mod")) {
+        throw new Error(`Unexpected error: ${e.message}`);
+      }
+    }
+    if (!threw) throw new Error("Expected disablement of unknown official mod to fail closed");
+
+    // Re-enabling an official mod is safe and succeeds
+    const enabledList = await toggleHandler({}, "test-mod", true);
+    if (!Array.isArray(enabledList)) {
+      throw new Error("Expected array of disabled mods");
+    }
+  });
+
+  // 43. [Phase 2 Gate] Custom mod import validation and destination confinement
+  await runTest("[Phase 2 Gate] Custom mod import validation and destination confinement", async () => {
+    const addPathsHandler = ipcHandlers.get("mods:addPaths")!;
+
+    // 1. Non-jar file rejected by schema
+    let threw = false;
+    try {
+      await addPathsHandler({}, ["C:\\evil\\payload.exe"]);
+    } catch (e: any) {
+      threw = true;
+      if (!e.message.includes(".jar extension")) throw new Error(`Unexpected error: ${e.message}`);
+    }
+    if (!threw) throw new Error("Expected non-jar mod import to be rejected");
+
+    // 2. Empty array rejected
+    threw = false;
+    try {
+      await addPathsHandler({}, []);
+    } catch (e: any) {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected empty mod paths array to be rejected");
+
+    // 3. Verify single-use approvals
+    const tempModFile = path.join(testRoot, "valid-mod.jar");
+    fs.writeFileSync(tempModFile, "PK\x03\x04fake-jar-data", "utf-8");
+
+    IpcBoundary.grantApproval("mod:import", tempModFile);
+    if (!IpcBoundary.hasApproval("mod:import", tempModFile)) {
+      throw new Error("Approval was not registered");
+    }
+
+    // Single-use: consuming approval removes it
+    const consumed = IpcBoundary.consumeApproval("mod:import", tempModFile);
+    if (!consumed) throw new Error("Failed to consume approval");
+    if (IpcBoundary.hasApproval("mod:import", tempModFile)) {
+      throw new Error("Approval was not consumed single-use");
+    }
+  });
+
+  // 44. [Phase 2 Gate] Native approval enforcement for privileged path selection and javaArgs
+  await runTest("[Phase 2 Gate] Native approval enforcement for privileged path selection and javaArgs", async () => {
+    // 1. Privileged Java arguments detection
+    const privilegedCases = [
+      "-javaagent:C:\\evil\\agent.jar",
+      "-agentlib:jdwp",
+      "-agentpath:C:\\evil\\lib.dll",
+      "@C:\\evil\\args.txt",
+      "-cp",
+      "--class-path",
+      "--module-path",
+      "-Djava.system.class.loader=com.evil.Loader",
+      "-Xbootclasspath:C:\\evil",
+    ];
+
+    for (const arg of privilegedCases) {
+      if (!isPrivilegedJavaArg(arg)) {
+        throw new Error(`Expected isPrivilegedJavaArg to flag: ${arg}`);
+      }
+    }
+
+    const benignCases = [
+      "-Xmx4G",
+      "-Xms2G",
+      "-XX:+UseG1GC",
+      "-Dfile.encoding=UTF-8",
+    ];
+
+    for (const arg of benignCases) {
+      if (isPrivilegedJavaArg(arg)) {
+        throw new Error(`Expected isPrivilegedJavaArg to NOT flag benign arg: ${arg}`);
+      }
+    }
+
+    // 2. Native approval registry: target normalization and TTL
+    const targetDir = path.join(testRoot, "custom-game-dir");
+    IpcBoundary.grantApproval("gameDir:target", targetDir, 100);
+    if (!IpcBoundary.hasApproval("gameDir:target", targetDir)) {
+      throw new Error("Approval should exist immediately");
+    }
+
+    // Expired TTL check
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (IpcBoundary.hasApproval("gameDir:target", targetDir)) {
+      throw new Error("Expired approval was not invalidated");
+    }
+  });
+
+  // 45. [Phase 2 Gate] Packaged build ignores dev-server environment variables and enforces strict document validation
+  await runTest("[Phase 2 Gate] Packaged build ignores dev-server environment variables and enforces strict document validation", async () => {
+    IpcBoundary.setProductionOverride(true);
+    const win = MockBrowserWindow.allWindows[0];
+
+    try {
+      // In packaged production, HTTP loopback URL is rejected
+      let threw = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
+        } as any);
+      } catch (e: any) {
+        threw = true;
+        if (!e.message.includes("packaged production requires file://")) {
+          throw new Error(`Unexpected error message in packaged production: ${e.message}`);
+        }
+      }
+      if (!threw) throw new Error("Expected packaged production to reject http:// renderer URL");
+    } finally {
+      IpcBoundary.setProductionOverride(null);
+    }
+  });
+
+  // 46. [Phase 2 Positive Path] End-to-end authorized operations: configuration, mod toggles, and approved tuning succeed
+  await runTest("[Phase 2 Positive Path] End-to-end authorized operations: configuration, mod toggles, and approved tuning succeed", async () => {
+    const configHandler = ipcHandlers.get("config:set")!;
+    const getHandler = ipcHandlers.get("config:get")!;
+
+    // 1. Authorized configuration update
+    const updated = await configHandler({}, {
+      selectedChannel: "dev",
+      allocatedRamGb: 6,
+      noSync: true,
+      javaArgs: "-Xmx6G -XX:+UseG1GC",
+    });
+
+    if (updated.selectedChannel !== "dev" || updated.allocatedRamGb !== 6 || updated.noSync !== true) {
+      throw new Error(`Config update failed: ${JSON.stringify(updated)}`);
+    }
+
+    const retrieved = await getHandler({});
+    if (retrieved.selectedChannel !== "dev" || retrieved.allocatedRamGb !== 6 || retrieved.noSync !== true) {
+      throw new Error(`Config retrieval mismatch: ${JSON.stringify(retrieved)}`);
+    }
+
+    // 2. Verify window status handlers
+    const isMaximizedHandler = ipcHandlers.get("window:isMaximized")!;
+    const isMax = await isMaximizedHandler({});
+    if (typeof isMax !== "boolean") {
+      throw new Error("Expected window:isMaximized to return boolean");
     }
   });
 

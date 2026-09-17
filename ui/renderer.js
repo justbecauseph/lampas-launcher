@@ -640,7 +640,7 @@ if (btnLogin) {
       `;
       showToast("Opening browser for Lampas Portal authentication...", "info", 4000);
 
-      const res = await window.lampas.auth.login(currentConfig?.portalUrl);
+      const res = await window.lampas.auth.login();
       updateUserUI(res.user);
       void refreshServerStatus();
       showToast(`Welcome back, ${res.user.minecraftUsername || res.user.name || "Player"}!`, "success");
@@ -982,7 +982,7 @@ async function handleRepair() {
     if (btnPlay) btnPlay.disabled = true;
 
     // Refresh token with portal
-    const session = await window.lampas.auth.refresh(currentConfig?.portalUrl);
+    const session = await window.lampas.auth.refresh();
     if (!session?.valid || !session?.user) {
       updateUserUI(null);
       showToast("Portal session expired. Please log in again.", "warning", 4000);
@@ -1108,7 +1108,7 @@ if (btnPlay) {
       if (btnStop) btnStop.classList.remove("hidden");
 
       // 1. Refresh & ensure fresh token from Portal
-      const session = await window.lampas.auth.refresh(currentConfig?.portalUrl);
+      const session = await window.lampas.auth.refresh();
       if (!session?.valid || !session?.user) {
         isLaunching = false;
         updateUserUI(null);
@@ -1137,7 +1137,7 @@ if (btnPlay) {
         appendLog("INFO", "Bootstrapping runtime and launching game...");
         showToast("No-sync mode active. Launching game...", "info", 2500);
 
-        await window.lampas.game.launch(currentUser);
+        await window.lampas.game.launch();
       } else {
         if (progressContainer) {
           progressContainer.classList.remove("hidden");
@@ -1179,7 +1179,7 @@ if (btnPlay) {
         appendLog("INFO", `Pack v${syncResult.version} synchronized. Bootstrapping ${loaderName} runtime...`);
         showToast(`Pack v${syncResult.version} verified. Launching game...`, "info", 2500);
 
-        await window.lampas.game.launch(currentUser, syncResult.release);
+        await window.lampas.game.launch();
       }
 
       if (btnPlayText) btnPlayText.innerText = "RUNNING";
@@ -1246,7 +1246,7 @@ async function init() {
 
     // Verify & refresh session
     try {
-      const authCheck = await window.lampas.auth.refresh(currentConfig.portalUrl);
+      const authCheck = await window.lampas.auth.refresh();
       if (authCheck?.valid && authCheck?.user) {
         updateUserUI(authCheck.user);
       } else {

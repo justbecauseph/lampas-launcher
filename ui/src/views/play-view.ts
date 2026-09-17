@@ -162,7 +162,7 @@ export function initPlayView(options: PlayViewOptions): {
         showToast("No-sync mode active. Launching game...", "info", 2500);
 
         try {
-          await window.lampas.game.launch(user);
+          await window.lampas.game.launch();
 
           isGameRunning = true;
           isLaunching = false;
@@ -233,7 +233,7 @@ export function initPlayView(options: PlayViewOptions): {
         appendLog("INFO", `Modpack v${syncResult.version} synchronized. Bootstrapping runtime...`);
         showToast(`Modpack v${syncResult.version} verified. Launching game...`, "info", 2500);
 
-        await window.lampas.game.launch(user, syncResult.release);
+        await window.lampas.game.launch();
 
         isGameRunning = true;
         isLaunching = false;

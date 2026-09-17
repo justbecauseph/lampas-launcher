@@ -78,7 +78,7 @@ export function initAuthView(options: AuthViewOptions): {
       try {
         btnLogin.disabled = true;
         btnLogin.innerText = "LOGGING IN...";
-        const res = await window.lampas.auth.login(getPortalUrl());
+        const res = await window.lampas.auth.login();
         updateUserUI(res.user);
         showToast(`Welcome, ${res.user.minecraftUsername || res.user.name}!`, "success");
       } catch (err: any) {

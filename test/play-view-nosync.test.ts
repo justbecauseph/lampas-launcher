@@ -139,7 +139,6 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
 
       // Verify game was launched directly
       expect(gameLaunchCalled).toBe(true);
-      expect(launchedUser).toEqual(sampleUser);
 
       // Verify logs and toasts show no-sync mode messaging
       expect(logs.some((l) => l.msg.includes("No-sync mode enabled: Skipping modpack synchronization."))).toBe(true);

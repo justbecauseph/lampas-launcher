@@ -266,12 +266,23 @@ export interface SyncResult {
   runtime?: InstalledRuntimeInfo;
 }
 
+export type KnownLocationId = "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog";
+
+export interface UpdateSettingsDto {
+  portalUrl?: string;
+  selectedChannel?: "stable" | "beta" | "dev";
+  allocatedRamGb?: number;
+  noSync?: boolean;
+  javaPath?: string;
+  javaArgs?: string;
+}
+
 export interface LampasApi {
   auth: {
-    login: (portalUrl?: string) => Promise<{ user: RendererUserProfile }>;
+    login: () => Promise<{ user: RendererUserProfile }>;
     logout: () => Promise<void>;
-    verify: (portalUrl?: string) => Promise<{ valid: boolean; user?: RendererUserProfile }>;
-    refresh: (portalUrl?: string) => Promise<{ valid: boolean; user?: RendererUserProfile }>;
+    verify: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
+    refresh: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
   };
   server: {
     getStatus: () => Promise<ServerStatus>;
@@ -284,14 +295,14 @@ export interface LampasApi {
     onProgress: (callback: (progress: SyncProgress) => void) => () => void;
   };
   mods: {
-    browseAndAdd: () => Promise<{ success: boolean; filesAdded?: string[]; error?: string }>;
-    addDropped: (files: File[]) => Promise<{ success: boolean; filesAdded?: string[]; error?: string }>;
-    setOfficialEnabled: (id: string, enabled: boolean) => Promise<void>;
-    setCustomEnabled: (filename: string, enabled: boolean) => Promise<void>;
-    removeCustom: (filename: string) => Promise<void>;
+    browseAndAdd: () => Promise<CustomClientMod[]>;
+    addDropped: (files: File[]) => Promise<CustomClientMod[]>;
+    setOfficialEnabled: (id: string, enabled: boolean) => Promise<string[]>;
+    setCustomEnabled: (filename: string, enabled: boolean) => Promise<CustomClientMod[]>;
+    removeCustom: (filename: string) => Promise<CustomClientMod[]>;
   };
   game: {
-    launch: (user: RendererUserProfile | null, releaseOverride?: any) => Promise<boolean>;
+    launch: () => Promise<boolean>;
     kill: () => Promise<void>;
     isRunning: () => Promise<boolean>;
     onLog: (callback: (entry: GameLogEntry) => void) => () => void;
@@ -308,7 +319,7 @@ export interface LampasApi {
   };
   config: {
     get: () => Promise<RendererSettingsDto>;
-    set: (newConfig: Partial<RendererSettingsDto>) => Promise<RendererSettingsDto>;
+    set: (newConfig: UpdateSettingsDto) => Promise<RendererSettingsDto>;
   };
   window: {
     minimize: () => Promise<void>;
@@ -320,7 +331,7 @@ export interface LampasApi {
     getAppVersion: () => Promise<string>;
     openPath: (targetPath: string) => Promise<string | void>;
     openSourcePage: (url: string) => Promise<string>;
-    openKnownLocation: (location: "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog") => Promise<string>;
+    openKnownLocation: (location: KnownLocationId) => Promise<string>;
     getLogPath: () => Promise<string>;
     openLogsDir: () => Promise<string>;
     openLogFile: () => Promise<string>;

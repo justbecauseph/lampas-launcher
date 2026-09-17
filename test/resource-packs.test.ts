@@ -1,15 +1,24 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
+
+mock.module("electron", () => ({
+  app: {
+    getPath: () => os.tmpdir(),
+    getName: () => "Lampas Launcher",
+    getVersion: () => "1.3.0",
+  },
+}));
+
+const {
   ensureRequiredResourcePacks,
   reconcileRequiredResourcePacks,
   reconcileResourcePacks,
   verifyRequiredResourcePacks,
   isValidServerAddress,
-} from "../src/resource-packs";
+} = await import("../src/resource-packs");
 import type { RequiredResourcePack } from "../src/types";
 
 describe("reconcileResourcePacks helper", () => {

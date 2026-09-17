@@ -11,6 +11,15 @@ import { GameDirectoryManager } from "./game-directory";
 import { ServerStatusClient } from "./server-status";
 import { OperationCoordinator, safeSend as safeSendToWindow } from "./operations";
 import { BoundedLogBatchTransport } from "./game-log-stream";
+import {
+  confirmPrivilegedOperation,
+  IpcBoundary,
+  IpcSchemas,
+  IpcSecurityError,
+  isPrivilegedJavaArg,
+  registerSecureHandler,
+  registerSecureListener,
+} from "./ipc-boundary";
 import type {
   DirectoryMoveProgress,
   SyncProgress,
@@ -18,6 +27,8 @@ import type {
   LauncherConfig,
   RendererUserProfile,
   RendererSettingsDto,
+  KnownLocationId,
+  UpdateSettingsDto,
 } from "./types";
 
 let mainWindow: BrowserWindow | null = null;
@@ -76,20 +87,94 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
   });
 
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devServerUrl) {
-    mainWindow.loadURL(devServerUrl);
+  IpcBoundary.setMainWindow(mainWindow);
+
+  // Packaged vs development renderer loading
+  const isPackaged = IpcBoundary.isPackagedProduction();
+  const prodPath = path.join(__dirname, "renderer/index.html");
+
+  if (isPackaged) {
+    if (!fs.existsSync(prodPath)) {
+      LauncherLogger.error(`[Fatal Startup] Packaged renderer not found at: ${prodPath}`);
+      throw new Error(`Packaged renderer not found at: ${prodPath}`);
+    }
+    mainWindow.loadFile(prodPath);
   } else {
-    const prodPath = path.join(__dirname, "renderer/index.html");
-    if (fs.existsSync(prodPath)) {
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+    if (devServerUrl) {
+      try {
+        const parsed = new URL(devServerUrl);
+        if (
+          (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+          (parsed.protocol === "http:" || parsed.protocol === "https:")
+        ) {
+          mainWindow.loadURL(devServerUrl);
+        } else {
+          throw new Error(`Refusing to load untrusted VITE_DEV_SERVER_URL: ${devServerUrl}`);
+        }
+      } catch (err: any) {
+        LauncherLogger.error(`[Startup Error] ${err.message}`);
+        throw err;
+      }
+    } else if (fs.existsSync(prodPath)) {
       mainWindow.loadFile(prodPath);
     } else {
-      mainWindow.loadFile(path.join(__dirname, "../ui/index.html"));
+      const devFallback = path.join(__dirname, "../ui/index.html");
+      if (!fs.existsSync(devFallback)) {
+        throw new Error(`Renderer index.html not found at: ${devFallback}`);
+      }
+      mainWindow.loadFile(devFallback);
     }
   }
+
+  // Navigation, redirect, window open, webview, and permission lockdown
+  mainWindow.webContents.setWindowOpenHandler?.(({ url }) => {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      try {
+        const validUrl = validateWebUrl(url);
+        shell.openExternal(validUrl);
+      } catch (err: any) {
+        LauncherLogger.warn(`[Window Open] Rejected URL: ${err?.message || err}`);
+      }
+    }
+    return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    event.preventDefault();
+    LauncherLogger.warn(`[Navigation] Blocked attempt to navigate window to: ${url}`);
+  });
+
+  mainWindow.webContents.on("will-redirect", (event, url) => {
+    event.preventDefault();
+    LauncherLogger.warn(`[Redirect] Blocked attempt to redirect window to: ${url}`);
+  });
+
+  mainWindow.webContents.on("will-attach-webview", (event) => {
+    event.preventDefault();
+    LauncherLogger.warn("[Security] Denied attempt to attach webview");
+  });
+
+  mainWindow.webContents.session?.setPermissionRequestHandler((_webContents, permission, callback) => {
+    LauncherLogger.warn(`[Permissions] Denied permission request: ${permission}`);
+    callback(false);
+  });
+
+  mainWindow.webContents.session?.webRequest?.onHeadersReceived?.((details, callback) => {
+    const responseHeaders = { ...details.responseHeaders };
+    const csp =
+      "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none';";
+    responseHeaders["Content-Security-Policy"] = [csp];
+    responseHeaders["X-Content-Type-Options"] = ["nosniff"];
+    responseHeaders["X-Frame-Options"] = ["DENY"];
+    callback({ responseHeaders });
+  });
 
   mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     LauncherLogger.info(`[Renderer Console] (level ${level}) ${message} (${sourceId}:${line})`);
@@ -105,6 +190,7 @@ function createWindow() {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+    IpcBoundary.setMainWindow(null);
   });
 }
 
@@ -131,30 +217,26 @@ app.whenReady().then(async () => {
   createWindow();
 
   logTransport = new BoundedLogBatchTransport(() => mainWindow);
-  ipcMain.on("game:logAck", (event, data?: { batchId?: number }) => {
+  registerSecureListener("game:logAck", IpcSchemas.logAck, (event, data) => {
     const targetId = mainWindow?.webContents?.id;
     if (targetId === undefined || event.sender.id !== targetId) {
       LauncherLogger.warn(`[LogTransport] Ignored ACK from unauthorized sender ${event.sender.id} (expected ${targetId})`);
-      return;
-    }
-    if (typeof data?.batchId !== "number") {
-      LauncherLogger.warn(`[LogTransport] Ignored malformed ACK with invalid batchId: ${data?.batchId}`);
       return;
     }
     logTransport?.onRendererAck(data.batchId, event.sender.id);
   });
 
   // IPC Handlers: Window Controls
-  ipcMain.handle("window:minimize", () => mainWindow?.minimize());
-  ipcMain.handle("window:maximize", () => {
+  registerSecureHandler("window:minimize", IpcSchemas.noArgs, () => mainWindow?.minimize());
+  registerSecureHandler("window:maximize", IpcSchemas.noArgs, () => {
     if (mainWindow?.isMaximized()) {
       mainWindow.unmaximize();
     } else {
       mainWindow?.maximize();
     }
   });
-  ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
-  ipcMain.handle("window:close", () => mainWindow?.close());
+  registerSecureHandler("window:isMaximized", IpcSchemas.noArgs, () => mainWindow?.isMaximized() ?? false);
+  registerSecureHandler("window:close", IpcSchemas.noArgs, () => mainWindow?.close());
 
   // Helpers: physical ancestry and path containment
   function isPathWithinOrEqual(childPath: string, parentPath: string): boolean {
@@ -304,25 +386,20 @@ app.whenReady().then(async () => {
   }
 
   // IPC Handlers: Utils
-  ipcMain.handle("utils:getAppVersion", () => app.getVersion());
-  ipcMain.handle("utils:openPath", async (_, targetPath: string) => {
-    if (typeof targetPath !== "string" || !targetPath.trim()) {
-      throw new Error("Target path must be a non-empty string.");
-    }
-    const trimmed = targetPath.trim();
-
+  registerSecureHandler("utils:getAppVersion", IpcSchemas.noArgs, () => app.getVersion());
+  registerSecureHandler("utils:openPath", IpcSchemas.openPath, async (_, targetPath) => {
     // 1. If web URL (http/https), validate and open externally. Never fall back to local opening.
-    const isWindowsDrive = /^[a-zA-Z]:[\\/]/.test(trimmed);
-    const hasUriScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed);
+    const isWindowsDrive = /^[a-zA-Z]:[\\/]/.test(targetPath);
+    const hasUriScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(targetPath);
     if (hasUriScheme && !isWindowsDrive) {
-      const validUrl = validateWebUrl(trimmed);
+      const validUrl = validateWebUrl(targetPath);
       await shell.openExternal(validUrl);
       return validUrl;
     }
 
     // 2. Local path handling: strictly constrain to approved known launcher locations with type validation
-    if (knownLocationIds.includes(trimmed as KnownLocationId)) {
-      const resolved = resolveAndValidateKnownLocation(trimmed);
+    if (knownLocationIds.includes(targetPath as KnownLocationId)) {
+      const resolved = resolveAndValidateKnownLocation(targetPath);
       await shell.openPath(resolved);
       return resolved;
     }
@@ -331,7 +408,7 @@ app.whenReady().then(async () => {
     for (const id of knownLocationIds) {
       try {
         const resolved = resolveAndValidateKnownLocation(id);
-        const resolvedTrimmed = fs.existsSync(trimmed) ? fs.realpathSync(trimmed) : path.resolve(trimmed);
+        const resolvedTrimmed = fs.existsSync(targetPath) ? fs.realpathSync(targetPath) : path.resolve(targetPath);
         if (resolvedTrimmed === resolved) {
           await shell.openPath(resolved);
           return resolved;
@@ -341,70 +418,127 @@ app.whenReady().then(async () => {
 
     throw new Error(`Refusing to open unapproved path '${targetPath}'. Only validated web URLs and known launcher locations may be opened.`);
   });
-  ipcMain.handle("utils:openSourcePage", async (_, url: string) => {
-    const validatedUrl = validateWebUrl(url);
-    await shell.openExternal(validatedUrl);
-    return validatedUrl;
+  registerSecureHandler("utils:openSourcePage", IpcSchemas.openSourcePage, async (_, url) => {
+    await shell.openExternal(url);
+    return url;
   });
-  ipcMain.handle("utils:openKnownLocation", async (_, location: string) => {
+  registerSecureHandler("utils:openKnownLocation", IpcSchemas.openKnownLocation, async (_, location) => {
     const targetPath = resolveAndValidateKnownLocation(location);
     await shell.openPath(targetPath);
     return targetPath;
   });
-  ipcMain.handle("utils:getLogPath", () => LauncherLogger.getLogPath());
-  ipcMain.handle("utils:openLogsDir", async () => {
+  registerSecureHandler("utils:getLogPath", IpcSchemas.noArgs, () => LauncherLogger.getLogPath());
+  registerSecureHandler("utils:openLogsDir", IpcSchemas.noArgs, async () => {
     const logsDir = resolveAndValidateKnownLocation("logsDir");
     await shell.openPath(logsDir);
     return logsDir;
   });
-  ipcMain.handle("utils:openLogFile", async () => {
+  registerSecureHandler("utils:openLogFile", IpcSchemas.noArgs, async () => {
     const logPath = resolveAndValidateKnownLocation("launcherLog");
     await shell.openPath(logPath);
     return logPath;
   });
-  ipcMain.handle("utils:getMinecraftLogPath", () => {
+  registerSecureHandler("utils:getMinecraftLogPath", IpcSchemas.noArgs, () => {
     const config = ConfigManager.get();
     return path.join(config.gameDir, "logs", "latest.log");
   });
-  ipcMain.handle("utils:openMinecraftLog", async () => {
+  registerSecureHandler("utils:openMinecraftLog", IpcSchemas.noArgs, async () => {
     const latestLog = resolveAndValidateKnownLocation("minecraftLog");
     await shell.openPath(latestLog);
     return latestLog;
   });
 
   // IPC Handlers: Config
-  ipcMain.handle("config:get", () => toRendererSettingsDto(ConfigManager.get()));
-  ipcMain.handle("config:set", (_, newConfig) => {
+  registerSecureHandler("config:get", IpcSchemas.noArgs, () => toRendererSettingsDto(ConfigManager.get()));
+  registerSecureHandler("config:set", IpcSchemas.configSet, async (_, newConfig) => {
     OperationCoordinator.assertCanMutate("update configuration");
-    const safeConfig = { ...newConfig };
-    delete (safeConfig as any).gameDir; // Generic config updates cannot directly overwrite gameDir
-    delete (safeConfig as any).gameDirConfigured; // Generic config updates cannot manipulate directory onboarding state
-    delete (safeConfig as any).token;
-    delete (safeConfig as any).refreshToken;
-    delete (safeConfig as any).minecraftAccessToken;
-    delete (safeConfig as any).sessionPortalUrl; // Renderer cannot forge session-binding ownership
-    if (typeof safeConfig?.javaArgs === "string") parseJavaArgs(safeConfig.javaArgs);
-    return toRendererSettingsDto(ConfigManager.set(safeConfig));
+
+    // Privileged setting: javaPath
+    if (newConfig.javaPath !== undefined && newConfig.javaPath !== ConfigManager.get().javaPath && newConfig.javaPath.trim() !== "") {
+      const hasApproval = IpcBoundary.consumeApproval("config:javaPath", newConfig.javaPath);
+      if (!hasApproval) {
+        const confirmed = await confirmPrivilegedOperation(mainWindow, {
+          title: "Confirm Custom Java Executable",
+          message: "Set custom Java executable?",
+          detail: `Custom Java binary path:\n${newConfig.javaPath}`,
+          confirmButtonText: "Confirm",
+        });
+        if (!confirmed) {
+          throw new Error("Custom Java executable update cancelled by user.");
+        }
+      }
+    }
+
+    // Privileged setting: privileged javaArgs
+    if (newConfig.javaArgs !== undefined && newConfig.javaArgs.trim() !== "") {
+      const parsedArgs = parseJavaArgs(newConfig.javaArgs);
+      const privilegedArgs = parsedArgs.filter(isPrivilegedJavaArg);
+      if (privilegedArgs.length > 0) {
+        const hasApproval = IpcBoundary.consumeApproval("config:privilegedJavaArgs", newConfig.javaArgs);
+        if (!hasApproval) {
+          const confirmed = await confirmPrivilegedOperation(mainWindow, {
+            title: "Security Warning: Privileged Java Arguments",
+            message: "The specified Java arguments contain privileged code-loading flags that can execute arbitrary code.",
+            detail: `Detected flags:\n${privilegedArgs.join("\n")}\n\nFull arguments:\n${newConfig.javaArgs}\n\nDo you want to allow these arguments?`,
+            confirmButtonText: "Allow",
+          });
+          if (!confirmed) {
+            throw new Error("Privileged Java arguments rejected by user.");
+          }
+        }
+      }
+    }
+
+    return toRendererSettingsDto(ConfigManager.set(newConfig));
   });
 
   // IPC Handlers: Game Directory
-  ipcMain.handle("gameDir:getStatus", () => GameDirectoryManager.getStatus());
-  ipcMain.handle("gameDir:browse", async (_, defaultPath?: string) => {
+  registerSecureHandler("gameDir:getStatus", IpcSchemas.noArgs, () => GameDirectoryManager.getStatus());
+  registerSecureHandler("gameDir:browse", IpcSchemas.gameDirBrowse, async (_, defaultPath) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: "Select Minecraft Installation Directory",
       defaultPath: defaultPath || ConfigManager.get().gameDir,
       properties: ["openDirectory", "createDirectory"],
     });
+    if (!result.canceled && result.filePaths.length > 0) {
+      for (const p of result.filePaths) {
+        IpcBoundary.grantApproval("gameDir:target", p);
+      }
+    }
     return { canceled: result.canceled, filePaths: result.filePaths };
   });
-  ipcMain.handle("gameDir:validate", (_, targetPath: string, currentPath?: string) =>
+  registerSecureHandler("gameDir:validate", IpcSchemas.gameDirValidate, (_, targetPath, currentPath) =>
     GameDirectoryManager.validateTarget(targetPath, currentPath));
-  ipcMain.handle("gameDir:configure", async (_, targetPath: string) => {
+  registerSecureHandler("gameDir:configure", IpcSchemas.gameDirTarget, async (_, targetPath) => {
     OperationCoordinator.assertCanMutate("configure game directory");
+    const hasApproval = IpcBoundary.consumeApproval("gameDir:target", targetPath);
+    if (!hasApproval) {
+      const confirmed = await confirmPrivilegedOperation(mainWindow, {
+        title: "Confirm Minecraft Installation Directory",
+        message: "Configure Minecraft installation directory?",
+        detail: `The application will configure its installation at:\n${targetPath}`,
+        confirmButtonText: "Configure",
+      });
+      if (!confirmed) {
+        throw new Error("Configuration cancelled by user.");
+      }
+    }
     const updated = await GameDirectoryManager.configureInitial(targetPath);
     return toRendererSettingsDto(updated);
   });
-  ipcMain.handle("gameDir:move", async (_, targetPath: string) => {
+  registerSecureHandler("gameDir:move", IpcSchemas.gameDirTarget, async (_, targetPath) => {
+    const hasApproval = IpcBoundary.consumeApproval("gameDir:target", targetPath);
+    if (!hasApproval) {
+      const confirmed = await confirmPrivilegedOperation(mainWindow, {
+        title: "Confirm Installation Move",
+        message: "Move Minecraft installation directory?",
+        detail: `The existing installation and data will be moved to:\n${targetPath}`,
+        confirmButtonText: "Move",
+      });
+      if (!confirmed) {
+        throw new Error("Move cancelled by user.");
+      }
+    }
     const op = OperationCoordinator.acquire("move", `Move installation to ${targetPath}`);
     const throttledProgress = op.createThrottledProgress<DirectoryMoveProgress>(
       (progress) => safeSend("gameDir:moveProgress", progress),
@@ -422,25 +556,25 @@ app.whenReady().then(async () => {
   });
 
   // IPC Handlers: Auth
-  ipcMain.handle("auth:login", async () => {
+  registerSecureHandler("auth:login", IpcSchemas.noArgs, async () => {
     const res = await LauncherAuth.loginWithPortal();
     return { user: toRendererUserProfile(res.user)! };
   });
-  ipcMain.handle("auth:logout", () => LauncherAuth.logout());
-  ipcMain.handle("auth:verify", async () => {
+  registerSecureHandler("auth:logout", IpcSchemas.noArgs, () => LauncherAuth.logout());
+  registerSecureHandler("auth:verify", IpcSchemas.noArgs, async () => {
     const res = await LauncherAuth.verifySession();
     return { valid: res.valid, user: toRendererUserProfile(res.user) };
   });
-  ipcMain.handle("auth:refresh", async () => {
+  registerSecureHandler("auth:refresh", IpcSchemas.noArgs, async () => {
     const res = await LauncherAuth.refreshSession();
     return { valid: res.valid, user: toRendererUserProfile(res.user) };
   });
 
   // IPC Handlers: Server presence. Portal credentials stay in the main process.
-  ipcMain.handle("server:getStatus", () => ServerStatusClient.getStatus());
+  registerSecureHandler("server:getStatus", IpcSchemas.noArgs, () => ServerStatusClient.getStatus());
 
   // IPC Handlers: Sync & Repair
-  ipcMain.handle("sync:start", async () => {
+  registerSecureHandler("sync:start", IpcSchemas.noArgs, async () => {
     const op = OperationCoordinator.acquire("sync", "Modpack synchronization");
     const throttledProgress = op.createThrottledProgress<SyncProgress>(
       (progress) => safeSend("sync:progress", progress),
@@ -459,7 +593,7 @@ app.whenReady().then(async () => {
       op.release();
     }
   });
-  ipcMain.handle("sync:repair", async () => {
+  registerSecureHandler("sync:repair", IpcSchemas.noArgs, async () => {
     const op = OperationCoordinator.acquire("repair", "Full installation repair");
     const throttledProgress = op.createThrottledProgress<SyncProgress>(
       (progress) => safeSend("sync:progress", progress),
@@ -479,8 +613,8 @@ app.whenReady().then(async () => {
       op.release();
     }
   });
-  ipcMain.handle("sync:getModCatalog", () => LauncherSync.getModCatalog());
-  ipcMain.handle("sync:getInstalledRuntime", () => {
+  registerSecureHandler("sync:getModCatalog", IpcSchemas.noArgs, () => LauncherSync.getModCatalog());
+  registerSecureHandler("sync:getInstalledRuntime", IpcSchemas.noArgs, () => {
     const config = ConfigManager.get();
     const releasePath = path.join(config.gameDir, ".lampas", "release.json");
     if (fs.existsSync(releasePath)) {
@@ -515,41 +649,74 @@ app.whenReady().then(async () => {
     return null;
   });
 
-  ipcMain.handle("mods:browseAndAdd", async () => {
+  // IPC Handlers: Mods
+  registerSecureHandler("mods:browseAndAdd", IpcSchemas.noArgs, async () => {
     OperationCoordinator.assertCanMutate("add client mods");
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: "Add local client mods",
       filters: [{ name: "Minecraft mods", extensions: ["jar"] }],
       properties: ["openFile", "multiSelections"],
     });
-    return result.canceled ? ClientModManager.list() : ClientModManager.add(result.filePaths);
+    if (result.canceled || result.filePaths.length === 0) {
+      return ClientModManager.list();
+    }
+    for (const p of result.filePaths) {
+      IpcBoundary.grantApproval("mod:import", p);
+    }
+    return ClientModManager.add(result.filePaths);
   });
-  ipcMain.handle("mods:addPaths", (_, paths: string[]) => {
+  registerSecureHandler("mods:addPaths", IpcSchemas.modPaths, async (_, paths) => {
     OperationCoordinator.assertCanMutate("add client mods");
+    const unapproved = paths.filter((p) => !IpcBoundary.consumeApproval("mod:import", p));
+    if (unapproved.length > 0) {
+      const confirmed = await confirmPrivilegedOperation(mainWindow, {
+        title: "Confirm Mod Import",
+        message: "Import local client mod(s)?",
+        detail: `Are you sure you want to import the following mod file(s)?\n${unapproved.join("\n")}`,
+        confirmButtonText: "Import",
+      });
+      if (!confirmed) {
+        throw new Error("Mod import cancelled by user.");
+      }
+    }
     return ClientModManager.add(paths);
   });
-  ipcMain.handle("mods:setOfficialEnabled", (_, id: string, enabled: boolean) => {
+  registerSecureHandler("mods:setOfficialEnabled", IpcSchemas.officialModToggle, async (_, id, enabled) => {
     OperationCoordinator.assertCanMutate("toggle official mod");
+    if (!enabled) {
+      const catalog = await LauncherSync.getModCatalog();
+      const mod = catalog.find((m) => m.id === id && m.source === "official");
+      if (!mod) {
+        throw new Error(`Cannot disable unknown official mod: '${id}'`);
+      }
+      if (mod.canDisable !== true) {
+        throw new Error(`Official mod '${id}' is required and cannot be disabled.`);
+      }
+    }
     return ClientModManager.setOfficialEnabled(id, enabled);
   });
-  ipcMain.handle("mods:setCustomEnabled", (_, filename: string, enabled: boolean) => {
+  registerSecureHandler("mods:setCustomEnabled", IpcSchemas.customModToggle, (_, filename, enabled) => {
     OperationCoordinator.assertCanMutate("toggle custom mod");
     return ClientModManager.setEnabled(filename, enabled);
   });
-  ipcMain.handle("mods:removeCustom", (_, filename: string) => {
+  registerSecureHandler("mods:removeCustom", IpcSchemas.customModFilename, (_, filename) => {
     OperationCoordinator.assertCanMutate("remove custom mod");
     return ClientModManager.remove(filename);
   });
 
   // IPC Handlers: Game
-  ipcMain.handle("game:launch", async (_, user: UserProfile | null, releaseOverride?: any) => {
-    const op = OperationCoordinator.acquire("launch", `Launch Minecraft for ${user?.minecraftUsername || user?.name || "Unknown"}`);
+  registerSecureHandler("game:launch", IpcSchemas.noArgs, async () => {
+    const op = OperationCoordinator.acquire("launch", "Launch Minecraft");
     try {
-      LauncherLogger.info(`Initiating game launch for player: ${user?.minecraftUsername || user?.name || "Unknown"}`);
+      const refreshed = await LauncherAuth.refreshSession();
+      if (!refreshed.valid || !refreshed.user) {
+        throw new Error("Authentication required: Please log in with your Lampas Portal account before playing.");
+      }
+      const user = refreshed.user;
+      LauncherLogger.info(`Initiating game launch for player: ${user.minecraftUsername || user.name || "Unknown"}`);
       return await GameRunner.launchGame(
         user,
         (log) => {
-          // Stream live game output to bounded IPC batch transport
           logTransport?.push(log);
         },
         (code) => {
@@ -557,17 +724,17 @@ app.whenReady().then(async () => {
           LauncherLogger.info(`Minecraft process exited with code ${code}`);
           safeSend("game:exit", code);
         },
-        releaseOverride
+        undefined
       );
     } finally {
       op.release();
     }
   });
-  ipcMain.handle("game:kill", async () => {
+  registerSecureHandler("game:kill", IpcSchemas.noArgs, async () => {
     LauncherLogger.warn("Game kill request received from user.");
     await GameRunner.killGame();
   });
-  ipcMain.handle("game:isRunning", () => GameRunner.isGameRunning());
+  registerSecureHandler("game:isRunning", IpcSchemas.noArgs, () => GameRunner.isGameRunning());
 
   if (process.argv.includes("--smoke-test")) {
     const runSmokeCheck = async () => {

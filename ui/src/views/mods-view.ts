@@ -329,16 +329,10 @@ export function initModsView(options: ModsViewOptions): () => void {
   const handleAddLocalMods = async () => {
     try {
       const res = await window.lampas.mods.browseAndAdd();
-      if (res.success && res.filesAdded?.length) {
-        const count = res.filesAdded.length;
-        const msg = count === 1
-          ? `Added ${cleanModDisplayName(res.filesAdded[0])}.`
-          : `Successfully added ${count} mods.`;
-        showToast(msg, "success");
+      if (Array.isArray(res) && res.length) {
+        showToast("Client mods updated.", "success");
         await loadCatalog();
         onModsChanged?.();
-      } else if (res.error) {
-        showToast(`Could not add mod: ${formatFriendlyError(res.error)}`, "error");
       }
     } catch (err: any) {
       showToast(`Could not add mod: ${formatFriendlyError(err)}`, "error");
@@ -449,16 +443,10 @@ export function initModsView(options: ModsViewOptions): () => void {
 
       try {
         const res = await window.lampas.mods.addDropped(files);
-        if (res.success && res.filesAdded?.length) {
-          const count = res.filesAdded.length;
-          const msg = count === 1
-            ? `Added ${cleanModDisplayName(res.filesAdded[0])}.`
-            : `Successfully added ${count} mods.`;
-          showToast(msg, "success");
+        if (Array.isArray(res) && res.length) {
+          showToast("Client mods updated.", "success");
           await loadCatalog();
           onModsChanged?.();
-        } else if (res.error) {
-          showToast(`Could not add mod: ${formatFriendlyError(res.error)}`, "error");
         }
       } catch (err: any) {
         showToast(`Could not add mod: ${formatFriendlyError(err)}`, "error");

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   SyncProgress,
+  SyncResult,
   GameLogEntry,
   DirectoryStatus,
   DirectoryValidationResult,
@@ -11,19 +12,20 @@ import type {
   RendererSettingsDto,
   ModCatalogEntry,
   InstalledRuntimeInfo,
-  SyncResult,
+  UpdateSettingsDto,
+  KnownLocationId,
   LampasApi,
 } from "./types";
 
 const api: LampasApi = {
   auth: {
-    login: (portalUrl?: string): Promise<{ user: RendererUserProfile }> =>
-      ipcRenderer.invoke("auth:login", portalUrl),
+    login: (): Promise<{ user: RendererUserProfile }> =>
+      ipcRenderer.invoke("auth:login"),
     logout: (): Promise<void> => ipcRenderer.invoke("auth:logout"),
-    verify: (portalUrl?: string): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
-      ipcRenderer.invoke("auth:verify", portalUrl),
-    refresh: (portalUrl?: string): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
-      ipcRenderer.invoke("auth:refresh", portalUrl),
+    verify: (): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
+      ipcRenderer.invoke("auth:verify"),
+    refresh: (): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
+      ipcRenderer.invoke("auth:refresh"),
   },
   server: {
     getStatus: (): Promise<ServerStatus> => ipcRenderer.invoke("server:getStatus"),
@@ -54,8 +56,8 @@ const api: LampasApi = {
       ipcRenderer.invoke("mods:removeCustom", filename),
   },
   game: {
-    launch: (user: RendererUserProfile | null, releaseOverride?: any): Promise<boolean> =>
-      ipcRenderer.invoke("game:launch", user, releaseOverride),
+    launch: (): Promise<boolean> =>
+      ipcRenderer.invoke("game:launch"),
     kill: (): Promise<void> => ipcRenderer.invoke("game:kill"),
     isRunning: (): Promise<boolean> => ipcRenderer.invoke("game:isRunning"),
     onLog: (callback: (entry: GameLogEntry) => void) => {
@@ -95,7 +97,7 @@ const api: LampasApi = {
   },
   config: {
     get: (): Promise<RendererSettingsDto> => ipcRenderer.invoke("config:get"),
-    set: (newConfig: Partial<RendererSettingsDto>): Promise<RendererSettingsDto> =>
+    set: (newConfig: UpdateSettingsDto): Promise<RendererSettingsDto> =>
       ipcRenderer.invoke("config:set", newConfig),
   },
   window: {
@@ -108,7 +110,7 @@ const api: LampasApi = {
     getAppVersion: (): Promise<string> => ipcRenderer.invoke("utils:getAppVersion"),
     openPath: (targetPath: string): Promise<string> => ipcRenderer.invoke("utils:openPath", targetPath),
     openSourcePage: (url: string): Promise<string> => ipcRenderer.invoke("utils:openSourcePage", url),
-    openKnownLocation: (location: "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog"): Promise<string> =>
+    openKnownLocation: (location: KnownLocationId): Promise<string> =>
       ipcRenderer.invoke("utils:openKnownLocation", location),
     getLogPath: (): Promise<string> => ipcRenderer.invoke("utils:getLogPath"),
     openLogsDir: (): Promise<string> => ipcRenderer.invoke("utils:openLogsDir"),

@@ -159,7 +159,7 @@ async function startApp(): Promise<void> {
 
     // Auth verification
     try {
-      const authRes = await window.lampas.auth.refresh(initialConfig.portalUrl);
+      const authRes = await window.lampas.auth.refresh();
       if (authRes.valid && authRes.user) {
         authView.updateUserUI(authRes.user);
       } else {
