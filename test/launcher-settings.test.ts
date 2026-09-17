@@ -11,16 +11,18 @@ mock.module("electron", () => ({
   shell: { openExternal: async () => undefined },
 }));
 
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager } = await import("../src/client-mods");
 const { parseJavaArgs } = await import("../src/game-runner");
 
 beforeEach(() => {
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.resetForTesting();
   ConfigManager.set({ gameDir: path.join(testRoot, "game"), customClientMods: [], disabledClientMods: [] });
 });
 
 afterAll(() => {
+  PortalPolicy.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }

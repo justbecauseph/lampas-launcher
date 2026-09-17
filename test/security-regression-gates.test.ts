@@ -26,6 +26,8 @@ let isPathProtected: any;
 let LauncherLogger: any;
 let LauncherLoggerService: any;
 
+let PortalPolicy: any;
+
 beforeAll(async () => {
   testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sec-gates-"));
   userDataDir = path.join(testRoot, "user-data");
@@ -47,6 +49,7 @@ beforeAll(async () => {
   ConfigManager = configMod.ConfigManager;
   normalizePortalUrl = configMod.normalizePortalUrl;
   validateWebUrl = configMod.validateWebUrl;
+  PortalPolicy = configMod.PortalPolicy;
 
   const authPath = path.resolve(__dirname, "../src/auth.ts").replace(/\\/g, "/");
   const authMod = await import(`file://${authPath}?sec_gates=${Date.now()}`);
@@ -61,10 +64,12 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  PortalPolicy?.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager?.resetForTesting();
 });
 
 afterAll(async () => {
+  PortalPolicy?.resetForTesting();
   try {
     await LauncherLogger?.close();
   } catch {}
@@ -88,6 +93,60 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
     expect(() => normalizePortalUrl("https://dev.lampas.town#hash")).toThrow();
     expect(normalizePortalUrl("http://localhost:3000")).toBe("http://localhost:3000");
     expect(normalizePortalUrl("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+  });
+
+  test("[Phase 1 Gate] Production portal policy: packaged production rejects loopback destinations and ignores environment trust expansion", () => {
+    try {
+      PortalPolicy.setProductionOverride(true);
+      process.env.LAMPAS_ALLOWED_PORTAL_HOSTS = "attacker.invalid,custom-portal.test";
+      process.env.NODE_ENV = "development";
+
+      // Packaged production rejects loopback destinations
+      expect(() => normalizePortalUrl("http://localhost:3000")).toThrow();
+      expect(() => normalizePortalUrl("http://127.0.0.1:8080")).toThrow();
+
+      // Packaged production ignores LAMPAS_ALLOWED_PORTAL_HOSTS and NODE_ENV
+      expect(() => normalizePortalUrl("https://attacker.invalid")).toThrow();
+      expect(() => normalizePortalUrl("https://custom-portal.test")).toThrow();
+
+      // Approved lampas.town contract remains valid in production
+      expect(normalizePortalUrl("https://portal.lampas.town")).toBe("https://portal.lampas.town");
+      expect(normalizePortalUrl("https://dev.lampas.town")).toBe("https://dev.lampas.town");
+    } finally {
+      PortalPolicy.setProductionOverride(null);
+      delete process.env.LAMPAS_ALLOWED_PORTAL_HOSTS;
+      process.env.NODE_ENV = "test";
+      PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
+    }
+  });
+
+  test("[Phase 1 Gate] Origin-change invalidation: ConfigManager advances sessionGeneration on active portal change even without established session", () => {
+    ConfigManager.resetForTesting();
+    // Ensure fresh logged-out state (no sessionPortalUrl, no tokens)
+    expect(ConfigManager.get().token).toBeUndefined();
+    expect(ConfigManager.get().sessionPortalUrl).toBeUndefined();
+
+    const gen0 = ConfigManager.getSessionGeneration();
+
+    // 1. Change active portal A -> B
+    ConfigManager.set({ portalUrl: "https://portal.lampas.town" });
+    const gen1 = ConfigManager.getSessionGeneration();
+    expect(gen1).toBeGreaterThan(gen0);
+
+    // 2. Change active portal B -> A (return to prior)
+    ConfigManager.set({ portalUrl: "https://dev.lampas.town" });
+    const gen2 = ConfigManager.getSessionGeneration();
+    expect(gen2).toBeGreaterThan(gen1);
+
+    // 3. Setting identical portal does not advance generation
+    ConfigManager.set({ portalUrl: "https://dev.lampas.town" });
+    const gen3 = ConfigManager.getSessionGeneration();
+    expect(gen3).toBe(gen2);
+
+    // 4. Updating unrelated setting does not advance generation
+    ConfigManager.set({ allocatedRamGb: 6 });
+    const gen4 = ConfigManager.getSessionGeneration();
+    expect(gen4).toBe(gen3);
   });
 
   test("[Phase 1 Gate] Operation-level: Web link sink rejects non-HTTP protocols and never passes them to shell.openPath", () => {

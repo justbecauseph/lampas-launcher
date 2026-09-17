@@ -22,7 +22,7 @@ mock.module("electron", () => ({
 
 // Load modules under test
 const { LauncherLogger, LauncherLoggerService } = await import("../src/logger");
-const { ConfigManager, normalizePortalUrl } = await import("../src/config");
+const { ConfigManager, normalizePortalUrl, PortalPolicy } = await import("../src/config");
 const { isPathProtected, isSafeRelativePath } = await import("../src/sync");
 const { GameDirectoryManager } = await import("../src/game-directory");
 const { FabricMetaResolver } = await import("../src/fabric-meta");
@@ -37,6 +37,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.resetForTesting();
   GameDirectoryManager.resetForTesting();
 
@@ -67,6 +68,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  PortalPolicy.resetForTesting();
   try {
     await LauncherLogger.close();
   } catch {}
@@ -134,8 +136,8 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
     expect(jsonStart).toBeGreaterThanOrEqual(0);
     const parsed = JSON.parse(stdout.slice(jsonStart + sentinel.length).trim().split("\n")[0]);
 
-    expect(parsed.totalPassed).toBe(20);
-    expect(parsed.tests.length).toBe(20);
+    expect(parsed.totalPassed).toBe(33);
+    expect(parsed.tests.length).toBe(33);
     for (const t of parsed.tests) {
       expect(t.passed).toBe(true);
     }

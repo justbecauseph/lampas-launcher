@@ -174,6 +174,34 @@ function runTest(name: string, fn: () => void | Promise<void>) {
   })();
 }
 
+class RequestBarrier {
+  private requestReceivedResolve!: () => void;
+  private releaseResolve!: () => void;
+  public requestReceived: Promise<void>;
+  public releasePromise: Promise<void>;
+
+  constructor() {
+    this.requestReceived = new Promise<void>((r) => {
+      this.requestReceivedResolve = r;
+    });
+    this.releasePromise = new Promise<void>((r) => {
+      this.releaseResolve = r;
+    });
+  }
+
+  notifyRequestReceived(): void {
+    this.requestReceivedResolve();
+  }
+
+  waitToRelease(): Promise<void> {
+    return this.releasePromise;
+  }
+
+  release(): void {
+    this.releaseResolve();
+  }
+}
+
 let server: http.Server | null = null;
 let serverA: http.Server | null = null;
 let LauncherLogger: any = null;
@@ -192,11 +220,19 @@ try {
   const LauncherSync = syncMod.LauncherSync;
   const ServerStatusClient = serverStatusMod.ServerStatusClient;
   const downloadVerified = fileTransferMod.downloadVerified;
+  const PortalPolicy = configMod.PortalPolicy;
+  const normalizePortalUrl = configMod.normalizePortalUrl;
+
+  // Supply explicit development policy for test harness
+  PortalPolicy.configureDevelopmentPolicy({
+    allowLoopback: true,
+    allowedRemoteHosts: ["portal-a.lampas.test", "portal-b.lampas.test"],
+  });
 
   // Import production main.ts to register IPC channels
   await import("../src/main");
 
-  // Signal readiness and await deterministic registration of all 36 channels
+  // Signal readiness and await deterministic registration of all 37 handles + 1 listener
   readyResolver!();
 
   await new Promise<void>((resolve, reject) => {
@@ -212,6 +248,8 @@ try {
     };
     poll();
   });
+
+  ConfigManager.set({ gameDir });
 
   // 1. Inbound IPC Registration Inventory
   await runTest("Registration harness confirms 37 handles and 1 on channel", () => {
@@ -297,7 +335,7 @@ try {
     if (openedPaths.length !== 0) throw new Error("Expected openedPaths to remain empty");
   });
 
-  // 6. utils:openKnownLocation opens approved paths and rejects arbitrary targets
+  // 6. utils:openKnownLocation opens approved locations and rejects arbitrary targets
   await runTest("utils:openKnownLocation opens approved locations and rejects arbitrary targets", async () => {
     openedExternals.length = 0;
     openedPaths.length = 0;
@@ -313,7 +351,7 @@ try {
     if (!threw) throw new Error("Expected utils:openKnownLocation to reject unknown key");
   });
 
-  // Setup loopback fixtures: Origin A (legitimate portal) and Attacker Portal (Origin B)
+  // Setup loopback fixtures: Origin A (legitimate portal) and Destination B (attacker portal)
   interface CapturedRequest {
     method: string;
     url: string;
@@ -325,7 +363,15 @@ try {
   let capturedRequestsA: CapturedRequest[] = [];
   let delayNextServerAResponse = 0;
   let serverARespondWith401 = false;
-  let serverARedirectMetadataToB = 0;
+  let serverAExchangeBarrier: RequestBarrier | null = null;
+  let serverARefreshBarrier: RequestBarrier | null = null;
+  let serverARedirectVerifyToB = 0;
+  let serverARedirectRefreshToB = 0;
+  let serverARedirectExchangeToB = 0;
+  let serverARedirectStatusToB = 0;
+  let serverARedirectChannelToB = 0;
+  let serverARedirectReleaseToB = 0;
+  let serverARedirectManifestToB = 0;
   let serverARedirectBlobUrl = "";
   let attackerBlobContent: { path: string; content: Buffer } | null = null;
 
@@ -349,32 +395,12 @@ try {
         return;
       }
 
-      if (req.url?.startsWith("/api/v1/channels/")) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ channel: "stable", version: "2.0.0" }));
-        return;
-      }
-
-      if (req.url?.startsWith("/api/v1/releases/")) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          pack: "Lampas 2",
-          version: "2.0.0",
-          protocol: 3,
-          minecraft: "26.2",
-          loader: { type: "fabric", version: "0.19.3" },
-          files: [],
-          mods: [],
-        }));
-        return;
-      }
-
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ valid: true, user: { id: "u-attacker", name: "Attacker", minecraftUsername: "Attacker", minecraftUuid: "00000000-0000-0000-0000-000000000000" } }));
+      res.end(JSON.stringify({ valid: false, error: "Unauthorized on B" }));
     });
   });
 
-  serverA = http.createServer((req, res) => {
+  serverA = http.createServer(async (req, res) => {
     let bodyChunks: Buffer[] = [];
     req.on("data", (chunk) => bodyChunks.push(chunk));
     req.on("end", async () => {
@@ -391,33 +417,125 @@ try {
         await new Promise((r) => setTimeout(r, d));
       }
 
-      if (serverARespondWith401) {
-        serverARespondWith401 = false;
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Unauthorized" }));
-        return;
-      }
-
-      if (serverARedirectMetadataToB > 0 && (req.url?.startsWith("/api/v1/channels") || req.url?.startsWith("/api/v1/releases"))) {
-        const code = serverARedirectMetadataToB;
-        res.writeHead(code, { Location: `${attackerPortal}${req.url}` });
-        res.end();
-        return;
-      }
-
-      if (serverARedirectBlobUrl && req.url?.startsWith("/api/v1/blobs/test-blob-redirect")) {
-        res.writeHead(302, { Location: serverARedirectBlobUrl });
-        res.end();
-        return;
-      }
-
-      if (req.url?.startsWith("/api/v1/channels/")) {
+      // 1. Verify endpoint
+      if (req.url === "/api/v1/auth/verify") {
+        if (serverARedirectVerifyToB > 0) {
+          const code = serverARedirectVerifyToB;
+          res.writeHead(code, { Location: `${attackerPortal}/api/v1/auth/verify` });
+          res.end();
+          return;
+        }
+        if (serverARespondWith401) {
+          serverARespondWith401 = false;
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Unauthorized" }));
+          return;
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ channel: "stable", version: "2.0.0" }));
+        res.end(JSON.stringify({
+          valid: true,
+          user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
+        }));
         return;
       }
 
+      // 2. Refresh endpoint
+      if (req.url === "/api/v1/auth/refresh") {
+        if (serverARefreshBarrier) {
+          const barrier = serverARefreshBarrier;
+          barrier.notifyRequestReceived();
+          await barrier.waitToRelease();
+        }
+        if (serverARedirectRefreshToB > 0) {
+          const code = serverARedirectRefreshToB;
+          res.writeHead(code, { Location: `${attackerPortal}/api/v1/auth/refresh` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          valid: true,
+          token: "syn-refreshed-token-a",
+          refreshToken: "syn-refreshed-refresh-a",
+          user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
+        }));
+        return;
+      }
+
+      // 3. Token exchange endpoint
+      if (req.url === "/api/v1/auth/exchange") {
+        if (serverAExchangeBarrier) {
+          const barrier = serverAExchangeBarrier;
+          barrier.notifyRequestReceived();
+          await barrier.waitToRelease();
+        }
+        if (serverARedirectExchangeToB > 0) {
+          const code = serverARedirectExchangeToB;
+          res.writeHead(code, { Location: `${attackerPortal}/api/v1/auth/exchange` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          token: "syn-exchanged-token-a",
+          refreshToken: "syn-exchanged-refresh-a",
+          user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
+        }));
+        return;
+      }
+
+      // 4. Server status endpoint
+      if (req.url === "/api/v1/server/status") {
+        if (serverARedirectStatusToB > 0) {
+          const code = serverARedirectStatusToB;
+          res.writeHead(code, { Location: `${attackerPortal}/api/v1/server/status` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ online: true, players: { online: 5, max: 20 } }));
+        return;
+      }
+
+      // 5. Channel endpoint
+      if (req.url?.startsWith("/api/v1/channels/")) {
+        if (serverARedirectChannelToB > 0) {
+          const code = serverARedirectChannelToB;
+          res.writeHead(code, { Location: `${attackerPortal}${req.url}` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ channel: "stable", releaseId: "rel-1", version: "2.0.0" }));
+        return;
+      }
+
+      // 6. Manifest endpoint: /api/v1/releases/<version>/client-manifest
+      if (req.url?.includes("/client-manifest")) {
+        if (serverARedirectManifestToB > 0) {
+          const code = serverARedirectManifestToB;
+          res.writeHead(code, { Location: `${attackerPortal}${req.url}` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          version: "2.0.0",
+          protocol: 3,
+          files: [],
+          mods: [],
+        }));
+        return;
+      }
+
+      // 7. Release endpoint: /api/v1/releases/
       if (req.url?.startsWith("/api/v1/releases/")) {
+        if (serverARedirectReleaseToB > 0) {
+          const code = serverARedirectReleaseToB;
+          res.writeHead(code, { Location: `${attackerPortal}${req.url}` });
+          res.end();
+          return;
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           pack: "Lampas 2",
@@ -425,19 +543,22 @@ try {
           protocol: 3,
           minecraft: "26.2",
           loader: { type: "fabric", version: "0.19.3" },
+          manifestId: "man-1",
           files: [],
           mods: [],
         }));
         return;
       }
 
+      // 8. Blob redirect
+      if (serverARedirectBlobUrl && req.url?.startsWith("/api/v1/blobs/test-blob-redirect")) {
+        res.writeHead(302, { Location: serverARedirectBlobUrl });
+        res.end();
+        return;
+      }
+
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        valid: true,
-        token: "syn-new-token",
-        refreshToken: "syn-new-refresh",
-        user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
-      }));
+      res.end(JSON.stringify({ ok: true }));
     });
   });
 
@@ -454,15 +575,33 @@ try {
   allowedDestinations.add(attackerPortal);
   allowedDestinations.add(originAPortal);
 
-  // Set synthetic credentials bound to originAPortal
-  ConfigManager.establishSession(originAPortal, {
-    token: "syn-test-bearer-token-12345",
-    refreshToken: "syn-test-refresh-token-67890",
-    minecraftAccessToken: "syn-test-mc-token-abcdef",
-  });
+  async function triggerOAuthCallback(code: string = "test-auth-code"): Promise<Response> {
+    const deadline = Date.now() + 3000;
+    while (openedExternals.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    if (openedExternals.length === 0) {
+      throw new Error("openExternal was not called during OAuth initiation");
+    }
+    const lastUrl = openedExternals[openedExternals.length - 1];
+    const parsed = new URL(lastUrl);
+    const callbackPort = parsed.searchParams.get("port");
+    const state = parsed.searchParams.get("state");
+    if (!callbackPort || !state) {
+      throw new Error(`Invalid OAuth authUrl opened: ${lastUrl}`);
+    }
+    const cbOrigin = `http://127.0.0.1:${callbackPort}`;
+    allowedDestinations.add(cbOrigin);
+    return fetch(`${cbOrigin}/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`);
+  }
 
   // 7. [Service-Level] LauncherAuth.verifySession ignores caller portalUrl and protects bound session
   await runTest("[Service-Level] LauncherAuth.verifySession ignores caller portalUrl and protects bound session", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "syn-test-bearer-token-12345",
+      refreshToken: "syn-test-refresh-token-67890",
+      minecraftAccessToken: "syn-test-mc-token-abcdef",
+    });
     capturedRequests = [];
     capturedRequestsA = [];
     const result = await LauncherAuth.verifySession(attackerPortal);
@@ -484,6 +623,11 @@ try {
 
   // 8. [Service-Level] LauncherAuth.refreshSession ignores caller portalUrl and protects bound session
   await runTest("[Service-Level] LauncherAuth.refreshSession ignores caller portalUrl and protects bound session", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "syn-test-bearer-token-12345",
+      refreshToken: "syn-test-refresh-token-67890",
+      minecraftAccessToken: "syn-test-mc-token-abcdef",
+    });
     capturedRequests = [];
     capturedRequestsA = [];
     const result = await LauncherAuth.refreshSession(attackerPortal);
@@ -541,56 +685,165 @@ try {
     }
   });
 
-  // 11. [Service-Level] LauncherAuth rejects 3xx redirects
-  await runTest("[Service-Level] LauncherAuth.verifySession & refreshSession reject 3xx redirects", async () => {
-    let redirectServer: http.Server | null = null;
+  // 11. [Policy] Packaged production rejects loopback destinations and ignores env trust expansion
+  await runTest("[Policy] Packaged production rejects loopback destinations and ignores env trust expansion", () => {
     try {
-      redirectServer = http.createServer((_req, res) => {
-        res.writeHead(302, { Location: "http://attacker.invalid/hijack" });
-        res.end();
-      });
-      await new Promise<void>((resolve) => redirectServer!.listen(0, "127.0.0.1", () => resolve()));
-      const redirectPort = (redirectServer.address() as any).port;
-      const redirectPortal = `http://127.0.0.1:${redirectPort}`;
-      allowedDestinations.add(redirectPortal);
+      PortalPolicy.setProductionOverride(true);
+      process.env.LAMPAS_ALLOWED_PORTAL_HOSTS = "attacker.invalid,custom-portal.test";
+      process.env.NODE_ENV = "development";
 
-      ConfigManager.establishSession(redirectPortal, {
-        token: "syn-test-token-redirect",
-        refreshToken: "syn-test-refresh-redirect",
-      });
-
-      const verifyRes = await LauncherAuth.verifySession();
-      if (verifyRes.valid !== false) {
-        throw new Error("Expected verifySession to reject 302 redirect");
+      let threw = false;
+      try {
+        normalizePortalUrl("http://localhost:3000");
+      } catch {
+        threw = true;
       }
+      if (!threw) throw new Error("Expected loopback to be rejected in packaged production");
 
-      const refreshRes = await LauncherAuth.refreshSession();
-      if (refreshRes.valid !== false) {
-        throw new Error("Expected refreshSession to reject 302 redirect");
+      threw = false;
+      try {
+        normalizePortalUrl("https://attacker.invalid");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected unapproved remote host to be rejected in packaged production");
+
+      threw = false;
+      try {
+        normalizePortalUrl("https://custom-portal.test");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected env-expanded host to be rejected in packaged production");
+
+      const lampasUrl = normalizePortalUrl("https://dev.lampas.town");
+      if (lampasUrl !== "https://dev.lampas.town") {
+        throw new Error(`Expected dev.lampas.town to be allowed in production, got: ${lampasUrl}`);
       }
     } finally {
-      if (redirectServer) {
-        await new Promise<void>((resolve) => redirectServer!.close(() => resolve()));
-      }
+      PortalPolicy.setProductionOverride(null);
+      delete process.env.LAMPAS_ALLOWED_PORTAL_HOSTS;
+      process.env.NODE_ENV = "test";
+      PortalPolicy.configureDevelopmentPolicy({
+        allowLoopback: true,
+        allowedRemoteHosts: ["portal-a.lampas.test", "portal-b.lampas.test"],
+      });
     }
   });
 
-  // 12. [Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B
+  // 12. [Opener] resolveAndValidateKnownLocation rejects escaping symlinks and ancestor escapes to outside sentinels
+  await runTest("[Opener] resolveAndValidateKnownLocation rejects escaping symlinks and ancestor escapes to outside sentinels", async () => {
+    openedPaths.length = 0;
+    openedExternals.length = 0;
+    ConfigManager.set({ gameDir });
+
+    const outsideSentinelDir = path.join(testRoot, "outside-sentinel-dir");
+    const outsideSentinelFile = path.join(testRoot, "outside-sentinel-file.txt");
+    if (!fs.existsSync(outsideSentinelDir)) fs.mkdirSync(outsideSentinelDir, { recursive: true });
+    fs.writeFileSync(outsideSentinelFile, "sentinel-payload");
+
+    // 1. Escaping symlink: <gameDir>/mods is a symlink pointing to outsideSentinelDir
+    const modsPath = path.join(gameDir, "mods");
+    if (fs.existsSync(modsPath)) fs.rmSync(modsPath, { recursive: true, force: true });
+    try {
+      fs.symlinkSync(outsideSentinelDir, modsPath, process.platform === "win32" ? "junction" : "dir");
+    } catch {}
+
+    if (fs.existsSync(modsPath)) {
+      const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+      let threw = false;
+      try {
+        await knownHandler({}, "modsDir");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openKnownLocation to reject escaping modsDir symlink");
+      if (openedPaths.length !== 0) throw new Error("Escaping symlink triggered shell.openPath!");
+
+      const pathHandler = ipcHandlers.get("utils:openPath")!;
+      threw = false;
+      try {
+        await pathHandler({}, "modsDir");
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openPath to reject escaping modsDir symlink");
+      if (openedPaths.length !== 0) throw new Error("Escaping symlink triggered shell.openPath via openPath!");
+
+      fs.rmSync(modsPath, { recursive: true, force: true });
+    }
+
+    // 2. Escaping ancestor: <gameDir>/logs is a symlink to outsideSentinelDir containing latest.log
+    const logsPath = path.join(gameDir, "logs");
+    if (fs.existsSync(logsPath)) fs.rmSync(logsPath, { recursive: true, force: true });
+    const outsideLatestLog = path.join(outsideSentinelDir, "latest.log");
+    fs.writeFileSync(outsideLatestLog, "minecraft log data");
+    try {
+      fs.symlinkSync(outsideSentinelDir, logsPath, process.platform === "win32" ? "junction" : "dir");
+    } catch {}
+
+    if (fs.existsSync(logsPath)) {
+      const mcLogHandler = ipcHandlers.get("utils:openMinecraftLog")!;
+      let threw = false;
+      try {
+        await mcLogHandler({});
+      } catch {
+        threw = true;
+      }
+      if (!threw) throw new Error("Expected utils:openMinecraftLog to reject escaping logs ancestor symlink");
+      if (openedPaths.length !== 0) throw new Error("Escaping ancestor triggered shell.openPath!");
+
+      fs.rmSync(logsPath, { recursive: true, force: true });
+    }
+
+    // 3. Failed web link does NOT fall back to local opening
+    const pathHandler = ipcHandlers.get("utils:openPath")!;
+    let threw = false;
+    try {
+      await pathHandler({}, "javascript:alert(1)");
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openPath to reject javascript: URL");
+    if (openedPaths.length !== 0 || openedExternals.length !== 0) {
+      throw new Error("Rejected web link triggered shell opener!");
+    }
+
+    // 4. Direct outside sentinel path rejected
+    threw = false;
+    try {
+      await pathHandler({}, outsideSentinelFile);
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("Expected utils:openPath to reject direct outside sentinel path");
+    if (openedPaths.length !== 0) throw new Error("Outside sentinel triggered shell.openPath!");
+
+    // 5. Legitimate known locations succeed
+    fs.mkdirSync(path.join(gameDir, "mods"), { recursive: true });
+    const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
+    await knownHandler({}, "modsDir");
+    if ((openedPaths.length as number) !== 1) throw new Error("Expected legitimate modsDir to open");
+    const opened = openedPaths[0];
+    if (opened !== fs.realpathSync(path.join(gameDir, "mods"))) {
+      throw new Error(`Expected canonical modsDir opened, got: ${opened}`);
+    }
+    openedPaths.length = 0;
+  });
+
+  // 13. [Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B
   await runTest("[Regression Gate 1] Renderer-controlled session-binding forgery via config:set is rejected and leaks 0 credentials to origin B", async () => {
-    // 1. Establish valid session for Origin A
     ConfigManager.establishSession(originAPortal, {
       token: "secret-token-origin-a-9999",
       refreshToken: "secret-refresh-origin-a-9999",
     });
 
-    // 2. Renderer attempts to forge session binding to attackerPortal (Origin B) via IPC config:set
     const handler = ipcHandlers.get("config:set")!;
     await handler({}, {
       portalUrl: attackerPortal,
       sessionPortalUrl: attackerPortal,
     });
 
-    // Verify sessionPortalUrl was stripped from renderer input and credentials were wiped on origin change
     const afterSet = ConfigManager.get();
     if (afterSet.sessionPortalUrl === attackerPortal) {
       throw new Error("sessionPortalUrl was forged via config:set!");
@@ -599,23 +852,19 @@ try {
       throw new Error("token was not wiped when changing portalUrl to attackerPortal!");
     }
 
-    // 3. Clear captured requests on Origin B
     capturedRequests = [];
     capturedRequestsA = [];
 
-    // 4. Invoke verify
     const verifyRes = await LauncherAuth.verifySession(attackerPortal);
     if (verifyRes.valid !== false) {
       throw new Error("Expected verifySession to reject unauthenticated session");
     }
 
-    // 5. Invoke refresh
     const refreshRes = await LauncherAuth.refreshSession(attackerPortal);
     if (refreshRes.valid !== false) {
       throw new Error("Expected refreshSession to reject unauthenticated session");
     }
 
-    // 6. Invoke status
     let statusThrew = false;
     try {
       await ServerStatusClient.getStatus();
@@ -629,7 +878,6 @@ try {
       throw new Error("Expected ServerStatusClient.getStatus to fail when session is invalid");
     }
 
-    // 7. Invoke sync
     let syncThrew = false;
     try {
       await LauncherSync.syncClient(() => {});
@@ -643,7 +891,6 @@ try {
       throw new Error("Expected syncClient to fail due to lack of authentication");
     }
 
-    // 8. Assert ZERO Origin A credentials reached Origin B (attackerPortal)
     for (const r of capturedRequests) {
       const authHeader = (r.headers["authorization"] || "") as string;
       if (authHeader.includes("secret-token-origin-a-9999") || authHeader.includes("secret-refresh-origin-a-9999")) {
@@ -655,7 +902,273 @@ try {
     }
   });
 
-  // 13. [Regression Gate 1] Race safety: portal A -> B switch during in-flight verify ignores late A completion
+  // 14. [Regression Gate 1] Real OAuth login flow successfully completes code exchange and establishes session
+  await runTest("[Regression Gate 1] Real OAuth login flow successfully completes code exchange and establishes session", async () => {
+    ConfigManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+    openedExternals.length = 0;
+
+    const loginPromise = LauncherAuth.loginWithPortal();
+    const cbRes = await triggerOAuthCallback("auth-code-legitimate");
+    if (!cbRes.ok) {
+      throw new Error(`Expected callback to return 200, got: ${cbRes.status}`);
+    }
+
+    const loginResult = await loginPromise;
+    if (!loginResult.token || loginResult.token !== "syn-exchanged-token-a") {
+      throw new Error(`Unexpected token from login: ${loginResult.token}`);
+    }
+
+    const current = ConfigManager.get();
+    if (current.token !== "syn-exchanged-token-a") {
+      throw new Error(`Token not established: ${current.token}`);
+    }
+    if (current.sessionPortalUrl !== originAPortal) {
+      throw new Error(`sessionPortalUrl not established: ${current.sessionPortalUrl}`);
+    }
+  });
+
+  // 15. [Regression Gate 1] Origin-change invalidation: Case 1 - Fresh logged-out login at A, settings A->B->A before callback
+  await runTest("[Regression Gate 1] Origin-change invalidation: Case 1 - Fresh logged-out login at A, settings A->B->A before callback", async () => {
+    ConfigManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+    openedExternals.length = 0;
+
+    const loginPromise = LauncherAuth.loginWithPortal();
+    const deadline = Date.now() + 3000;
+    while (openedExternals.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const lastUrl = openedExternals[openedExternals.length - 1];
+    const parsed = new URL(lastUrl);
+    const callbackPort = parsed.searchParams.get("port")!;
+    const state = parsed.searchParams.get("state")!;
+    allowedDestinations.add(`http://127.0.0.1:${callbackPort}`);
+
+    // Settings change A -> B -> A before callback
+    ConfigManager.set({ portalUrl: attackerPortal });
+    ConfigManager.set({ portalUrl: originAPortal });
+
+    // Trigger callback
+    const cbRes = await fetch(`http://127.0.0.1:${callbackPort}/callback?code=code-1&state=${state}`);
+    if (cbRes.status !== 400) {
+      throw new Error(`Expected callback to return 400, got: ${cbRes.status}`);
+    }
+
+    let loginThrew = false;
+    try {
+      await loginPromise;
+    } catch {
+      loginThrew = true;
+    }
+    if (!loginThrew) throw new Error("Expected login to fail when origin changed A->B->A before callback");
+
+    const current = ConfigManager.get();
+    if (current.token !== undefined) {
+      throw new Error("Token was established despite invalidated login flow!");
+    }
+  });
+
+  // 16. [Regression Gate 1] Origin-change invalidation: Case 2 - Fresh logged-out login at A, settings A->B->A during exchange
+  await runTest("[Regression Gate 1] Origin-change invalidation: Case 2 - Fresh logged-out login at A, settings A->B->A during exchange", async () => {
+    ConfigManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+    openedExternals.length = 0;
+
+    const barrier = new RequestBarrier();
+    serverAExchangeBarrier = barrier;
+
+    const loginPromise = LauncherAuth.loginWithPortal();
+    const deadline = Date.now() + 3000;
+    while (openedExternals.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const lastUrl = openedExternals[openedExternals.length - 1];
+    const parsed = new URL(lastUrl);
+    const callbackPort = parsed.searchParams.get("port")!;
+    const state = parsed.searchParams.get("state")!;
+    allowedDestinations.add(`http://127.0.0.1:${callbackPort}`);
+
+    fetch(`http://127.0.0.1:${callbackPort}/callback?code=code-2&state=${state}`).catch(() => {});
+    await barrier.requestReceived;
+
+    // During exchange: settings change A -> B -> A
+    ConfigManager.set({ portalUrl: attackerPortal });
+    ConfigManager.set({ portalUrl: originAPortal });
+    barrier.release();
+
+    let loginThrew = false;
+    try {
+      await loginPromise;
+    } catch {
+      loginThrew = true;
+    }
+    if (!loginThrew) throw new Error("Expected login to fail when origin changed A->B->A during exchange");
+
+    const current = ConfigManager.get();
+    if (current.token !== undefined) {
+      throw new Error("Token was established despite origin change during exchange!");
+    }
+    serverAExchangeBarrier = null;
+  });
+
+  // 17. [Regression Gate 1] Origin-change invalidation: Case 3 - Fresh logged-out login at A, settings A->B without returning to A
+  await runTest("[Regression Gate 1] Origin-change invalidation: Case 3 - Fresh logged-out login at A, settings A->B without returning to A", async () => {
+    ConfigManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+    openedExternals.length = 0;
+
+    const barrier = new RequestBarrier();
+    serverAExchangeBarrier = barrier;
+
+    const loginPromise = LauncherAuth.loginWithPortal();
+    const deadline = Date.now() + 3000;
+    while (openedExternals.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const lastUrl = openedExternals[openedExternals.length - 1];
+    const parsed = new URL(lastUrl);
+    const callbackPort = parsed.searchParams.get("port")!;
+    const state = parsed.searchParams.get("state")!;
+    allowedDestinations.add(`http://127.0.0.1:${callbackPort}`);
+
+    fetch(`http://127.0.0.1:${callbackPort}/callback?code=code-3&state=${state}`).catch(() => {});
+    await barrier.requestReceived;
+
+    // Settings change A -> B
+    ConfigManager.set({ portalUrl: attackerPortal });
+    barrier.release();
+
+    let loginThrew = false;
+    try {
+      await loginPromise;
+    } catch {
+      loginThrew = true;
+    }
+    if (!loginThrew) throw new Error("Expected login to fail when origin changed A->B");
+
+    const current = ConfigManager.get();
+    if (current.token !== undefined) {
+      throw new Error("Token was established on origin B from origin A exchange!");
+    }
+    serverAExchangeBarrier = null;
+  });
+
+  // 18. [Regression Gate 1] Origin-change invalidation: Case 4 - Unchanged portal does not invalidate in-flight login
+  await runTest("[Regression Gate 1] Origin-change invalidation: Case 4 - Unchanged portal does not invalidate in-flight login", async () => {
+    ConfigManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+    openedExternals.length = 0;
+
+    const barrier = new RequestBarrier();
+    serverAExchangeBarrier = barrier;
+
+    const loginPromise = LauncherAuth.loginWithPortal();
+    const deadline = Date.now() + 3000;
+    while (openedExternals.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const lastUrl = openedExternals[openedExternals.length - 1];
+    const parsed = new URL(lastUrl);
+    const callbackPort = parsed.searchParams.get("port")!;
+    const state = parsed.searchParams.get("state")!;
+    allowedDestinations.add(`http://127.0.0.1:${callbackPort}`);
+
+    fetch(`http://127.0.0.1:${callbackPort}/callback?code=code-4&state=${state}`).catch(() => {});
+    await barrier.requestReceived;
+
+    // Unchanged portalUrl and unrelated setting
+    ConfigManager.set({ portalUrl: originAPortal, allocatedRamGb: 6 });
+    barrier.release();
+
+    const res = await loginPromise;
+    if (!res.token) throw new Error("Expected login to succeed when portal was unchanged");
+
+    const current = ConfigManager.get();
+    if (current.token !== "syn-exchanged-token-a") {
+      throw new Error(`Token not established: ${current.token}`);
+    }
+    if (current.allocatedRamGb !== 6) {
+      throw new Error(`Setting not preserved: ${current.allocatedRamGb}`);
+    }
+    serverAExchangeBarrier = null;
+  });
+
+  // 19. [Regression Gate 1] Origin-change invalidation: Case 5 - In-flight exchange while credentials exist
+  await runTest("[Regression Gate 1] Origin-change invalidation: Case 5 - In-flight exchange while credentials exist", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "existing-pre-exchange-token",
+      refreshToken: "existing-pre-exchange-refresh",
+    });
+    openedExternals.length = 0;
+
+    const barrier = new RequestBarrier();
+    serverAExchangeBarrier = barrier;
+
+    const loginPromise = LauncherAuth.loginWithPortal();
+    const deadline = Date.now() + 3000;
+    while (openedExternals.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const lastUrl = openedExternals[openedExternals.length - 1];
+    const parsed = new URL(lastUrl);
+    const callbackPort = parsed.searchParams.get("port")!;
+    const state = parsed.searchParams.get("state")!;
+    allowedDestinations.add(`http://127.0.0.1:${callbackPort}`);
+
+    fetch(`http://127.0.0.1:${callbackPort}/callback?code=code-5&state=${state}`).catch(() => {});
+    await barrier.requestReceived;
+
+    // Settings change A -> B wipes credentials and advances generation
+    ConfigManager.set({ portalUrl: attackerPortal });
+    barrier.release();
+
+    let loginThrew = false;
+    try {
+      await loginPromise;
+    } catch {
+      loginThrew = true;
+    }
+    if (!loginThrew) throw new Error("Expected login to fail when origin changed during exchange");
+
+    const current = ConfigManager.get();
+    if (current.token !== undefined) {
+      throw new Error(`Credentials resurrected: ${current.token}`);
+    }
+    serverAExchangeBarrier = null;
+  });
+
+  // 20. [Regression Gate 1] Origin-change invalidation: Case 6 - Refresh while origin changes
+  await runTest("[Regression Gate 1] Origin-change invalidation: Case 6 - Refresh while origin changes", async () => {
+    ConfigManager.establishSession(originAPortal, {
+      token: "refresh-test-token-case6",
+      refreshToken: "refresh-test-refresh-case6",
+    });
+
+    const barrier = new RequestBarrier();
+    serverARefreshBarrier = barrier;
+
+    const refreshPromise = LauncherAuth.refreshSession();
+    await barrier.requestReceived;
+
+    // Settings change A -> B -> A during in-flight refresh
+    ConfigManager.set({ portalUrl: attackerPortal });
+    ConfigManager.set({ portalUrl: originAPortal });
+    barrier.release();
+
+    const res = await refreshPromise;
+    if (res.valid !== false) {
+      throw new Error("Expected refresh to be marked invalid after origin changed");
+    }
+
+    const current = ConfigManager.get();
+    if (current.token !== undefined) {
+      throw new Error(`Token resurrected after origin change during refresh: ${current.token}`);
+    }
+    serverARefreshBarrier = null;
+  });
+
+  // 21. [Regression Gate 1] Race safety: portal A -> B switch during in-flight verify ignores late A completion
   await runTest("[Regression Gate 1] Race safety: portal A -> B switch during in-flight verify ignores late A completion", async () => {
     ConfigManager.establishSession(originAPortal, {
       token: "a-token-for-race",
@@ -689,7 +1202,7 @@ try {
     }
   });
 
-  // 14. [Regression Gate 1] Race safety: rapid portal A -> B -> A switching rejects stale response
+  // 22. [Regression Gate 1] Race safety: rapid portal A -> B -> A switching rejects stale response
   await runTest("[Regression Gate 1] Race safety: rapid portal A -> B -> A switching rejects stale response", async () => {
     ConfigManager.establishSession(originAPortal, {
       token: "gen1-token-a",
@@ -719,8 +1232,8 @@ try {
     }
   });
 
-  // 15. [Regression Gate 1] Race safety: logout during in-flight exchange discards late tokens
-  await runTest("[Regression Gate 1] Race safety: logout during in-flight exchange discards late tokens", async () => {
+  // 23. [Regression Gate 1] Race safety: logout during in-flight refresh discards late tokens
+  await runTest("[Regression Gate 1] Race safety: logout during in-flight refresh discards late tokens", async () => {
     ConfigManager.establishSession(originAPortal, {
       token: "logout-test-token",
       refreshToken: "logout-test-refresh",
@@ -747,7 +1260,7 @@ try {
     }
   });
 
-  // 16. [Regression Gate 1] Race safety: old 401 failure arriving after new session establishment does not clear new credentials
+  // 24. [Regression Gate 1] Race safety: old 401 failure arriving after new session establishment does not clear new credentials
   await runTest("[Regression Gate 1] Race safety: old 401 failure arriving after new session establishment does not clear new credentials", async () => {
     serverARespondWith401 = true;
     delayNextServerAResponse = 50;
@@ -777,69 +1290,208 @@ try {
     }
   });
 
-  // 17. [Regression Gate 1] Sync metadata 302/307/308 redirects from A to B are rejected with 0 requests to B and no cache fallback
-  await runTest("[Regression Gate 1] Sync metadata 302/307/308 redirects from A to B are rejected with 0 requests to B and no cache fallback", async () => {
-    ConfigManager.establishSession(originAPortal, {
-      token: "syn-metadata-secret-token",
-      refreshToken: "syn-metadata-secret-refresh",
-    });
+  // 25. [Regression Gate 1] Independent redirect: auth:verify rejects 302/307/308 redirects with 0 requests to B
+  await runTest("[Regression Gate 1] Independent redirect: auth:verify rejects 302/307/308 redirects with 0 requests to B", async () => {
+    for (const code of [302, 307, 308]) {
+      ConfigManager.establishSession(originAPortal, {
+        token: `v-tok-${code}`,
+        refreshToken: `v-ref-${code}`,
+      });
+      serverARedirectVerifyToB = code;
+      capturedRequests = [];
+      capturedRequestsA = [];
 
-    // 302 redirect
-    serverARedirectMetadataToB = 302;
-    capturedRequests = [];
-    capturedRequestsA = [];
-
-    let threw = false;
-    try {
-      await LauncherSync.syncClient(() => {});
-    } catch {
-      threw = true;
+      const res = await LauncherAuth.verifySession();
+      if (res.valid !== false) {
+        throw new Error(`Expected verifySession to reject ${code} redirect`);
+      }
+      if (capturedRequestsA.length !== 1) {
+        throw new Error(`Expected 1 verify request at Origin A for ${code}, got ${capturedRequestsA.length}`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests leaked to Destination B during verify ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
     }
-    if (!threw) {
-      throw new Error("Expected syncClient to fail when metadata endpoint returns 302 redirect");
-    }
-    const reqA = capturedRequestsA.find((r) => r.url === "/api/v1/channels/stable");
-    if (!reqA) {
-      throw new Error("Origin A was not called with the metadata request before rejection!");
-    }
-    if (capturedRequests.length !== 0) {
-      throw new Error(`Requests unexpectedly reached Destination B during metadata 302! Captured: ${JSON.stringify(capturedRequests)}`);
-    }
-
-    // 307 redirect
-    serverARedirectMetadataToB = 307;
-    capturedRequests = [];
-    capturedRequestsA = [];
-    threw = false;
-    try {
-      await LauncherSync.syncClient(() => {});
-    } catch {
-      threw = true;
-    }
-    if (!threw) throw new Error("Expected syncClient to reject 307 redirect");
-    if (capturedRequests.length !== 0) {
-      throw new Error(`Requests reached Destination B during metadata 307! Captured: ${JSON.stringify(capturedRequests)}`);
-    }
-
-    // 308 redirect
-    serverARedirectMetadataToB = 308;
-    capturedRequests = [];
-    capturedRequestsA = [];
-    threw = false;
-    try {
-      await LauncherSync.syncClient(() => {});
-    } catch {
-      threw = true;
-    }
-    if (!threw) throw new Error("Expected syncClient to reject 308 redirect");
-    if (capturedRequests.length !== 0) {
-      throw new Error(`Requests reached Destination B during metadata 308! Captured: ${JSON.stringify(capturedRequests)}`);
-    }
-
-    serverARedirectMetadataToB = 0;
+    serverARedirectVerifyToB = 0;
   });
 
-  // 18. [Regression Gate 1] Legitimate file download follows safe redirect without auth headers
+  // 26. [Regression Gate 1] Independent redirect: auth:refresh rejects 302/307/308 redirects with 0 requests to B
+  await runTest("[Regression Gate 1] Independent redirect: auth:refresh rejects 302/307/308 redirects with 0 requests to B", async () => {
+    for (const code of [302, 307, 308]) {
+      ConfigManager.establishSession(originAPortal, {
+        token: `r-tok-${code}`,
+        refreshToken: `r-ref-${code}`,
+      });
+      serverARedirectRefreshToB = code;
+      capturedRequests = [];
+      capturedRequestsA = [];
+
+      const res = await LauncherAuth.refreshSession();
+      if (res.valid !== false) {
+        throw new Error(`Expected refreshSession to reject ${code} redirect`);
+      }
+      if (capturedRequestsA.length !== 1) {
+        throw new Error(`Expected 1 refresh request at Origin A for ${code}, got ${capturedRequestsA.length}`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests leaked to Destination B during refresh ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+    }
+    serverARedirectRefreshToB = 0;
+  });
+
+  // 27. [Regression Gate 1] Independent redirect: auth token exchange rejects 302/307/308 redirects with 0 requests to B
+  await runTest("[Regression Gate 1] Independent redirect: auth token exchange rejects 302/307/308 redirects with 0 requests to B", async () => {
+    for (const code of [302, 307, 308]) {
+      ConfigManager.resetForTesting();
+      ConfigManager.set({ portalUrl: originAPortal });
+      serverARedirectExchangeToB = code;
+      capturedRequests = [];
+      capturedRequestsA = [];
+      openedExternals.length = 0;
+
+      const loginPromise = LauncherAuth.loginWithPortal();
+      await triggerOAuthCallback(`code-redirect-${code}`);
+
+      let threw = false;
+      try {
+        await loginPromise;
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error(`Expected token exchange to fail on ${code} redirect`);
+      }
+      if (capturedRequestsA.length !== 1) {
+        throw new Error(`Expected 1 exchange request at Origin A for ${code}, got ${capturedRequestsA.length}`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests reached Destination B during exchange ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+    }
+    serverARedirectExchangeToB = 0;
+  });
+
+  // 28. [Regression Gate 1] Independent redirect: server status metadata endpoint rejects 302/307/308 redirects with 0 requests to B
+  await runTest("[Regression Gate 1] Independent redirect: server status metadata endpoint rejects 302/307/308 redirects with 0 requests to B", async () => {
+    for (const code of [302, 307, 308]) {
+      ConfigManager.establishSession(originAPortal, { token: `status-tok-${code}` });
+      serverARedirectStatusToB = code;
+      capturedRequests = [];
+      capturedRequestsA = [];
+
+      let threw = false;
+      try {
+        await ServerStatusClient.getStatus();
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error(`Expected ServerStatusClient.getStatus to reject ${code} redirect`);
+      }
+      if (capturedRequestsA.length !== 1) {
+        throw new Error(`Expected 1 status request at Origin A for ${code}, got ${capturedRequestsA.length}`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests leaked to Destination B during status ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+    }
+    serverARedirectStatusToB = 0;
+  });
+
+  // 29. [Regression Gate 1] Independent redirect: channel sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
+  await runTest("[Regression Gate 1] Independent redirect: channel sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present", async () => {
+    // Setup valid local fallback fixture on disk in gameDir
+    fs.mkdirSync(path.join(gameDir, ".lampas"), { recursive: true });
+    fs.writeFileSync(path.join(gameDir, ".lampas", "release.json"), JSON.stringify({
+      pack: "Lampas 2",
+      version: "2.0.0",
+      protocol: 3,
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      manifestId: "fallback-man",
+      files: [],
+      mods: [],
+    }));
+    fs.writeFileSync(path.join(gameDir, ".lampas", "installation.json"), JSON.stringify({
+      version: "2.0.0",
+      completedAt: new Date().toISOString(),
+    }));
+
+    for (const code of [302, 307, 308]) {
+      ConfigManager.establishSession(originAPortal, { token: `chan-tok-${code}` });
+      serverARedirectChannelToB = code;
+      capturedRequests = [];
+      capturedRequestsA = [];
+
+      let threw = false;
+      try {
+        await LauncherSync.syncClient(() => {});
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error(`Expected syncClient to fail on channel ${code} redirect despite local fallback`);
+      }
+      if (capturedRequestsA.length !== 1) {
+        throw new Error(`Expected 1 channel request at Origin A for ${code}, got ${capturedRequestsA.length}`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests reached Destination B on channel ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+    }
+    serverARedirectChannelToB = 0;
+  });
+
+  // 30. [Regression Gate 1] Independent redirect: release sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
+  await runTest("[Regression Gate 1] Independent redirect: release sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present", async () => {
+    for (const code of [302, 307, 308]) {
+      ConfigManager.establishSession(originAPortal, { token: `rel-tok-${code}` });
+      serverARedirectReleaseToB = code;
+      capturedRequests = [];
+      capturedRequestsA = [];
+
+      let threw = false;
+      try {
+        await LauncherSync.syncClient(() => {});
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error(`Expected syncClient to fail on release ${code} redirect despite local fallback`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests reached Destination B on release ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+    }
+    serverARedirectReleaseToB = 0;
+  });
+
+  // 31. [Regression Gate 1] Independent redirect: manifest sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present
+  await runTest("[Regression Gate 1] Independent redirect: manifest sync metadata endpoint rejects 302/307/308 redirects with valid local fallback fixture present", async () => {
+    for (const code of [302, 307, 308]) {
+      ConfigManager.establishSession(originAPortal, { token: `man-tok-${code}` });
+      serverARedirectManifestToB = code;
+      capturedRequests = [];
+      capturedRequestsA = [];
+
+      let threw = false;
+      try {
+        await LauncherSync.syncClient(() => {});
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error(`Expected syncClient to fail on manifest ${code} redirect despite local fallback`);
+      }
+      if (capturedRequests.length !== 0) {
+        throw new Error(`Requests reached Destination B on manifest ${code}! Captured: ${JSON.stringify(capturedRequests)}`);
+      }
+    }
+    serverARedirectManifestToB = 0;
+  });
+
+  // 32. [Regression Gate 1] Legitimate file download follows safe redirect without auth headers
   await runTest("[Regression Gate 1] Legitimate file download follows safe redirect without auth headers", async () => {
     const testContent = Buffer.from("legitimate file content from storage CDN");
     const testHash = crypto.createHash("sha256").update(testContent).digest("hex");
@@ -879,7 +1531,7 @@ try {
     attackerBlobContent = null;
   });
 
-  // 19. [Regression Gate 1] ConfigManager.get performs durable disk scrubbing of unbound tokens on disk
+  // 33. [Regression Gate 1] ConfigManager.get performs durable disk scrubbing of unbound tokens on disk
   await runTest("[Regression Gate 1] ConfigManager.get performs durable disk scrubbing of unbound tokens on disk", async () => {
     const configFilePath = path.join(userDataDir, "config.json");
     fs.writeFileSync(configFilePath, JSON.stringify({
@@ -899,54 +1551,6 @@ try {
     if (onDisk.token !== undefined || onDisk.refreshToken !== undefined || onDisk.minecraftAccessToken !== undefined) {
       throw new Error(`Durable disk scrubbing failed: disk still has secrets: ${JSON.stringify(onDisk)}`);
     }
-  });
-
-  // 20. [Regression Gate 1] Narrow opener helpers validate paths against approved roots and reject escape attempts
-  await runTest("[Regression Gate 1] Narrow opener helpers validate paths against approved roots and reject escape attempts", async () => {
-    openedPaths.length = 0;
-    openedExternals.length = 0;
-
-    const knownHandler = ipcHandlers.get("utils:openKnownLocation")!;
-    await knownHandler({}, "logsDir");
-    if (openedPaths.length !== 1 || !openedPaths[0].includes("logs")) {
-      throw new Error(`Expected logsDir opened, got: ${JSON.stringify(openedPaths)}`);
-    }
-
-    let threw = false;
-    try {
-      await knownHandler({}, "../../../windows/system32");
-    } catch {
-      threw = true;
-    }
-    if (!threw) throw new Error("Expected utils:openKnownLocation to reject traversal key");
-
-    openedPaths.length = 0;
-    const logsDirHandler = ipcHandlers.get("utils:openLogsDir")!;
-    await logsDirHandler({});
-    if (openedPaths.length !== 1) throw new Error("Expected openLogsDir to open logs directory");
-
-    openedPaths.length = 0;
-    openedExternals.length = 0;
-    const pathHandler = ipcHandlers.get("utils:openPath")!;
-    threw = false;
-    try {
-      await pathHandler({}, "javascript:alert(1)");
-    } catch {
-      threw = true;
-    }
-    if (!threw) throw new Error("Expected utils:openPath to reject javascript: URL");
-    if (openedPaths.length !== 0 || openedExternals.length !== 0) {
-      throw new Error("Rejected URL triggered an opener call!");
-    }
-
-    threw = false;
-    try {
-      await pathHandler({}, "C:\\Windows\\System32\\cmd.exe");
-    } catch {
-      threw = true;
-    }
-    if (!threw) throw new Error("Expected utils:openPath to reject arbitrary system path");
-    if (openedPaths.length !== 0) throw new Error("Rejected path was opened via shell.openPath!");
   });
 
   // Assert outbound request policy compliance: zero unapproved network attempts

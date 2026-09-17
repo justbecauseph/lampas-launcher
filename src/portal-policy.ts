@@ -44,6 +44,75 @@ export class WebOpeningPolicyError extends Error {
   }
 }
 
+export interface DevelopmentPortalPolicy {
+  allowLoopback?: boolean;
+  allowedRemoteHosts?: string[];
+}
+
+let developmentPolicy: DevelopmentPortalPolicy | null = null;
+let productionOverride: boolean | null = null;
+
+export const PortalPolicy = {
+  /**
+   * Main-only test/development construction to supply fixture policy.
+   */
+  configureDevelopmentPolicy(policy: DevelopmentPortalPolicy | null): void {
+    developmentPolicy = policy;
+  },
+
+  /**
+   * Override production state for testing.
+   */
+  setProductionOverride(isProd: boolean | null): void {
+    productionOverride = isProd;
+  },
+
+  resetForTesting(): void {
+    developmentPolicy = null;
+    productionOverride = null;
+  },
+
+  isPackagedProduction(): boolean {
+    if (productionOverride !== null) {
+      return productionOverride;
+    }
+    try {
+      const electron = require("electron");
+      return Boolean(electron.app?.isPackaged);
+    } catch {
+      return false;
+    }
+  },
+
+  isLoopbackAllowed(): boolean {
+    if (this.isPackagedProduction()) {
+      return false;
+    }
+    return Boolean(developmentPolicy?.allowLoopback);
+  },
+
+  isApprovedRemoteHost(hostname: string): boolean {
+    const lower = hostname.toLowerCase();
+    // Approved Lampas domain contract trusted in all modes
+    if (lower === "lampas.town" || lower.endsWith(".lampas.town")) {
+      return true;
+    }
+    // Packaged production must NOT expand Portal trust from LAMPAS_ALLOWED_PORTAL_HOSTS or NODE_ENV
+    if (this.isPackagedProduction()) {
+      return false;
+    }
+    // Explicit development portal hosts configured via development policy
+    if (developmentPolicy?.allowedRemoteHosts?.map((h) => h.toLowerCase()).includes(lower)) {
+      return true;
+    }
+    const envHosts = process.env.LAMPAS_ALLOWED_PORTAL_HOSTS?.split(",").map((h) => h.trim().toLowerCase()) || [];
+    if (envHosts.includes(lower)) {
+      return true;
+    }
+    return false;
+  },
+};
+
 /**
  * Checks if a hostname represents an exact local loopback endpoint.
  */
@@ -60,20 +129,10 @@ export function isExactLoopbackHost(hostname: string): boolean {
 /**
  * Checks if a remote hostname is approved according to the application contract.
  * Approved remote hosts: lampas.town and *.lampas.town.
- * Explicit development hosts may be configured via LAMPAS_ALLOWED_PORTAL_HOSTS.
+ * Packaged production does not expand trust from environment variables.
  */
 export function isApprovedRemoteHost(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  // Approved Lampas domain contract
-  if (lower === "lampas.town" || lower.endsWith(".lampas.town")) {
-    return true;
-  }
-  // Explicit development portal hosts configured via environment
-  const allowedDevHosts = process.env.LAMPAS_ALLOWED_PORTAL_HOSTS?.split(",").map((h) => h.trim().toLowerCase()) || [];
-  if (allowedDevHosts.includes(lower)) {
-    return true;
-  }
-  return false;
+  return PortalPolicy.isApprovedRemoteHost(hostname);
 }
 
 /**
@@ -158,6 +217,11 @@ export function normalizePortalUrl(url?: string): string {
   const isLoopback = isExactLoopbackHost(hostname);
 
   if (isLoopback) {
+    if (!PortalPolicy.isLoopbackAllowed()) {
+      throw new PortalPolicyError(
+        `Loopback portal destination '${hostname}' is not permitted without explicit development policy.`
+      );
+    }
     // Loopback development endpoints may use HTTP or HTTPS
     return parsed.origin;
   }

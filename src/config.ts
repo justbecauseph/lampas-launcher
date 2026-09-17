@@ -31,8 +31,8 @@ const DEFAULT_CONFIG: LauncherConfig = {
   noSync: false,
 };
 
-import { normalizePortalUrl, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError } from "./portal-policy";
-export { normalizePortalUrl, validateWebUrl, isApprovedRemoteHost, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError } from "./portal-policy";
+import { normalizePortalUrl, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError, PortalPolicy, type DevelopmentPortalPolicy } from "./portal-policy";
+export { normalizePortalUrl, validateWebUrl, isApprovedRemoteHost, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError, PortalPolicy, type DevelopmentPortalPolicy } from "./portal-policy";
 
 function valuesEqual(a: any, b: any): boolean {
   if (a === b) return true;
@@ -165,11 +165,16 @@ export class ConfigManager {
     const updated = { ...current, ...sanitizedConfig };
 
     if (sanitizedConfig.portalUrl !== undefined) {
-      const normalizedPortal = normalizePortalUrl(sanitizedConfig.portalUrl);
-      updated.portalUrl = normalizedPortal;
+      const priorCanonical = normalizePortalUrl(current.portalUrl);
+      const nextCanonical = normalizePortalUrl(sanitizedConfig.portalUrl);
+      updated.portalUrl = nextCanonical;
 
-      // Phase 1 Security: Portal origin changes must invalidate existing credentials based on trusted prior state
-      if (current.sessionPortalUrl && normalizedPortal !== current.sessionPortalUrl) {
+      // Phase 1 Security: Advance authentication generation on any actual active portal origin change,
+      // independently of whether an active session was already established.
+      const originChanged = priorCanonical !== nextCanonical;
+      const sessionMismatch = Boolean(current.sessionPortalUrl && nextCanonical !== current.sessionPortalUrl);
+
+      if (originChanged || sessionMismatch) {
         updated.token = undefined;
         updated.refreshToken = undefined;
         updated.minecraftAccessToken = undefined;

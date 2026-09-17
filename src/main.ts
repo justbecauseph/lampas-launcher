@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ConfigManager, validateWebUrl } from "./config";
+import { ConfigManager, validateWebUrl, PortalPolicy, getUserDataDir } from "./config";
 import { LauncherAuth } from "./auth";
 import { LauncherSync } from "./sync";
 import { GameRunner, parseJavaArgs } from "./game-runner";
@@ -112,6 +112,15 @@ app.whenReady().then(async () => {
   LauncherLogger.init();
   LauncherLogger.info(`Lampas Launcher initialized (App: ${app.getName()} ${app.getVersion()})`);
 
+  if (!app.isPackaged) {
+    PortalPolicy.configureDevelopmentPolicy({
+      allowLoopback: true,
+      allowedRemoteHosts: process.env.LAMPAS_ALLOWED_PORTAL_HOSTS
+        ? process.env.LAMPAS_ALLOWED_PORTAL_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
+        : undefined,
+    });
+  }
+
   try {
     await GameDirectoryManager.recoverInterruptedMove();
   } catch (err: any) {
@@ -147,7 +156,32 @@ app.whenReady().then(async () => {
   ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
   ipcMain.handle("window:close", () => mainWindow?.close());
 
-  // Helper: validate known location identifiers, expected types, and authorizations
+  // Helpers: physical ancestry and path containment
+  function isPathWithinOrEqual(childPath: string, parentPath: string): boolean {
+    const normChild = path.normalize(path.resolve(childPath));
+    const normParent = path.normalize(path.resolve(parentPath));
+    const rel = path.relative(normParent, normChild);
+    if (rel === "" || rel === ".") return true;
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
+    if (process.platform === "win32") {
+      const parentLower = normParent.toLowerCase().replace(/[\\/]+$/, "");
+      const childLower = normChild.toLowerCase();
+      return childLower === parentLower || childLower.startsWith(parentLower + path.sep);
+    }
+    return true;
+  }
+
+  function findExistingAncestor(p: string): string {
+    let current = path.resolve(p);
+    while (!fs.existsSync(current)) {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return current;
+  }
+
+  // Helper: validate known location identifiers, expected types, physical ancestry, and canonical roots
   type KnownLocationId = "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog";
   const knownLocationIds: KnownLocationId[] = ["gameDir", "modsDir", "logsDir", "launcherLog", "minecraftLog"];
 
@@ -162,35 +196,76 @@ app.whenReady().then(async () => {
     let expectedType: "dir" | "file";
     let createIfMissing = false;
     let missingErrorMessage: string | undefined;
+    let canonicalAuthorizedRoot: string;
 
     switch (id) {
-      case "gameDir":
+      case "gameDir": {
         targetPath = path.resolve(config.gameDir);
         expectedType = "dir";
         createIfMissing = true;
+        const nearestAncestor = findExistingAncestor(targetPath);
+        if (!fs.existsSync(nearestAncestor)) {
+          throw new Error(`Game directory ancestor does not exist: ${targetPath}`);
+        }
+        canonicalAuthorizedRoot = fs.realpathSync(nearestAncestor);
         break;
-      case "modsDir":
-        targetPath = path.resolve(path.join(config.gameDir, "mods"));
+      }
+      case "modsDir": {
+        const rawGameDir = path.resolve(config.gameDir);
+        if (!fs.existsSync(rawGameDir)) {
+          fs.mkdirSync(rawGameDir, { recursive: true });
+        }
+        canonicalAuthorizedRoot = fs.realpathSync(rawGameDir);
+        targetPath = path.resolve(canonicalAuthorizedRoot, "mods");
         expectedType = "dir";
         createIfMissing = true;
         break;
-      case "logsDir":
+      }
+      case "logsDir": {
+        const rawUserData = path.resolve(getUserDataDir());
+        if (!fs.existsSync(rawUserData)) {
+          fs.mkdirSync(rawUserData, { recursive: true });
+        }
+        canonicalAuthorizedRoot = fs.realpathSync(rawUserData);
         targetPath = path.resolve(LauncherLogger.getLogsDir());
         expectedType = "dir";
         createIfMissing = true;
         break;
-      case "launcherLog":
+      }
+      case "launcherLog": {
+        const rawLogsDir = path.resolve(LauncherLogger.getLogsDir());
+        if (!fs.existsSync(rawLogsDir)) {
+          throw new Error("Launcher log file does not exist yet.");
+        }
+        canonicalAuthorizedRoot = fs.realpathSync(rawLogsDir);
         targetPath = path.resolve(LauncherLogger.getLogPath());
         expectedType = "file";
         missingErrorMessage = "Launcher log file does not exist yet.";
         break;
-      case "minecraftLog":
-        targetPath = path.resolve(path.join(config.gameDir, "logs", "latest.log"));
+      }
+      case "minecraftLog": {
+        const rawGameDir = path.resolve(config.gameDir);
+        if (!fs.existsSync(rawGameDir)) {
+          throw new Error("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
+        }
+        canonicalAuthorizedRoot = fs.realpathSync(rawGameDir);
+        targetPath = path.resolve(canonicalAuthorizedRoot, "logs", "latest.log");
         expectedType = "file";
         missingErrorMessage = "Minecraft log (latest.log) not found. Launch Minecraft first to create it.";
         break;
+      }
       default:
         throw new Error(`Unknown location '${locationId}'. Permitted locations: gameDir, modsDir, logsDir, launcherLog, minecraftLog`);
+    }
+
+    // Pre-creation: validate physical ancestry against authorized canonical root
+    const existingAncestor = findExistingAncestor(targetPath);
+    if (!fs.existsSync(existingAncestor)) {
+      throw new Error(`No existing ancestor for path: ${targetPath}`);
+    }
+    const canonicalAncestor = fs.realpathSync(existingAncestor);
+    if (id !== "gameDir" && !isPathWithinOrEqual(canonicalAncestor, canonicalAuthorizedRoot)) {
+      throw new Error(`Refusing to create or open path with escaping ancestor: '${canonicalAncestor}' is outside root '${canonicalAuthorizedRoot}'`);
     }
 
     if (createIfMissing && !fs.existsSync(targetPath)) {
@@ -201,15 +276,21 @@ app.whenReady().then(async () => {
       throw new Error(missingErrorMessage || `Target location does not exist: ${targetPath}`);
     }
 
-    const stat = fs.statSync(targetPath);
-    if (expectedType === "dir" && !stat.isDirectory()) {
-      throw new Error(`Expected directory at '${targetPath}', but found non-directory.`);
-    }
-    if (expectedType === "file" && !stat.isFile()) {
-      throw new Error(`Expected file at '${targetPath}', but found non-file.`);
+    // Post-creation: canonicalize target path and reject escaping symlinks/junctions
+    const canonicalTarget = fs.realpathSync(targetPath);
+    if (id !== "gameDir" && !isPathWithinOrEqual(canonicalTarget, canonicalAuthorizedRoot)) {
+      throw new Error(`Refusing to open path escaping authorized root: '${canonicalTarget}' is outside root '${canonicalAuthorizedRoot}'`);
     }
 
-    return targetPath;
+    const stat = fs.statSync(canonicalTarget);
+    if (expectedType === "dir" && !stat.isDirectory()) {
+      throw new Error(`Expected directory at '${canonicalTarget}', but found non-directory.`);
+    }
+    if (expectedType === "file" && !stat.isFile()) {
+      throw new Error(`Expected file at '${canonicalTarget}', but found non-file.`);
+    }
+
+    return canonicalTarget;
   }
 
   // IPC Handlers: Utils
@@ -221,7 +302,9 @@ app.whenReady().then(async () => {
     const trimmed = targetPath.trim();
 
     // 1. If web URL (http/https), validate and open externally. Never fall back to local opening.
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(trimmed)) {
+    const isWindowsDrive = /^[a-zA-Z]:[\\/]/.test(trimmed);
+    const hasUriScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed);
+    if (hasUriScheme && !isWindowsDrive) {
       const validUrl = validateWebUrl(trimmed);
       await shell.openExternal(validUrl);
       return validUrl;
@@ -238,7 +321,8 @@ app.whenReady().then(async () => {
     for (const id of knownLocationIds) {
       try {
         const resolved = resolveAndValidateKnownLocation(id);
-        if (path.resolve(trimmed) === resolved) {
+        const resolvedTrimmed = fs.existsSync(trimmed) ? fs.realpathSync(trimmed) : path.resolve(trimmed);
+        if (resolvedTrimmed === resolved) {
           await shell.openPath(resolved);
           return resolved;
         }
