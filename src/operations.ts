@@ -33,6 +33,7 @@ export interface OperationScope {
 }
 
 export class OperationBusyError extends Error {
+  readonly isMainOwnedError = true;
   constructor(public readonly currentOperation: ActiveOperationInfo, requestedType: string) {
     super(`Cannot start '${requestedType}': operation '${currentOperation.type}' is currently in progress.`);
     this.name = "OperationBusyError";
@@ -40,6 +41,7 @@ export class OperationBusyError extends Error {
 }
 
 export class GameRunningConflictError extends Error {
+  readonly isMainOwnedError = true;
   constructor(operation: string) {
     super(`Cannot perform '${operation}' while Minecraft is running.`);
     this.name = "GameRunningConflictError";

@@ -9,7 +9,7 @@ import { JavaRuntimeManager } from "./java-runtime";
 import { isValidServerAddress, verifyRequiredResourcePacks } from "./resource-packs";
 import { validateRuntimeDefinition } from "./runtime-definition";
 import { ProcessLogFramer } from "./game-log-stream";
-import { classifyJavaArgs, parseJavaArgs } from "./ipc-boundary";
+import { classifyJavaArgs, parseJavaArgs, InstallationStateError } from "./ipc-boundary";
 import type { GameLogEntry, ReleaseDescriptor, UserProfile } from "./types";
 
 function generateOfflineUuid(username: string): string {
@@ -87,26 +87,26 @@ export class GameRunner {
       if (!release) {
         const stateReleasePath = path.join(gameDir, ".lampas", "release.json");
         if (!fs.existsSync(stateReleasePath)) {
-          throw new Error(
+          throw new InstallationStateError(
             "No installed Lampas release found. Please synchronize or repair your modpack installation first."
           );
         }
         try {
           release = JSON.parse(fs.readFileSync(stateReleasePath, "utf-8"));
         } catch {
-          throw new Error(
+          throw new InstallationStateError(
             "Release descriptor is corrupted. Please synchronize or repair your modpack installation first."
           );
         }
       }
 
       if (!release || typeof release !== "object" || Object.keys(release).length === 0) {
-        throw new Error(
+        throw new InstallationStateError(
           "No installed Lampas release found. Please synchronize or repair your modpack installation first."
         );
       }
       if (!release.version || typeof release.version !== "string") {
-        throw new Error(
+        throw new InstallationStateError(
           "Release descriptor metadata is missing mandatory 'version' field. Please synchronize or repair."
         );
       }
@@ -115,7 +115,7 @@ export class GameRunner {
       if (!releaseOverride) {
         const stateFilePath = path.join(gameDir, ".lampas", "installation.json");
         if (!fs.existsSync(stateFilePath)) {
-          throw new Error(
+          throw new InstallationStateError(
             "Missing installation state metadata: No installed modpack found. Please synchronize or repair your modpack installation first."
           );
         }
@@ -123,22 +123,22 @@ export class GameRunner {
         try {
           installedState = JSON.parse(fs.readFileSync(stateFilePath, "utf-8"));
         } catch {
-          throw new Error(
+          throw new InstallationStateError(
             "Installation state metadata is corrupted. Please synchronize or repair your modpack installation first."
           );
         }
         if (!installedState || typeof installedState !== "object" || Object.keys(installedState).length === 0) {
-          throw new Error(
+          throw new InstallationStateError(
             "Installation state metadata is empty. Please synchronize or repair your modpack installation first."
           );
         }
         if (!installedState.version || typeof installedState.version !== "string") {
-          throw new Error(
+          throw new InstallationStateError(
             "Installation state metadata is missing mandatory 'version' field. Please synchronize or repair."
           );
         }
         if (installedState.version && release.version && installedState.version !== release.version) {
-          throw new Error(
+          throw new InstallationStateError(
             `Incompatible installation state detected: installed version '${installedState.version}' does not match release descriptor '${release.version}'. Please synchronize or repair.`
           );
         }
@@ -147,7 +147,7 @@ export class GameRunner {
           release.syncGeneration &&
           installedState.syncGeneration !== release.syncGeneration
         ) {
-          throw new Error(
+          throw new InstallationStateError(
             `Incompatible installation generation detected: installed generation '${installedState.syncGeneration}' does not match release descriptor '${release.syncGeneration}'. Please synchronize or repair.`
           );
         }
@@ -367,7 +367,7 @@ export function buildLaunchArguments(options: {
 }): string[] {
   const classification = classifyJavaArgs(options.customJavaArgs);
   if (classification.hasLaunchTargetOverride) {
-    throw new Error(
+    throw new InstallationStateError(
       `Process argument sink rejected launch target override: custom Java arguments contain an unauthorized launch target override: ${classification.launchTargetViolations.join(", ")}`
     );
   }

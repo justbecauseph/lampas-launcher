@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as cp from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mock, spyOn } from "bun:test";
 
 /**
@@ -38,42 +39,57 @@ const openedPaths: string[] = [];
 const openedExternals: string[] = [];
 const interceptedProcesses: Array<{ command: string; args: any[] }> = [];
 
+function createMockChildProcess(command: string, args: any[] = []) {
+  interceptedProcesses.push({ command, args });
+  const proc = new EventEmitter() as any;
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  proc.pid = 99999;
+  proc.stdout = stdout;
+  proc.stderr = stderr;
+  proc.kill = () => true;
+  proc.unref = () => {};
+  proc.ref = () => {};
+  process.nextTick(() => {
+    proc.emit("spawn");
+  });
+  return proc;
+}
+
 // Intercept unintended process execution via spyOn
 spyOn(cp, "spawn").mockImplementation(((command: string, args: any[] = []) => {
-  interceptedProcesses.push({ command, args });
-  throw new Error(`[SecurityHarness] child_process.spawn blocked for: ${command}`);
+  return createMockChildProcess(command, args);
 }) as any);
 spyOn(cp, "exec").mockImplementation(((command: string) => {
   interceptedProcesses.push({ command, args: [] });
-  throw new Error(`[SecurityHarness] child_process.exec blocked for: ${command}`);
+  throw new Error(`Unexpected child_process.exec invocation for: ${command}`);
 }) as any);
 spyOn(cp, "execFile").mockImplementation(((command: string, args: any[] = []) => {
   interceptedProcesses.push({ command, args });
-  throw new Error(`[SecurityHarness] child_process.execFile blocked for: ${command}`);
+  throw new Error(`Unexpected child_process.execFile invocation for: ${command}`);
 }) as any);
 spyOn(cp, "fork").mockImplementation(((modulePath: string, args: any[] = []) => {
   interceptedProcesses.push({ command: modulePath, args });
-  throw new Error(`[SecurityHarness] child_process.fork blocked for: ${modulePath}`);
+  throw new Error(`Unexpected child_process.fork invocation for: ${modulePath}`);
 }) as any);
 
 // Also configure mock.module as second line of defense
 mock.module("node:child_process", () => ({
   ...cp,
   spawn: (command: string, args: any[] = []) => {
-    interceptedProcesses.push({ command, args });
-    throw new Error(`[SecurityHarness] child_process.spawn blocked for: ${command}`);
+    return createMockChildProcess(command, args);
   },
   exec: (command: string) => {
     interceptedProcesses.push({ command, args: [] });
-    throw new Error(`[SecurityHarness] child_process.exec blocked for: ${command}`);
+    throw new Error(`Unexpected child_process.exec invocation for: ${command}`);
   },
   execFile: (command: string, args: any[] = []) => {
     interceptedProcesses.push({ command, args });
-    throw new Error(`[SecurityHarness] child_process.execFile blocked for: ${command}`);
+    throw new Error(`Unexpected child_process.execFile invocation for: ${command}`);
   },
   fork: (modulePath: string, args: any[] = []) => {
     interceptedProcesses.push({ command: modulePath, args });
-    throw new Error(`[SecurityHarness] child_process.fork blocked for: ${modulePath}`);
+    throw new Error(`Unexpected child_process.fork invocation for: ${modulePath}`);
   },
 }));
 
@@ -415,6 +431,10 @@ try {
     IpcBoundary,
     IpcSecurityError,
     IpcValidationError,
+    UserCancelledError,
+    OperationConflictError,
+    InstallationStateError,
+    ModPolicyError,
     isPrivilegedJavaArg,
     classifyJavaArgs,
     parseJavaArgs,
@@ -426,7 +446,7 @@ try {
   const gameRunnerMod = await import("../src/game-runner");
   const { GameRunner, buildLaunchArguments } = gameRunnerMod;
   const operationsMod = await import("../src/operations");
-  const { OperationCoordinator } = operationsMod;
+  const { OperationCoordinator, OperationBusyError, GameRunningConflictError } = operationsMod;
   const javaRuntimeMod = await import("../src/java-runtime");
   const { JavaRuntimeManager } = javaRuntimeMod;
   const bootstrapMod = await import("../src/minecraft-bootstrap");
@@ -2481,9 +2501,10 @@ try {
 
   // 47. [Phase 2 Gate] Complete Java-argument privilege classification across full taxonomy
   await runTest("[Phase 2 Gate] Complete Java-argument privilege classification across full taxonomy", async () => {
-    // 1. Launch target override detection across complete taxonomy (positional, -jar, @args, --module, --source)
+    // 1. Launch target override detection across complete taxonomy (positional, -jar, @args, --module, --source, operands, launch authority properties)
     const targetOverrideCases = [
       "-jar evil.jar",
+      "-jar=evil.jar",
       "com.evil.MainClass",
       "Script.java",
       "--source 17 Script.java",
@@ -2494,6 +2515,36 @@ try {
       "-m evil/com.evil.Main",
       "@/path/to/args.txt",
       "@C:\\evil\\args.txt",
+      "@args.txt",
+      // Prohibited argument files following classpath and module options (separate-token and equals forms)
+      "-cp @args.txt",
+      "-classpath @args.txt",
+      "--class-path @args.txt",
+      "--class-path=@args.txt",
+      "-cp=@args.txt",
+      "-p @args.txt",
+      "--module-path @args.txt",
+      "--module-path=@args.txt",
+      "-p=@args.txt",
+      "--upgrade-module-path @args.txt",
+      "--upgrade-module-path=@args.txt",
+      "--patch-module mod=@args.txt",
+      "--patch-module=mod=@args.txt",
+      "-cp /lib/foo.jar:@args.txt",
+      "--class-path=/lib/foo.jar;@args.txt",
+      // Prohibited launch authority and native-library search path system properties (prohibited fail-closed, not merely confirmation-gated)
+      "-Djava.library.path=/evil/lib",
+      "-Dfabric.addMods=/evil/mod.jar",
+      "-Dfabric.modsFolder=/custom/mods",
+      "-Dquilt.addMods=/evil/mod.jar",
+      "-Dforge.modsFolder=/custom/mods",
+      "-Dneoforge.modsFolder=/custom/mods",
+      "-Dorg.lwjgl.librarypath=/evil/lib",
+      "-Dminecraft.applet.TargetDirectory=/evil",
+      "-Djava.system.class.loader=com.evil.Loader",
+      "-Djava.security.manager=default",
+      "-Dcom.sun.management.jmxremote",
+      "-Djdk.module.main=com.evil.Main",
     ];
     for (const raw of targetOverrideCases) {
       const tokens = parseJavaArgs(raw);
@@ -2532,19 +2583,6 @@ try {
       '-XX:OnError="cmd.exe /c calc.exe"',
       '-XX:OnOutOfMemoryError="calc.exe"',
       '-XX:ErrorFile="C:\\evil\\dump.log"',
-      // Mod discovery and launch authority system properties
-      "-Dfabric.addMods=/evil/mod.jar",
-      "-Dfabric.modsFolder=/custom/mods",
-      "-Dquilt.addMods=/evil/mod.jar",
-      "-Dforge.modsFolder=/custom/mods",
-      "-Dneoforge.modsFolder=/custom/mods",
-      "-Djava.library.path=/evil/lib",
-      "-Dorg.lwjgl.librarypath=/evil/lib",
-      "-Dminecraft.applet.TargetDirectory=/evil",
-      "-Djava.system.class.loader=com.evil.Loader",
-      "-Djava.security.manager=default",
-      "-Dcom.sun.management.jmxremote",
-      "-Djdk.module.main=com.evil.Main",
       // Unknown properties require native approval
       "-Dcustom.feature.flag=true",
       "-Dmy.unknown.opt=123",
@@ -2554,6 +2592,9 @@ try {
       const res = classifyJavaArgs(tokens);
       if (!res.isPrivileged) {
         throw new Error(`Expected classifyJavaArgs to flag privileged option: ${raw}`);
+      }
+      if (res.hasLaunchTargetOverride) {
+        throw new Error(`Expected privileged option to NOT be flagged as launch target override: ${raw}`);
       }
     }
 
@@ -2565,14 +2606,40 @@ try {
       throw new Error(`Expected ordinary tuning options to be permitted without approval: ${JSON.stringify(ordinaryRes)}`);
     }
 
-    // 4. Actual settings handler (config:set) rejects launch target override fail-closed
+    // 4. Actual settings handler (config:set) rejects launch target override fail-closed even when confirmation mock would approve
     const configHandler = ipcHandlers.get("config:set")!;
     const getHandler = ipcHandlers.get("config:get")!;
-    for (const overrideArg of ["-jar evil.jar", "com.evil.Main", "--module=evil", "@args.txt", "--source 17 Script.java"]) {
+    const win = MockBrowserWindow.allWindows[0];
+    const event = { sender: win.webContents, senderFrame: win.webContents.mainFrame };
+
+    const launchTargetOverridesToTest = [
+      "-jar evil.jar",
+      "com.evil.Main",
+      "--module=evil",
+      "@args.txt",
+      "--source 17 Script.java",
+      "-cp @args.txt",
+      "--class-path=@args.txt",
+      "-p @args.txt",
+      "--module-path=@args.txt",
+      "--patch-module=mod=@args.txt",
+      "--patch-module mod=@args.txt",
+      "-Djava.library.path=/evil/lib",
+      "-Dfabric.addMods=/evil/mod.jar",
+    ];
+
+    for (const overrideArg of launchTargetOverridesToTest) {
       const beforeState = (await getHandler({})).javaArgs;
+      let dialogPrompted = false;
+      mockDialog.showMessageBox.mockReset();
+      mockDialog.showMessageBox.mockImplementationOnce(async () => {
+        dialogPrompted = true;
+        return { response: 0 };
+      });
+
       let threw = false;
       try {
-        await configHandler({}, { javaArgs: overrideArg });
+        await configHandler(event as any, { javaArgs: overrideArg });
       } catch (e: any) {
         threw = true;
         if (!e.message.includes("Custom Java arguments cannot override launch target")) {
@@ -2580,6 +2647,9 @@ try {
         }
       }
       if (!threw) throw new Error(`Expected config:set to reject launch target override: '${overrideArg}'`);
+      if (dialogPrompted) {
+        throw new Error(`Expected config:set to reject '${overrideArg}' before native confirmation dialog`);
+      }
       const afterState = (await getHandler({})).javaArgs;
       if (afterState !== beforeState) {
         throw new Error(`Launch target override attempt corrupted stored javaArgs: ${afterState} !== ${beforeState}`);
@@ -2587,9 +2657,8 @@ try {
     }
 
     // 5. Actual settings handler: ordinary tuning permitted without dialog confirmation
-    const win = MockBrowserWindow.allWindows[0];
-    const event = { sender: win.webContents, senderFrame: win.webContents.mainFrame };
     let dialogCalled = false;
+    mockDialog.showMessageBox.mockReset();
     mockDialog.showMessageBox.mockImplementationOnce(async () => {
       dialogCalled = true;
       return { response: 0 };
@@ -2653,8 +2722,25 @@ try {
       throw new Error("Expected buildLaunchArguments to include benign custom tuning");
     }
 
-    // Process argument sink rejects launch target overrides fail-closed
-    for (const badArg of [["-jar", "evil.jar"], ["com.evil.Main"], ["--module=foo"], ["--source", "17", "App.java"]]) {
+    // Process argument sink rejects launch target overrides fail-closed without process execution
+    const sinkBadArgs = [
+      ["-jar", "evil.jar"],
+      ["com.evil.Main"],
+      ["--module=foo"],
+      ["--source", "17", "App.java"],
+      ["@args.txt"],
+      ["-cp", "@args.txt"],
+      ["--class-path=@args.txt"],
+      ["-p", "@args.txt"],
+      ["--module-path=@args.txt"],
+      ["--patch-module=mod=@args.txt"],
+      ["--patch-module", "mod=@args.txt"],
+      ["-Djava.library.path=/evil/lib"],
+      ["-Dfabric.addMods=/evil/mod.jar"],
+    ];
+
+    for (const badArg of sinkBadArgs) {
+      interceptedProcesses.length = 0;
       let sinkThrew = false;
       try {
         buildLaunchArguments({
@@ -2677,6 +2763,9 @@ try {
         }
       }
       if (!sinkThrew) throw new Error(`Expected buildLaunchArguments to reject: ${badArg.join(" ")}`);
+      if (interceptedProcesses.length !== 0) {
+        throw new Error(`Process argument sink executed process for launch target override: ${badArg.join(" ")}`);
+      }
     }
   });
 
@@ -2824,6 +2913,55 @@ try {
         win.webContents.isDestroyed = origIsDestroyed;
       }
       if (!destroyedWebContentsThrew) throw new Error("Expected destroyed WebContents to fail closed");
+
+      // 8. Explicit detached sender frame fails closed at entry
+      const detachedEntrySender = {
+        ...savedMainFrame,
+        detached: true,
+        parent: null,
+        url: "http://localhost:5173",
+        isDestroyed: () => false,
+      };
+      let detachedSenderThrew = false;
+      try {
+        IpcBoundary.validateIpcSender({
+          sender: win.webContents,
+          senderFrame: detachedEntrySender,
+        } as any);
+      } catch (e: any) {
+        detachedSenderThrew = true;
+        if (!e.message.includes("sender frame is detached")) {
+          throw new Error(`Unexpected error on detached sender frame: ${e.message}`);
+        }
+      }
+      if (!detachedSenderThrew) throw new Error("Expected detached sender frame at entry to fail closed");
+
+      // 9. Explicit detached main frame fails closed at entry
+      const detachedEntryMain = {
+        ...savedMainFrame,
+        detached: true,
+        parent: null,
+        url: "http://localhost:5173",
+        isDestroyed: () => false,
+      };
+      try {
+        (win.webContents as any).mainFrame = detachedEntryMain;
+        let detachedMainThrew = false;
+        try {
+          IpcBoundary.validateIpcSender({
+            sender: win.webContents,
+            senderFrame: savedMainFrame,
+          } as any);
+        } catch (e: any) {
+          detachedMainThrew = true;
+          if (!e.message.includes("main frame is detached")) {
+            throw new Error(`Unexpected error on detached main frame: ${e.message}`);
+          }
+        }
+        if (!detachedMainThrew) throw new Error("Expected detached main frame at entry to fail closed");
+      } finally {
+        (win.webContents as any).mainFrame = savedMainFrame;
+      }
     } finally {
       win.webContents.url = "http://localhost:5173";
       if (originalPolicy) {
@@ -2840,69 +2978,79 @@ try {
       senderFrame: win.webContents.mainFrame,
     };
 
-    // 1. Generation equality checks: below, at, and above 50
-    const targetA = path.join(testRoot, "gen-target-a");
-    const currentGen = IpcBoundary.getDocumentGeneration();
-
-    // A. Current generation succeeds
-    IpcBoundary.grantApproval("gameDir:target", targetA, { generation: currentGen });
-    if (!IpcBoundary.hasApproval("gameDir:target", targetA)) {
-      throw new Error("Expected approval with exact matching generation to succeed");
-    }
-    IpcBoundary.consumeApproval("gameDir:target", targetA);
-
-    // B. Stale generation (below current) rejects fail-closed
-    let staleThrew = false;
+    // 1. Generation equality checks across actual generations below (15), at (50), and above (75)
+    // with controlled clock (Date.now mock); verify 60s lifetime (+30s valid, +59s valid, +61s expired),
+    // stale/future rejection, expiry, and single-use behavior.
+    const originalGen = IpcBoundary.getDocumentGeneration();
     try {
-      IpcBoundary.grantApproval("gameDir:target", targetA, { generation: currentGen - 1 });
-    } catch (e: any) {
-      staleThrew = true;
-      if (!e.message.includes("Approval generation mismatch")) {
-        throw new Error(`Unexpected stale generation error: ${e.message}`);
-      }
-    }
-    if (!staleThrew) throw new Error("Expected stale generation (below current) to reject");
+      for (const testGen of [15, 50, 75]) {
+        IpcBoundary.setDocumentGeneration(testGen);
+        const testTarget = path.join(testRoot, `target-gen-${testGen}`);
 
-    // C. Future generation (above current) rejects fail-closed
-    let futureThrew = false;
-    try {
-      IpcBoundary.grantApproval("gameDir:target", targetA, { generation: currentGen + 1 });
-    } catch (e: any) {
-      futureThrew = true;
-      if (!e.message.includes("Approval generation mismatch")) {
-        throw new Error(`Unexpected future generation error: ${e.message}`);
-      }
-    }
-    if (!futureThrew) throw new Error("Expected future generation (above current) to reject");
-
-    // D. Cover generations explicitly below 50, at 50, and above 50
-    for (const testGen of [1, 25, 49, 50, 51, 100]) {
-      // If testGen !== currentGen, must throw
-      if (testGen !== currentGen) {
-        let threwGen = false;
+        // A. Stale generation (below current) rejects fail-closed
+        let staleThrew = false;
         try {
-          IpcBoundary.grantApproval("gameDir:target", targetA, { generation: testGen });
-        } catch {
-          threwGen = true;
+          IpcBoundary.grantApproval("gameDir:target", testTarget, { generation: testGen - 1 });
+        } catch (e: any) {
+          staleThrew = true;
+          if (!e.message.includes("Approval generation mismatch")) {
+            throw new Error(`Unexpected stale generation error: ${e.message}`);
+          }
         }
-        if (!threwGen) throw new Error(`Expected generation ${testGen} !== ${currentGen} to throw`);
+        if (!staleThrew) throw new Error(`Expected stale generation (${testGen - 1}) to reject for current ${testGen}`);
+
+        // B. Future generation (above current) rejects fail-closed
+        let futureThrew = false;
+        try {
+          IpcBoundary.grantApproval("gameDir:target", testTarget, { generation: testGen + 1 });
+        } catch (e: any) {
+          futureThrew = true;
+          if (!e.message.includes("Approval generation mismatch")) {
+            throw new Error(`Unexpected future generation error: ${e.message}`);
+          }
+        }
+        if (!futureThrew) throw new Error(`Expected future generation (${testGen + 1}) to reject for current ${testGen}`);
+
+        // C. Controlled clock verification for 60s TTL (+30s valid, +59s valid, +61s expired)
+        const baseTime = 1_700_000_000_000;
+        let mockNow = baseTime;
+        const dateSpy = spyOn(Date, "now").mockImplementation(() => mockNow);
+
+        try {
+          // Grant approval at t0
+          IpcBoundary.grantApproval("gameDir:target", testTarget, { generation: testGen });
+
+          // +30s: valid
+          mockNow = baseTime + 30_000;
+          if (!IpcBoundary.hasApproval("gameDir:target", testTarget)) {
+            throw new Error(`Expected approval to be valid at +30s for gen ${testGen}`);
+          }
+
+          // +59s: valid
+          mockNow = baseTime + 59_000;
+          if (!IpcBoundary.hasApproval("gameDir:target", testTarget)) {
+            throw new Error(`Expected approval to be valid at +59s for gen ${testGen}`);
+          }
+
+          // +61s: expired
+          mockNow = baseTime + 61_000;
+          if (IpcBoundary.hasApproval("gameDir:target", testTarget)) {
+            throw new Error(`Expected approval to be expired at +61s for gen ${testGen}`);
+          }
+
+          // D. Single-use behavior
+          mockNow = baseTime + 10_000;
+          IpcBoundary.grantApproval("gameDir:target", testTarget, { generation: testGen });
+          const firstConsume = IpcBoundary.consumeApproval("gameDir:target", testTarget);
+          const secondConsume = IpcBoundary.consumeApproval("gameDir:target", testTarget);
+          if (!firstConsume) throw new Error(`Expected first consumeApproval to succeed for gen ${testGen}`);
+          if (secondConsume) throw new Error(`Expected second consumeApproval to fail (single-use) for gen ${testGen}`);
+        } finally {
+          dateSpy.mockRestore();
+        }
       }
-    }
-
-    // E. Default 60s lifetime independent of generation number
-    const targetB = path.join(testRoot, "gen-target-b");
-    IpcBoundary.grantApproval("gameDir:target", targetB, { generation: currentGen });
-    if (!IpcBoundary.hasApproval("gameDir:target", targetB)) {
-      throw new Error("Approval should exist with default 60s lifetime");
-    }
-    IpcBoundary.consumeApproval("gameDir:target", targetB);
-
-    // F. Explicit TTL expiration
-    const expTarget = path.join(testRoot, "exp-target");
-    IpcBoundary.grantApproval("gameDir:target", expTarget, { generation: currentGen, ttlMs: 50 });
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    if (IpcBoundary.hasApproval("gameDir:target", expTarget)) {
-      throw new Error("Expired approval was not invalidated");
+    } finally {
+      IpcBoundary.setDocumentGeneration(originalGen);
     }
 
     // 2. Snapshot revalidation: document generation invalidation while awaiting confirmation
@@ -2919,7 +3067,40 @@ try {
     }
     if (!navThrew) throw new Error("Expected snapshot revalidation to fail on document generation change");
 
-    // 3. Deferred native dialogs on actual handlers: Navigation during dialog in gameDir:browse
+    // 3. Snapshot revalidation: frame detachment while awaiting native approval
+    // A. Snapshot frame detached after deferred dialog
+    const snapshotDetached = IpcBoundary.createApprovalSnapshot(event as any);
+    snapshotDetached.frame = { ...snapshotDetached.frame, detached: true } as any;
+    let snapDetachedThrew = false;
+    try {
+      IpcBoundary.validateApprovalSnapshot(snapshotDetached);
+    } catch (e: any) {
+      snapDetachedThrew = true;
+      if (!e.message.includes("Sender frame detached while awaiting native user approval.")) {
+        throw new Error(`Unexpected error on detached snapshot frame: ${e.message}`);
+      }
+    }
+    if (!snapDetachedThrew) throw new Error("Expected detached snapshot frame to fail closed");
+
+    // B. Active main frame detached after deferred dialog
+    const snapshotMainDetached = IpcBoundary.createApprovalSnapshot(event as any);
+    try {
+      (win.webContents.mainFrame as any).detached = true;
+      let snapMainDetachedThrew = false;
+      try {
+        IpcBoundary.validateApprovalSnapshot(snapshotMainDetached);
+      } catch (e: any) {
+        snapMainDetachedThrew = true;
+        if (!e.message.includes("Active main frame detached while awaiting native user approval.")) {
+          throw new Error(`Unexpected error on detached active main frame: ${e.message}`);
+        }
+      }
+      if (!snapMainDetachedThrew) throw new Error("Expected detached active main frame to fail closed");
+    } finally {
+      (win.webContents.mainFrame as any).detached = false;
+    }
+
+    // 4. Deferred native dialogs on actual handlers: Navigation during dialog in gameDir:browse
     const browseHandler = ipcHandlers.get("gameDir:browse")!;
     let resolveDialog!: (val: { canceled: boolean; filePaths: string[] }) => void;
     const dialogPromise = new Promise<{ canceled: boolean; filePaths: string[] }>((resolve) => {
@@ -2948,7 +3129,7 @@ try {
       throw new Error("Approval was granted despite navigation during dialog!");
     }
 
-    // 4. Deferred native dialogs on actual handlers: Conflicting operation during dialog in config:set
+    // 5. Deferred native dialogs on actual handlers: config:set
     const configHandler = ipcHandlers.get("config:set")!;
     const getHandler = ipcHandlers.get("config:get")!;
     const preConflictJavaArgs = (await getHandler({})).javaArgs;
@@ -2982,7 +3163,7 @@ try {
       throw new Error("Conflicting operation during dialog modified config!");
     }
 
-    // 5. Deferred native dialogs on actual handlers: Cancellation of confirmation dialog leaves settings unchanged
+    // config:set cancellation
     const preCancelJavaArgs = (await getHandler({})).javaArgs;
     mockDialog.showMessageBox.mockReset();
     mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
@@ -3001,7 +3182,7 @@ try {
       throw new Error("Cancelled dialog must leave config unchanged!");
     }
 
-    // 6. Deferred native dialogs on actual handlers: Missing native dialog service fails closed
+    // config:set missing dialog fails closed
     const originalMessageBox = mockDialog.showMessageBox;
     delete (mockDialog as any).showMessageBox;
     let missingDialogThrew = false;
@@ -3017,7 +3198,7 @@ try {
     }
     if (!missingDialogThrew) throw new Error("Expected missing dialog service to fail closed");
 
-    // 7. Deferred native dialogs on actual handlers: Confirmed unchanged controls succeeds
+    // config:set confirmed succeeds
     mockDialog.showMessageBox.mockReset();
     mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 0 }));
     const validConfirmed = await configHandler(event as any, { javaArgs: "-Dcustom.confirmed.flag=4" });
@@ -3025,7 +3206,134 @@ try {
       throw new Error(`Failed to apply confirmed config: ${validConfirmed.javaArgs}`);
     }
 
-    // 8. Single-use consumption of granted approval
+    // 6. Deferred native dialogs on actual handlers: gameDir:configure
+    const configureHandler = ipcHandlers.get("gameDir:configure")!;
+    const testConfigureDir = path.join(testRoot, "deferred-configure-target");
+
+    // A. Cancellation of configure dialog
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
+    let configureCancelThrew = false;
+    try {
+      await configureHandler(event as any, testConfigureDir);
+    } catch (e: any) {
+      configureCancelThrew = true;
+      if (!e.message.includes("Configuration cancelled by user.")) {
+        throw new Error(`Unexpected configure cancellation error: ${e.message}`);
+      }
+    }
+    if (!configureCancelThrew) throw new Error("Expected cancelled configure dialog to throw UserCancelledError");
+
+    // B. Conflicting operation during configure dialog
+    let resolveCfgBox!: (val: { response: number }) => void;
+    const cfgBoxPromise = new Promise<{ response: number }>((resolve) => {
+      resolveCfgBox = resolve;
+    });
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(() => cfgBoxPromise);
+    const cfgPromise = configureHandler(event as any, testConfigureDir);
+    await new Promise((r) => setTimeout(r, 10));
+    const activeSyncForCfg = OperationCoordinator.acquire("sync", "Active sync during configure");
+    resolveCfgBox({ response: 0 }); // User clicked confirm, but operation is busy
+    let cfgConflictThrew = false;
+    try {
+      await cfgPromise;
+    } catch (e: any) {
+      cfgConflictThrew = true;
+      if (!e.message.includes("is currently in progress")) {
+        throw new Error(`Unexpected error on configure op conflict: ${e.message}`);
+      }
+    } finally {
+      activeSyncForCfg.release();
+    }
+    if (!cfgConflictThrew) throw new Error("Expected conflicting operation during configure dialog to fail closed");
+
+    // 7. Deferred native dialogs on actual handlers: gameDir:move
+    const moveHandler = ipcHandlers.get("gameDir:move")!;
+    const testMoveDir = path.join(testRoot, "deferred-move-target");
+
+    // A. Cancellation of move dialog
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
+    let moveCancelThrew = false;
+    try {
+      await moveHandler(event as any, testMoveDir);
+    } catch (e: any) {
+      moveCancelThrew = true;
+      if (!e.message.includes("Move cancelled by user.")) {
+        throw new Error(`Unexpected move cancellation error: ${e.message}`);
+      }
+    }
+    if (!moveCancelThrew) throw new Error("Expected cancelled move dialog to throw UserCancelledError");
+
+    // B. Conflicting operation during move dialog
+    let resolveMoveBox!: (val: { response: number }) => void;
+    const moveBoxPromise = new Promise<{ response: number }>((resolve) => {
+      resolveMoveBox = resolve;
+    });
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(() => moveBoxPromise);
+    const movePromise = moveHandler(event as any, testMoveDir);
+    await new Promise((r) => setTimeout(r, 10));
+    const activeSyncForMove = OperationCoordinator.acquire("sync", "Active sync during move");
+    resolveMoveBox({ response: 0 }); // User clicked confirm, but operation is busy
+    let moveConflictThrew = false;
+    try {
+      await movePromise;
+    } catch (e: any) {
+      moveConflictThrew = true;
+      if (!e.message.includes("is currently in progress")) {
+        throw new Error(`Unexpected error on move op conflict: ${e.message}`);
+      }
+    } finally {
+      activeSyncForMove.release();
+    }
+    if (!moveConflictThrew) throw new Error("Expected conflicting operation during move dialog to fail closed");
+
+    // 8. Deferred native dialogs on actual handlers: mods:addPaths
+    const modsAddHandler = ipcHandlers.get("mods:addPaths")!;
+    const testModFile = path.join(testRoot, "deferred-test-mod.jar");
+    fs.writeFileSync(testModFile, "PK\x03\x04testmodcontent");
+
+    // A. Cancellation of mod import dialog
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(async () => ({ response: 1 })); // Cancel
+    let modCancelThrew = false;
+    try {
+      await modsAddHandler(event as any, [testModFile]);
+    } catch (e: any) {
+      modCancelThrew = true;
+      if (!e.message.includes("Mod import cancelled by user.")) {
+        throw new Error(`Unexpected mod import cancellation error: ${e.message}`);
+      }
+    }
+    if (!modCancelThrew) throw new Error("Expected cancelled mod import dialog to throw UserCancelledError");
+
+    // B. Conflicting operation during mod import dialog
+    let resolveModBox!: (val: { response: number }) => void;
+    const modBoxPromise = new Promise<{ response: number }>((resolve) => {
+      resolveModBox = resolve;
+    });
+    mockDialog.showMessageBox.mockReset();
+    mockDialog.showMessageBox.mockImplementationOnce(() => modBoxPromise);
+    const modPromise = modsAddHandler(event as any, [testModFile]);
+    await new Promise((r) => setTimeout(r, 10));
+    const activeSyncForMod = OperationCoordinator.acquire("sync", "Active sync during mod import");
+    resolveModBox({ response: 0 }); // User clicked confirm, but operation is busy
+    let modConflictThrew = false;
+    try {
+      await modPromise;
+    } catch (e: any) {
+      modConflictThrew = true;
+      if (!e.message.includes("is currently in progress")) {
+        throw new Error(`Unexpected error on mod import op conflict: ${e.message}`);
+      }
+    } finally {
+      activeSyncForMod.release();
+    }
+    if (!modConflictThrew) throw new Error("Expected conflicting operation during mod import dialog to fail closed");
+
+    // 9. Single-use consumption of granted approval
     const singleUseTarget = path.join(testRoot, "single-use-target");
     IpcBoundary.grantApproval("gameDir:target", singleUseTarget);
     const firstConsume = IpcBoundary.consumeApproval("gameDir:target", singleUseTarget);
@@ -3033,7 +3341,7 @@ try {
     if (!firstConsume) throw new Error("Expected first consumeApproval to succeed");
     if (secondConsume) throw new Error("Expected second consumeApproval to fail (single-use)");
 
-    // 9. Platform-correct path normalization
+    // 10. Platform-correct path normalization
     if (process.platform === "win32") {
       const p1 = "C:\\Games\\Minecraft\\Data";
       const p2 = "c:\\games\\minecraft\\data";
@@ -3048,7 +3356,7 @@ try {
       }
     }
 
-    // 10. Intended TTL constant verification (60 seconds)
+    // 11. Intended TTL constant verification (60 seconds)
     if (APPROVAL_TTL_MS !== 60_000) {
       throw new Error(`Expected APPROVAL_TTL_MS to be 60000ms (60s), got ${APPROVAL_TTL_MS}`);
     }
@@ -3154,19 +3462,11 @@ try {
       ConfigManager.set({ noSync: false });
       if (!noSyncBypassThrew) throw new Error("Expected noSync: true to still require valid installation state");
 
-      // 6. Valid installation state admits launch and executes intercepted spawn with consolidated user
+      // 6. Valid installation state admits launch and executes intercepted spawn observed out-of-band
       fs.writeFileSync(installPath, JSON.stringify({ version: "2.0.0", syncGeneration: "gen-1" }));
       interceptedProcesses.length = 0;
 
-      let launchThrew = false;
-      try {
-        await launchHandler({});
-      } catch (e: any) {
-        // child_process.spawn mock throws [SecurityHarness] child_process.spawn blocked
-        if (!e.message.includes("[SecurityHarness] child_process.spawn blocked")) {
-          throw e;
-        }
-      }
+      await launchHandler({});
 
       if (interceptedProcesses.length === 0) {
         throw new Error("Expected authenticated game launch to reach process execution sink");
@@ -3204,15 +3504,12 @@ try {
       }
 
       // 7. Forged renderer arguments cannot influence launch
+      GameRunner.resetForTesting();
       interceptedProcesses.length = 0;
-      try {
-        await (launchHandler as any)({}, {
-          user: { name: "AttackerPlayer", minecraftUuid: "forged-uuid-999" },
-          release: { version: "99.9.9", pack: "ForgedPack" },
-        });
-      } catch (e: any) {
-        if (!e.message.includes("[SecurityHarness] child_process.spawn blocked")) throw e;
-      }
+      await (launchHandler as any)({}, {
+        user: { name: "AttackerPlayer", minecraftUuid: "forged-uuid-999" },
+        release: { version: "99.9.9", pack: "ForgedPack" },
+      });
       if (interceptedProcesses.length === 0) {
         throw new Error("Expected launch to execute process execution sink");
       }
@@ -3279,14 +3576,44 @@ try {
       throw new Error(`Expected generic error for RangeError, got: '${rangeErr.message}'`);
     }
 
-    // 4. Public IPC error contract: Security violations return exact masked security error
+    // 4. Production error sanitization bypass removal regressions:
+    // A. Error with [SecurityHarness] marker and synthetic secret/path collapses to generic error
+    const harnessSecretErr = sanitizeIpcError(new Error("[SecurityHarness] leaked secret token=secret-token-12345 at C:\\Users\\Admin\\config.json"));
+    if (harnessSecretErr.message !== "Operation failed: An unexpected internal error occurred.") {
+      throw new Error(`Expected generic error for harness marker with secret, got: '${harnessSecretErr.message}'`);
+    }
+    if (harnessSecretErr.message.includes("[SecurityHarness]") || harnessSecretErr.message.includes("secret-token") || harnessSecretErr.message.includes("Admin")) {
+      throw new Error(`Information leaked in sanitized harness error: '${harnessSecretErr.message}'`);
+    }
+
+    // B. Long error message containing [SecurityHarness] collapses to generic error and stays bounded
+    const harnessLongErr = sanitizeIpcError(new Error("[SecurityHarness] " + "FatalErrorDetails".repeat(50)));
+    if (harnessLongErr.message !== "Operation failed: An unexpected internal error occurred.") {
+      throw new Error(`Expected generic error for long harness error, got: '${harnessLongErr.message}'`);
+    }
+
+    // C. Generic error without harness marker containing synthetic secrets/paths collapses to generic error
+    const plainSecretErr = sanitizeIpcError(new Error("Database connection failed for user=admin password=SecretPassword123! path=/etc/shadow"));
+    if (plainSecretErr.message !== "Operation failed: An unexpected internal error occurred.") {
+      throw new Error(`Expected generic error for plain error with credentials, got: '${plainSecretErr.message}'`);
+    }
+
+    // D. Deceptive backend error containing operational-looking phrases plus quoted JSON credentials
+    const deceptiveErr = sanitizeIpcError(
+      new Error('Cannot start operation: operation is currently in progress: {"token": "secret-auth-token-1234", "password": "super-secret"}')
+    );
+    if (deceptiveErr.message !== "Operation failed: An unexpected internal error occurred.") {
+      throw new Error(`Deceptive operational backend error leaked information: '${deceptiveErr.message}'`);
+    }
+
+    // 5. Public IPC error contract: Security violations return exact masked security error
     const securityError = sanitizeIpcError(new IpcSecurityError("detailed secret frame mismatch: frame id 12 != 14 from http://evil.com"));
     if (securityError.message !== "Security violation: IPC request rejected.") {
       throw new Error(`Expected masked security error message, got: '${securityError.message}'`);
     }
 
-    // 5. Public IPC error contract: Validation errors scrub synthetic secrets, paths, multiline stacks, and bound length
-    // A. Synthetic JWT secrets scrubbed
+    // 6. Public IPC error contract: Main-owned errors scrub synthetic secrets, paths, multiline stacks, and bound length <= 120
+    // A. Synthetic JWT secrets scrubbed in main-owned validation error
     const jwtError = sanitizeIpcError(new IpcValidationError("Invalid token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ"));
     if (jwtError.message.includes("eyJ") || jwtError.message.includes("TJVA95")) {
       throw new Error(`Synthetic JWT secret leaked in sanitized error: '${jwtError.message}'`);
@@ -3295,7 +3622,7 @@ try {
       throw new Error(`Expected <redacted> token placeholder in: '${jwtError.message}'`);
     }
 
-    // B. Synthetic password and hex tokens scrubbed
+    // B. Synthetic password and hex tokens scrubbed in main-owned validation error
     const credError = sanitizeIpcError(new IpcValidationError("Auth failed with password=SuperSecretPassword123! token=0123456789abcdef0123456789abcdef"));
     if (credError.message.includes("SuperSecretPassword123") || credError.message.includes("0123456789abcdef")) {
       throw new Error(`Synthetic credentials leaked in sanitized error: '${credError.message}'`);
@@ -3304,13 +3631,13 @@ try {
       throw new Error(`Expected <redacted> credential placeholder in: '${credError.message}'`);
     }
 
-    // C. Multiline errors collapsed and stack traces stripped
+    // C. Multiline errors collapsed and stack traces stripped in main-owned error
     const multilineError = sanitizeIpcError(new IpcValidationError("Validation failed for field 'options':\n    at validateOptions (/app/src/validator.ts:42:15)\n    at Object.handle (/app/src/ipc.ts:100:12)"));
     if (multilineError.message.includes("\n") || multilineError.message.includes("\r") || multilineError.message.includes("validator.ts")) {
       throw new Error(`Multiline error / stack trace leaked in sanitized error: '${multilineError.message}'`);
     }
 
-    // D. Windows drive paths scrubbed
+    // D. Windows drive paths scrubbed in main-owned error
     const winPathError = sanitizeIpcError(new IpcValidationError("Cannot access file at C:\\Users\\Administrator\\secret\\config.json: Access denied"));
     if (winPathError.message.includes("C:\\Users")) {
       throw new Error(`Expected Windows drive path to be scrubbed: '${winPathError.message}'`);
@@ -3319,7 +3646,7 @@ try {
       throw new Error(`Expected placeholder <path> in sanitized error: '${winPathError.message}'`);
     }
 
-    // E. Single-component POSIX paths scrubbed (/etc, /tmp, /secret)
+    // E. Single-component POSIX paths scrubbed (/etc, /tmp, /secret) in main-owned error
     for (const singlePosix of ["/etc", "/tmp", "/secret"]) {
       const posixSingleError = sanitizeIpcError(new IpcValidationError(`Refusing to access path ${singlePosix}`));
       if (posixSingleError.message.includes(singlePosix)) {
@@ -3330,7 +3657,7 @@ try {
       }
     }
 
-    // F. Multi-component POSIX paths scrubbed
+    // F. Multi-component POSIX paths scrubbed in main-owned error
     const posixMultiError = sanitizeIpcError(new IpcValidationError("Cannot access file at /home/markj/lampas-launcher/secret/file.txt: Access denied"));
     if (posixMultiError.message.includes("/home/markj")) {
       throw new Error(`Expected POSIX path to be scrubbed: '${posixMultiError.message}'`);
@@ -3339,7 +3666,61 @@ try {
       throw new Error(`Expected placeholder <path> in sanitized error: '${posixMultiError.message}'`);
     }
 
-    // G. Long unknown keys / messages bounded to at most 120 characters
+    // G. Main-owned domain errors: Cancellation, OperationBusy, InstallationState, ModPolicy
+    const userCancelSanitized = sanitizeIpcError(new UserCancelledError("Configuration cancelled by user at C:\\secret\\dir"));
+    if (!userCancelSanitized.message.includes("Configuration cancelled by user") || userCancelSanitized.message.includes("C:\\secret")) {
+      throw new Error(`UserCancelledError not properly scrubbed: '${userCancelSanitized.message}'`);
+    }
+
+    const busySanitized = sanitizeIpcError(new OperationBusyError({ id: "op-1", type: "sync", description: "Syncing", startTime: Date.now() }, "move"));
+    if (!busySanitized.message.includes("Cannot start 'move'") || !busySanitized.message.includes("currently in progress")) {
+      throw new Error(`OperationBusyError not properly formatted: '${busySanitized.message}'`);
+    }
+
+    const runningSanitized = sanitizeIpcError(new GameRunningConflictError("delete mod"));
+    if (!runningSanitized.message.includes("Cannot perform 'delete mod' while Minecraft is running")) {
+      throw new Error(`GameRunningConflictError not properly formatted: '${runningSanitized.message}'`);
+    }
+
+    const installStateSanitized = sanitizeIpcError(new InstallationStateError("Missing installation state metadata: No installed modpack found."));
+    if (!installStateSanitized.message.includes("Missing installation state metadata")) {
+      throw new Error(`InstallationStateError not properly formatted: '${installStateSanitized.message}'`);
+    }
+
+    const modPolicySanitized = sanitizeIpcError(new ModPolicyError("Cannot disable unknown official mod: 'core'"));
+    if (!modPolicySanitized.message.includes("Cannot disable unknown official mod")) {
+      throw new Error(`ModPolicyError not properly formatted: '${modPolicySanitized.message}'`);
+    }
+
+    // H. Final length bound: EVERY public error result is <= 120 characters
+    const allSanitizedErrors = [
+      typeErr,
+      unhandledBackendErr,
+      rangeErr,
+      harnessSecretErr,
+      harnessLongErr,
+      plainSecretErr,
+      deceptiveErr,
+      securityError,
+      jwtError,
+      credError,
+      multilineError,
+      winPathError,
+      posixMultiError,
+      userCancelSanitized,
+      busySanitized,
+      runningSanitized,
+      installStateSanitized,
+      modPolicySanitized,
+    ];
+
+    for (const serr of allSanitizedErrors) {
+      if (serr.message.length > 120) {
+        throw new Error(`Public IPC error exceeds 120 chars (${serr.message.length}): '${serr.message}'`);
+      }
+    }
+
+    // Long unknown keys / messages bounded to at most 120 characters and ending with '...'
     const longMsg = "This is an extremely long validation failure message describing multiple parameter violations across different structures that exceeds the maximum allowed boundary length for errors.";
     const boundedError = sanitizeIpcError(new IpcValidationError(longMsg));
     if (boundedError.message.length > 120) {
@@ -3349,7 +3730,7 @@ try {
       throw new Error(`Expected truncated bounded error to end with '...', got: '${boundedError.message}'`);
     }
 
-    // 6. Mod file size boundary (100 MB)
+    // 7. Mod file size boundary (100 MB)
     if (MAX_CUSTOM_MOD_FILE_SIZE_BYTES !== 100 * 1024 * 1024) {
       throw new Error(`Expected MAX_CUSTOM_MOD_FILE_SIZE_BYTES to be 100MB (104857600 bytes), got ${MAX_CUSTOM_MOD_FILE_SIZE_BYTES}`);
     }

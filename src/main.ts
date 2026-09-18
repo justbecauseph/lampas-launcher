@@ -17,6 +17,8 @@ import {
   IpcSchemas,
   IpcSecurityError,
   IpcValidationError,
+  UserCancelledError,
+  ModPolicyError,
   registerSecureHandler,
   registerSecureListener,
   validateModPaths,
@@ -282,7 +284,7 @@ app.whenReady().then(async () => {
 
   function resolveAndValidateKnownLocation(locationId: string): string {
     if (typeof locationId !== "string" || !locationId.trim()) {
-      throw new Error("Location identifier must be a non-empty string.");
+      throw new IpcValidationError("Location identifier must be a non-empty string.");
     }
     const id = locationId.trim() as KnownLocationId;
     const config = ConfigManager.get();
@@ -300,7 +302,7 @@ app.whenReady().then(async () => {
         createIfMissing = true;
         const nearestAncestor = findExistingAncestor(targetPath);
         if (!fs.existsSync(nearestAncestor)) {
-          throw new Error(`Game directory ancestor does not exist: ${targetPath}`);
+          throw new IpcValidationError(`Game directory ancestor does not exist: ${targetPath}`);
         }
         canonicalAuthorizedRoot = fs.realpathSync(nearestAncestor);
         break;
@@ -336,11 +338,11 @@ app.whenReady().then(async () => {
 
         const rawLogsDir = path.resolve(LauncherLogger.getLogsDir());
         if (!fs.existsSync(rawLogsDir)) {
-          throw new Error("Launcher log file does not exist yet.");
+          throw new IpcValidationError("Launcher log file does not exist yet.");
         }
         const canonicalLogsDir = fs.realpathSync(rawLogsDir);
         if (!isPathWithinOrEqual(canonicalLogsDir, canonicalAuthorizedRoot)) {
-          throw new Error(`Refusing to authorize logs directory escaping userData: '${canonicalLogsDir}' is outside root '${canonicalAuthorizedRoot}'`);
+          throw new IpcValidationError(`Refusing to authorize logs directory escaping userData: '${canonicalLogsDir}' is outside root '${canonicalAuthorizedRoot}'`);
         }
 
         targetPath = path.resolve(LauncherLogger.getLogPath());
@@ -351,7 +353,7 @@ app.whenReady().then(async () => {
       case "minecraftLog": {
         const rawGameDir = path.resolve(config.gameDir);
         if (!fs.existsSync(rawGameDir)) {
-          throw new Error("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
+          throw new IpcValidationError("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
         }
         canonicalAuthorizedRoot = fs.realpathSync(rawGameDir);
         targetPath = path.resolve(canonicalAuthorizedRoot, "logs", "latest.log");
@@ -360,17 +362,17 @@ app.whenReady().then(async () => {
         break;
       }
       default:
-        throw new Error(`Unknown location '${locationId}'. Permitted locations: gameDir, modsDir, logsDir, launcherLog, minecraftLog`);
+        throw new IpcValidationError(`Unknown location '${locationId}'. Permitted locations: gameDir, modsDir, logsDir, launcherLog, minecraftLog`);
     }
 
     // Pre-creation: validate physical ancestry against authorized canonical root
     const existingAncestor = findExistingAncestor(targetPath);
     if (!fs.existsSync(existingAncestor)) {
-      throw new Error(`No existing ancestor for path: ${targetPath}`);
+      throw new IpcValidationError(`No existing ancestor for path: ${targetPath}`);
     }
     const canonicalAncestor = fs.realpathSync(existingAncestor);
     if (id !== "gameDir" && !isPathWithinOrEqual(canonicalAncestor, canonicalAuthorizedRoot)) {
-      throw new Error(`Refusing to create or open path with escaping ancestor: '${canonicalAncestor}' is outside root '${canonicalAuthorizedRoot}'`);
+      throw new IpcValidationError(`Refusing to create or open path with escaping ancestor: '${canonicalAncestor}' is outside root '${canonicalAuthorizedRoot}'`);
     }
 
     if (createIfMissing && !fs.existsSync(targetPath)) {
@@ -378,21 +380,21 @@ app.whenReady().then(async () => {
     }
 
     if (!fs.existsSync(targetPath)) {
-      throw new Error(missingErrorMessage || `Target location does not exist: ${targetPath}`);
+      throw new IpcValidationError(missingErrorMessage || `Target location does not exist: ${targetPath}`);
     }
 
     // Post-creation: canonicalize target path and reject escaping symlinks/junctions
     const canonicalTarget = fs.realpathSync(targetPath);
     if (id !== "gameDir" && !isPathWithinOrEqual(canonicalTarget, canonicalAuthorizedRoot)) {
-      throw new Error(`Refusing to open path escaping authorized root: '${canonicalTarget}' is outside root '${canonicalAuthorizedRoot}'`);
+      throw new IpcValidationError(`Refusing to open path escaping authorized root: '${canonicalTarget}' is outside root '${canonicalAuthorizedRoot}'`);
     }
 
     const stat = fs.statSync(canonicalTarget);
     if (expectedType === "dir" && !stat.isDirectory()) {
-      throw new Error(`Expected directory at '${canonicalTarget}', but found non-directory.`);
+      throw new IpcValidationError(`Expected directory at '${canonicalTarget}', but found non-directory.`);
     }
     if (expectedType === "file" && !stat.isFile()) {
-      throw new Error(`Expected file at '${canonicalTarget}', but found non-file.`);
+      throw new IpcValidationError(`Expected file at '${canonicalTarget}', but found non-file.`);
     }
 
     return canonicalTarget;
@@ -429,7 +431,7 @@ app.whenReady().then(async () => {
       } catch {}
     }
 
-    throw new Error(`Refusing to open unapproved path '${targetPath}'. Only validated web URLs and known launcher locations may be opened.`);
+    throw new IpcValidationError(`Refusing to open unapproved path '${targetPath}'. Only validated web URLs and known launcher locations may be opened.`);
   });
   registerSecureHandler("utils:openSourcePage", IpcSchemas.openSourcePage, async (_, url) => {
     await shell.openExternal(url);
@@ -477,7 +479,7 @@ app.whenReady().then(async () => {
           confirmButtonText: "Confirm",
         });
         if (!confirmed) {
-          throw new Error("Custom Java executable update cancelled by user.");
+          throw new UserCancelledError("Custom Java executable update cancelled by user.");
         }
       }
     }
@@ -499,7 +501,7 @@ app.whenReady().then(async () => {
             confirmButtonText: "Allow",
           });
           if (!confirmed) {
-            throw new Error("Privileged Java arguments rejected by user.");
+            throw new UserCancelledError("Privileged Java arguments rejected by user.");
           }
         }
       }
@@ -543,7 +545,7 @@ app.whenReady().then(async () => {
         confirmButtonText: "Configure",
       });
       if (!confirmed) {
-        throw new Error("Configuration cancelled by user.");
+        throw new UserCancelledError("Configuration cancelled by user.");
       }
     }
     OperationCoordinator.assertCanMutate("configure game directory");
@@ -561,7 +563,7 @@ app.whenReady().then(async () => {
         confirmButtonText: "Move",
       });
       if (!confirmed) {
-        throw new Error("Move cancelled by user.");
+        throw new UserCancelledError("Move cancelled by user.");
       }
     }
     OperationCoordinator.assertCanMutate("move game directory");
@@ -724,7 +726,7 @@ app.whenReady().then(async () => {
         confirmButtonText: "Import",
       });
       if (!confirmed) {
-        throw new Error("Mod import cancelled by user.");
+        throw new UserCancelledError("Mod import cancelled by user.");
       }
       OperationCoordinator.assertCanMutate("add client mods");
     }
@@ -736,10 +738,10 @@ app.whenReady().then(async () => {
       const catalog = await LauncherSync.getModCatalog();
       const mod = catalog.find((m) => m.id === id && m.source === "official");
       if (!mod) {
-        throw new Error(`Cannot disable unknown official mod: '${id}'`);
+        throw new ModPolicyError(`Cannot disable unknown official mod: '${id}'`);
       }
       if (mod.canDisable !== true) {
-        throw new Error(`Official mod '${id}' is required and cannot be disabled.`);
+        throw new ModPolicyError(`Official mod '${id}' is required and cannot be disabled.`);
       }
     }
     return ClientModManager.setOfficialEnabled(id, enabled);
@@ -759,7 +761,7 @@ app.whenReady().then(async () => {
     try {
       const refreshed = await LauncherAuth.refreshSession();
       if (!refreshed.valid || !refreshed.user) {
-        throw new Error("Authentication required: Please log in with your Lampas Portal account before playing.");
+        throw new IpcValidationError("Authentication required: Please log in with your Lampas Portal account before playing.");
       }
       const user = refreshed.user;
       LauncherLogger.info(`Initiating game launch for player: ${user.minecraftUsername || user.name || "Unknown"}`);

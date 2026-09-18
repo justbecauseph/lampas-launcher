@@ -6,7 +6,7 @@
 - **Status:** Complete (Review Gate 2 amended implementation verified; Phase 2 complete; paused before Phase 3)
 - **Accepted Baseline Checkpoint:** `149f10021efce2939c6c12150a3a07dd61b622dc`
 - **Accepted Review Gate 1 Checkpoint:** `e1d029112bd4b2843d61ccc19891556192e3efeb`
-- **Reviewed Gate 2 Checkpoints:** `689800eda9c6b56910546cf608b34f243029d1db`, `f39ad0db8351c08e3bcf8c0c4f68ff6bed1b6f4a`
+- **Reviewed Gate 2 Checkpoints:** `689800eda9c6b56910546cf608b34f243029d1db`, `f39ad0db8351c08e3bcf8c0c4f68ff6bed1b6f4a`, `f222afde515676d1cd26d1e6f8a7e624345667ff`
 - **Amended Gate 2 Checkpoint:** `HEAD` on branch `feat/security`
 - **Current Branch:** `feat/security`
 - **Scope Restriction:** Strictly restricted to Phase 2 ("Narrow IPC capabilities and lock down the renderer"). Phase 3 (OS keyring/DPAPI), Phase 4 (Path containment), and subsequent phases remain paused. Acceptance does not close any subsequent production security finding or authorize merging, tagging, or publication.
@@ -39,74 +39,83 @@ A complete audit of changes was performed against the accepted Review Gate 1 che
 
 ---
 
-### 2. Review Gate 2 Defect Remediation Details (Five Specific Amendment Items)
+### 2. Review Gate 2 Defect Remediation Details (Five Targeted Amendment Items)
 
-Following review of checkpoint `f39ad0db8351c08e3bcf8c0c4f68ff6bed1b6f4a`, all five review items have been completely addressed, verified with failing-before vs passing-after evidence, and integrated:
+Following review of checkpoint `f222afde515676d1cd26d1e6f8a7e624345667ff`, all five targeted Phase 2 amendment requirements have been comprehensively implemented, verified with failing-before vs passing-after evidence, and integrated:
 
-#### Item 1: System-Property Code-Loading Approval Bypasses Closed
-- **Prior Defect:** A generic heuristic permitted safe-looking `-D` properties (e.g. any `-D[a-zA-Z0-9_.-]+=[^'"\s]+`), allowing unreviewed properties to bypass native confirmation. Mod-discovery and launch authority properties (e.g. `fabric.addMods`, `fabric.modsFolder`, `quilt.addMods`, `forge.modsFolder`, `neoforge.modsFolder`, `java.library.path`, `org.lwjgl.librarypath`, `minecraft.applet.TargetDirectory`, `java.system.class.loader`, `java.security.*`, `com.sun.management.*`, class loading) could be injected without native approval. Furthermore, option operands were not consumed as part of sequence parsing, allowing separate-token and equals forms to differ in classification.
+#### Item 1: Removal of Production Error-Sanitization Bypass and Hardening of Public Error Contract
+- **Prior Defect:** `sanitizeIpcError` contained a `[SecurityHarness]` exception that allowed raw test exceptions to bypass IPC sanitization completely in production code. Furthermore, expected error classification relied on fragile message substring matching (`err.message.includes(...)`), which could be spoofed by backend error text or accidentally genericize valid main validation errors. Length bounds were not uniformly enforced on public error strings.
 - **Remediation Implemented:**
-  - Replaced generic `-D` heuristic with an explicit dictionary `ORDINARY_SYSTEM_PROPERTIES` specifying exact allowed property names and strict regular expressions for permitted values:
-    - Standard localization, encoding, and headless properties (`file.encoding`, `user.language`, `user.country`, `java.awt.headless`, `sun.java2d.opengl`, etc.).
-  - Added `LAUNCH_AUTHORITY_PROPERTY_PATTERN` classifying all mod-discovery, library search path, classloader, security manager, and management properties:
-    - `fabric.addMods`, `fabric.modsFolder`, `quilt.addMods`, `forge.modsFolder`, `neoforge.modsFolder`, `java.library.path`, `org.lwjgl.librarypath`, `minecraft.applet.TargetDirectory`, `java.system.class.loader`, `java.security.*`, `com.sun.management.*`, etc.
-    - Mod-discovery properties are classified as `hasLaunchTargetOverride: true` and strictly prohibited from renderer configuration.
-    - Other unknown properties are classified as `hasPrivilegedOptions: true`, requiring native approval or rejection.
-  - Implemented sequence-aware argument parser (`classifyJavaArgs`) that consumes option operands across both separate-token (`-cp foo`, `-m mod/main`, `--patch-module mod=dir`) and equals forms (`--module=mod/main`, `--patch-module=mod=dir`), ensuring equivalent classifications.
-  - Prohibited positional launch targets (main class names, `.java` source files, `@argfile` argument files) across all forms.
-  - Controls enforced at both the actual settings handler (`config:set` rejects launch targets fail-closed and triggers native dialog for privileged options) and the process-argument sink (`buildLaunchArguments` in `GameRunner`).
-  - Tested: ordinary tuning is usable without approval; sensitive properties trigger confirmation dialog; cancelled dialog leaves settings invariant; prohibited launch targets fail-closed; no real Java processes are spawned.
+  - **Complete Deletion of `[SecurityHarness]` Exception:** Removed the harness marker check entirely from `sanitizeIpcError` in `src/ipc-boundary.ts`. No production error sanitization bypasses exist.
+  - **Out-of-Band Observation in Tests:** Process calls in Test 50 now observe intercepted execution out-of-band via an `interceptedProcesses` array populated by a mock `ChildProcess` returned by `child_process.spawn`. Tests do not rely on raw exceptions leaking across IPC boundaries.
+  - **Main-Owned Error Hierarchy:** Replaced message substring heuristics with an explicit typed error hierarchy (`MainIpcError` with `readonly isMainOwnedError = true`):
+    - `IpcSecurityError`: Maps directly to constant public message `"Security violation: IPC request rejected."`.
+    - `IpcValidationError`: Main-owned validation errors (settings schema, file paths, web URLs).
+    - `UserCancelledError`: Native dialog cancellations (`"Operation cancelled by user."`).
+    - `OperationConflictError`: Background operation conflicts (`OperationBusyError`, `GameRunningConflictError`).
+    - `InstallationStateError`: Launch and runtime descriptor validation errors.
+    - `ModPolicyError`: Mod authority rejections (`"Cannot disable required mod."`).
+  - **Strict Length Bounding:** Added `boundErrorMessage(msg, 120)` ensuring every public IPC error result is strictly bounded (<= 120 characters).
+  - **Unexpected Error Masking:** All unknown or unclassified backend errors return generic `"Operation failed: An unexpected internal error occurred."`, regardless of internal message wording (e.g. operational phrases containing quoted JSON credentials or raw database paths).
 - **Verification (Failing-Before vs Passing-After):**
-  - *Before:* `-Dfabric.addMods=C:\\pwn.jar` and `-Djava.library.path=C:\\pwn` were classified as ordinary safe tuning options and accepted without native approval. Separate-token `-cp foo` separated `-cp` from `foo`, treating `foo` as a positional target rather than operand.
-  - *After:* `-Dfabric.addMods=C:\\pwn.jar` is classified as launch-target override and rejected fail-closed; `-Djava.library.path=C:\\pwn` is classified as privileged and requires native approval; sequence parsing consumes operands cleanly in both separate and equals syntax; cancelling confirmation leaves settings unchanged. All 18 cases in Test 47 pass.
+  - *Before:* Errors marked with `[SecurityHarness]` leaked raw messages and stack traces across IPC boundaries; an error containing `[SecurityHarness] C:\Users\markj\secret` leaked the path; errors without marker but matching substrings were partially scrubbed; messages exceeded 120 characters.
+  - *After:*
+    - `[SecurityHarness]` errors with synthetic secrets/paths collapse to generic internal error `"Operation failed: An unexpected internal error occurred."`.
+    - Long messages containing the harness marker collapse to generic internal error (47 chars).
+    - Backend errors containing operational phrases and quoted JSON credentials (e.g., `"Invalid operation: {"token":"secret"}"`) collapse to generic internal error.
+    - Main-owned errors (`UserCancelledError`, `OperationBusyError`, `GameRunningConflictError`, `InstallationStateError`, `ModPolicyError`) produce safe, scrubbed, length-bounded public messages (all <= 120 chars).
+    - Characterization Test 51 passes all sanitization regression checks.
 
-#### Item 2: Approval Generation and Lifetime Made Unambiguous
-- **Prior Defect:** `grantApproval` used a overloaded magnitude heuristic (`optionsOrGeneration > 10_000` inferred TTL, while smaller values inferred generation number), conflating document generations with lifetimes. Document generations at or above 50 or below 50 were ambiguous. Approval lifetime was not decoupled from generation number. Missing `mainFrame` or detached frames were not strictly handled.
+#### Item 2: Closing Argument-File Detection Gaps in Consumed Operands & Correcting `java.library.path` Policy
+- **Prior Defect:** Argument files (`@file` expansion tokens) could bypass detection if passed as operands to recognized options (e.g. `-cp @file`, `-p @file`, `--patch-module mod=@file`), because the operand consumer did not inspect operand contents for prohibited `@` prefixes. Furthermore, `java.library.path` was previously documented/categorized as merely confirmation-gated rather than prohibited.
 - **Remediation Implemented:**
-  - Replaced the overloaded parameter with explicit options: `{ generation?: number; ttlMs?: number }`.
-  - Enforced exact equality with the current document generation:
-    `if (options?.generation !== undefined && options.generation !== this.documentGeneration) { throw new IpcSecurityError("Document generation mismatch during approval grant."); }`
-  - Decoupled approval lifetime: default lifetime is always 60,000ms (`APPROVAL_TTL_MS = 60_000`) regardless of document generation number.
-  - Updated legacy test call sites specifying low TTL to pass explicit `{ ttlMs: 100 }`.
-  - Added comprehensive coverage in Test 49 for generations below 50, at 50, and above 50, stale/future generations, expiration, and single-use consumption.
-  - Enforced strict sender and snapshot frame validation: missing `mainFrame` fails closed, detached or destroyed frames fail closed, and approved document URL is revalidated after native approval returns.
-  - Exercised actual registered handlers (`gameDir:configure`, `gameDir:move`, `mods:addPaths`, `config:set`) with deferred native dialogs: navigation during dialog fails closed, conflicting operations during dialog fail closed, user cancellation leaves settings intact, unavailable dialog service fails closed, and confirmed operations execute properly.
+  - **Pre-Pass and Operand-Level Expansion Token Detection:**
+    - Updated `isLaunchTargetToken` to detect `@` prefixes at token starts and after separators (`/(?:^|[=;:\s])@/`).
+    - Added pre-pass token scanner rejecting any `@`-prefixed argument before argument decomposition.
+    - Hardened `validateAndConsumeOperand` and `validateEqualsOperand` in `src/ipc-boundary.ts` to explicitly check operand values against `isLaunchTargetToken`.
+    - Preserved identical rejection decisions across both separate-token (`-cp @file`, `-p @file`, `--patch-module mod=@file`) and equals syntax (`--class-path=@file`, `--module-path=@file`, `--patch-module=mod=@file`).
+  - **Policy Correction for `java.library.path`:**
+    - Explicitly classified `java.library.path` as a prohibited launch target override (`hasLaunchTargetOverride: true`), not merely confirmation-gated. Documented and enforced at both the settings handler (`config:set`) and the process sink (`buildLaunchArguments`).
+  - **Pre-Dialog Rejection & Zero Spawn Sink Enforcement:**
+    - Rejection of launch target overrides in `config:set` occurs strictly before any native confirmation dialog is displayed, even if a confirmation mock would approve.
+    - Rejection in `buildLaunchArguments` occurs with zero process execution (throws `InstallationStateError`).
 - **Verification (Failing-Before vs Passing-After):**
-  - *Before:* Passing generation number `60_000` was misinterpreted as a TTL; passing generation `5` was accepted for document generation `3` if `< 50`; missing `mainFrame` did not throw security error; navigation during dialog could allow stale approval consumption.
-  - *After:* Generation number requires exact equality (`=== this.documentGeneration`), generations 0, 50, 100 behave identically; missing `mainFrame` throws `IpcSecurityError`; navigation during open dialog invalidates snapshot and rejects operation fail-closed. All 14 cases in Test 48 and Test 49 pass.
+  - *Before:* `-cp @args.txt` and `--class-path=@args.txt` allowed `@args.txt` as a consumed operand without triggering launch target rejection; `-Djava.library.path=/path` was confirmation-gated instead of rejected fail-closed.
+  - *After:*
+    - Standalone `@args.txt`, `-cp @args.txt`, `--class-path=@args.txt`, `-p @args.txt`, `--module-path=@args.txt`, `--patch-module mod=@args.txt`, `--patch-module=mod=@args.txt`, and `-Djava.library.path=...` are all classified as `hasLaunchTargetOverride: true`.
+    - All rejected fail-closed in `config:set` before native dialog.
+    - All rejected in `buildLaunchArguments` before `child_process.spawn` is reached.
+    - Characterization Test 47 passes all 19 target override and privilege classification assertions.
 
-#### Item 3: Public IPC Error Contract Hardened
-- **Prior Defect:** Handlers could echo raw internal error messages, stack traces, paths, or secrets back to the renderer. Posix single-component root paths like `/etc`, `/tmp`, and `/secret` were not matched by multi-segment regexes. Unexpected internal exceptions leaked backend implementation details.
+#### Item 3: Complete Attached-Frame Validation
+- **Prior Defect:** Detached frame states were not explicitly checked (`(frame as any).detached === true`). A sender frame, current main frame, or snapshot frame could be detached from its WebContents during asynchronous IPC processing or deferred native dialogs without detection.
 - **Remediation Implemented:**
-  - Hardened `sanitizeIpcError`:
-    - Unexpected backend failures return a stable, generic public error: `"Operation failed: An unexpected internal error occurred."`.
-    - `IpcSecurityError` returns masked generic `"Security violation: IPC request rejected."`.
-    - `IpcValidationError` and known operational conflict errors are sanitized through `scrubErrorText` and bounded to maximum approved lengths (<= 120 chars for validation, <= 200 chars for operational conflicts).
-  - Hardened `scrubErrorText`:
-    - Strips stack trace lines (requiring preceding newline `\r?\n\s*at\s+`).
-    - Collapses newlines and multiline spacing to single lines.
-    - Scrubs Windows drive paths (`C:\...`) and UNC paths (`\\server\...`) to `<path>`.
-    - Scrubs POSIX absolute paths, including single-component root directories (`/etc`, `/tmp`, `/secret`, `/var`) as well as nested paths (`/a/b/c`) to `<path>`.
-    - Scrubs synthetic secrets, tokens, passwords, bearer tokens, JWTs, hex hashes, and base64 payloads to `<redacted>`.
-    - Bounds unknown validation messages to <= 120 characters with ellipsis.
+  - **Explicit Detachment Checks:**
+    - Added explicit checks for `(frame as any).detached === true` and `(mainFrame as any).detached === true` in `validateIpcSender`, `createApprovalSnapshot`, and `validateApprovalSnapshot` in `src/ipc-boundary.ts`.
+    - Preserved all existing checks: frame destruction (`frame.isDestroyed()`), current-frame identity (`frame === mainFrame`), generation consistency, WebContents ownership, URL consistency, and startup-policy checks.
+    - Exercised detachment at entry and after deferred native dialogs.
 - **Verification (Failing-Before vs Passing-After):**
-  - *Before:* Error containing `/etc/passwd` or `/tmp/dump.log` left POSIX root path intact; multiline errors preserved newline stacks; unexpected internal bugs echoed backend file paths and database states.
-  - *After:* `/etc/shadow`, `/tmp/secret`, `C:\Windows\System32`, multiline traces, and synthetic tokens (JWT, hex, base64) are completely scrubbed; unexpected errors return generic public contract; Test 51 passes all sanitization assertions.
+  - *Before:* A frame marked `{ detached: true }` could pass frame validation if `isDestroyed()` was false.
+  - *After:* Detached sender frames fail closed at IPC entry; detached snapshot or main frames fail closed after deferred native dialogs. Characterization Test 48 and Test 49 verify detachment rejections across both entry and deferred dialog lifecycles.
 
-#### Item 4: Evidence Correction and Strengthening
-- **Prior Defect:** Tests checked only token presence rather than exact argument/value pairs; forged renderer inputs were not proven inert; permission-query exceptions were caught and ignored (falsely counting as denied); smoke report claims lacked direct verification.
+#### Item 4: Repository Evidence Aligned with Actual Coverage
+- **Prior Defect:** Launch characterization tests relied on throwing a `[SecurityHarness]` exception from a mock spawn to prevent real process launch and observe arguments via caught error messages. Furthermore, deferred dialog cases did not exercise the actual handlers (`gameDir:configure`, `gameDir:move`, `mods:addPaths`). Approval TTL and generation handling was not tested with actual controlled clocks across generations below, at, and above 50.
 - **Remediation Implemented:**
-  - Strengthened launch admission assertions in Test 50 to verify exact argument/value pairs:
-    - Verifies `--username Player` appears as an exact consecutive pair.
-    - Verifies `--version 26.2` appears as an exact consecutive pair.
-    - Confirms forged renderer identity overrides (`{ user: { name: "Attacker" } }`) or release overrides are ignored.
-    - Confirms `installation.json` presence, non-emptiness, and version consistency are strictly enforced.
-    - Confirms `noSync: true` skips network manifest fetch but strictly preserves local installation admission checks.
-  - In `src/main.ts` smoke test adversarial check: treats `navigator.permissions.query` exceptions as test failure (`permissionDenied = false`) rather than swallowing exceptions.
-  - Real Electron execution without `--no-sandbox` verifies live runtime permissions, renderer IPC insulation, and settings lockdown.
+  - **Sanitizer Bypass Eliminated from Launch Tests:**
+    - Replaced spawn exception harness in Test 50 with a mock `ChildProcess` that records arguments and options in an out-of-band `interceptedProcesses` array.
+    - Preserved exact argument/value consecutive-pair assertions: `--username Player` at consecutive indices, `--version 26.2` at consecutive indices.
+    - Preserved forged renderer input inertness assertions: renderer-supplied `{ user: { name: "Attacker" } }` is completely ignored in favor of main-side state.
+  - **Actual Handlers Exercised for Deferred Dialogs:**
+    - Test 49 directly exercises `gameDir:configure`, `gameDir:move`, and `mods:addPaths` with mock deferred dialogs, verifying safe handling of user cancellation, operation conflicts (`OperationBusyError`), and single-use token consumption.
+  - **Controlled Clock Testing Across Document Generations (15, 50, 75):**
+    - Tested actual document generations below 50 (gen 15), at 50 (gen 50), and above 50 (gen 75) using a controlled `Date.now` mock.
+    - Verified 60s lifetime: +30s valid, +59s valid, +61s expired.
+    - Verified stale generation rejection, future generation rejection, expiry rejection, and single-use invalidation.
+  - **Permission-Query Exception Safety:**
+    - Treated `navigator.permissions.query` exceptions as test failures, not successful denial.
 - **Verification (Failing-Before vs Passing-After):**
-  - *Before:* Assertions checked `args.includes("--username")` and `args.includes("Player")` separately; permission query errors were swallowed in a bare `catch {}`; renderer overrides were not proven ignored at the final spawn sink.
-  - *After:* Exact consecutive index assertions verified; permission query exceptions cause test failure; forged renderer parameters proven ignored; Test 50 and live smoke tests pass cleanly.
+  - *Before:* Launch arguments observed via caught `[SecurityHarness]` error message; actual handlers not exercised for deferred dialog conflict/cancellation; generations 15, 50, 75 not verified with controlled clock.
+  - *After:* Intercepted process observed out-of-band; exact argument pairs verified; actual handlers tested with deferred dialogs; generations 15, 50, 75 verified with controlled clock; Tests 47-51 pass cleanly.
 
 #### Item 5: Comprehensive Validation and Packaging Evidence
 - All test suites, typechecks, and package builds executed cleanly:
@@ -120,8 +129,8 @@ Following review of checkpoint `f39ad0db8351c08e3bcf8c0c4f68ff6bed1b6f4a`, all f
   - `bun run package:dir`: **Success**.
   - `bun test/smoke/electron-smoke.ts --strict`: **All 7 checks passed** (unpacked + packaged ASAR execution without `--no-sandbox`).
 - Packaged Artifact SHA-256 Hashes:
-  - `release\win-unpacked\resources\app.asar`: `FDF56F3A01A4D156DC6C10EAE67C02867EBCA60FA961C529916785515ACEFA02`
-  - `release\win-unpacked\Lampas Launcher.exe`: `F4625A001856D66761F258C3AB0642A22E97DCDF76756C821BBF1565DAD8F942`
+  - `release\win-unpacked\resources\app.asar`: `02019237C5846346C30FFEAD02E13A46AA448A9E74B1BBEFF992F7E6AB438937`
+  - `release\win-unpacked\Lampas Launcher.exe`: `C2B10D1A1CB8F65DBB882D80ABC1A2D724E919E5F59E6FBF18C5069A019EB7C2`
 - Lockfile integrity: `git diff bun.lock` is empty (0 drift).
 
 ---

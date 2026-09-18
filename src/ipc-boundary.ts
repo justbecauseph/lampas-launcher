@@ -15,17 +15,52 @@ import type { KnownLocationId, UpdateSettingsDto } from "./types";
 export const APPROVAL_TTL_MS = 60_000; // 60 seconds TTL
 export const MAX_CUSTOM_MOD_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB
 
-export class IpcSecurityError extends Error {
-  constructor(message: string) {
+export class MainIpcError extends Error {
+  readonly isMainOwnedError = true;
+  constructor(message: string, public readonly code?: string) {
     super(message);
+  }
+}
+
+export class IpcSecurityError extends MainIpcError {
+  constructor(message: string) {
+    super(message, "SECURITY_VIOLATION");
     this.name = "IpcSecurityError";
   }
 }
 
-export class IpcValidationError extends Error {
+export class IpcValidationError extends MainIpcError {
   constructor(message: string) {
-    super(message);
+    super(message, "VALIDATION_ERROR");
     this.name = "IpcValidationError";
+  }
+}
+
+export class UserCancelledError extends MainIpcError {
+  constructor(message: string) {
+    super(message, "USER_CANCELLED");
+    this.name = "UserCancelledError";
+  }
+}
+
+export class OperationConflictError extends MainIpcError {
+  constructor(message: string, code = "OPERATION_CONFLICT") {
+    super(message, code);
+    this.name = "OperationConflictError";
+  }
+}
+
+export class InstallationStateError extends MainIpcError {
+  constructor(message: string) {
+    super(message, "INSTALLATION_STATE_ERROR");
+    this.name = "InstallationStateError";
+  }
+}
+
+export class ModPolicyError extends MainIpcError {
+  constructor(message: string) {
+    super(message, "MOD_POLICY_ERROR");
+    this.name = "ModPolicyError";
   }
 }
 
@@ -187,6 +222,7 @@ export function isOrdinaryTuningOption(token: string): boolean {
 export function isLaunchTargetToken(token: string): boolean {
   const trimmed = token.trim();
   if (trimmed.length === 0) return false;
+  if (trimmed.startsWith("@") || /(?:^|[=;:\s])@/.test(trimmed)) return true;
   if (!trimmed.startsWith("-")) return true;
   if (/^-jar(=|$)/i.test(trimmed)) return true;
   if (/^--source(=|$)/i.test(trimmed)) return true;
@@ -206,78 +242,95 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
   const launchTargetViolations: string[] = [];
   const privilegedReasons: string[] = [];
 
+  const recordLaunchTargetViolation = (tokenStr: string, reason: string) => {
+    hasLaunchTargetOverride = true;
+    isPrivileged = true;
+    if (!launchTargetViolations.includes(tokenStr)) {
+      launchTargetViolations.push(tokenStr);
+    }
+    privilegedReasons.push(reason);
+  };
+
+  // Pre-pass: Detect prohibited expansion tokens (@argfile) anywhere in tokens or option values
+  for (const rawToken of tokens) {
+    const t = rawToken.trim();
+    if (!t) continue;
+    if (t.startsWith("@") || /(?:^|[=;:\s])@/.test(t)) {
+      recordLaunchTargetViolation(t, `Argument file (@argfile): '${t}'`);
+    }
+  }
+
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i].trim();
     if (!token) continue;
 
+    const validateAndConsumeOperand = (optName: string): string | null => {
+      if (i + 1 < tokens.length) {
+        i++;
+        const operand = tokens[i].trim();
+        if (operand.startsWith("@") || /(?:^|[=;:\s])@/.test(operand)) {
+          recordLaunchTargetViolation(operand, `Argument file (@argfile) as operand to '${optName}': '${operand}'`);
+        }
+        return operand;
+      }
+      return null;
+    };
+
+    const validateEqualsOperand = (optName: string, tokenStr: string) => {
+      const eqIdx = tokenStr.indexOf("=");
+      if (eqIdx !== -1) {
+        const val = tokenStr.slice(eqIdx + 1).trim();
+        if (val.startsWith("@") || /(?:^|[=;:\s])@/.test(val)) {
+          recordLaunchTargetViolation(tokenStr, `Argument file (@argfile) in '${optName}': '${tokenStr}'`);
+        }
+      }
+    };
+
     // 1. Argument files
     if (token.startsWith("@")) {
-      hasLaunchTargetOverride = true;
-      isPrivileged = true;
-      launchTargetViolations.push(token);
-      privilegedReasons.push(`Argument file (@argfile): '${token}'`);
+      recordLaunchTargetViolation(token, `Argument file (@argfile): '${token}'`);
       continue;
     }
 
     // 2. Launch target flags: -jar
-    if (token === "-jar" || token.startsWith("-jar=")) {
-      hasLaunchTargetOverride = true;
-      isPrivileged = true;
-      launchTargetViolations.push(token);
-      privilegedReasons.push(`Launch target override (-jar): '${token}'`);
-      if (token === "-jar" && i + 1 < tokens.length) {
-        i++;
-        launchTargetViolations.push(tokens[i]);
-      }
+    if (token === "-jar") {
+      recordLaunchTargetViolation(token, `Launch target override (-jar): '${token}'`);
+      validateAndConsumeOperand(token);
+      continue;
+    }
+    if (token.startsWith("-jar=")) {
+      recordLaunchTargetViolation(token, `Launch target override (-jar): '${token}'`);
+      validateEqualsOperand("-jar", token);
       continue;
     }
 
     // 3. Module launch target: -m or --module
     if (token === "-m" || token === "--module") {
-      hasLaunchTargetOverride = true;
-      isPrivileged = true;
-      launchTargetViolations.push(token);
-      privilegedReasons.push(`Module launch target override: '${token}'`);
-      if (i + 1 < tokens.length) {
-        i++;
-        launchTargetViolations.push(tokens[i]);
-      }
+      recordLaunchTargetViolation(token, `Module launch target override: '${token}'`);
+      validateAndConsumeOperand(token);
       continue;
     }
     if (token.startsWith("-m=") || token.startsWith("--module=")) {
-      hasLaunchTargetOverride = true;
-      isPrivileged = true;
-      launchTargetViolations.push(token);
-      privilegedReasons.push(`Module launch target override: '${token}'`);
+      recordLaunchTargetViolation(token, `Module launch target override: '${token}'`);
+      validateEqualsOperand(token.split("=")[0], token);
       continue;
     }
 
     // 4. Source file launch: --source
     if (token === "--source") {
-      hasLaunchTargetOverride = true;
-      isPrivileged = true;
-      launchTargetViolations.push(token);
-      privilegedReasons.push(`Source launch target override: '${token}'`);
-      if (i + 1 < tokens.length) {
-        i++;
-        launchTargetViolations.push(tokens[i]);
-      }
+      recordLaunchTargetViolation(token, `Source launch target override: '${token}'`);
+      validateAndConsumeOperand(token);
       continue;
     }
     if (token.startsWith("--source=")) {
-      hasLaunchTargetOverride = true;
-      isPrivileged = true;
-      launchTargetViolations.push(token);
-      privilegedReasons.push(`Source launch target override: '${token}'`);
+      recordLaunchTargetViolation(token, `Source launch target override: '${token}'`);
+      validateEqualsOperand("--source", token);
       continue;
     }
 
     // 5. Positional operands (non-option tokens not consumed as operands of prior options)
     if (!token.startsWith("-")) {
-      hasLaunchTargetOverride = true;
-      isPrivileged = true;
-      launchTargetViolations.push(token);
-      privilegedReasons.push(`Positional launch target override: '${token}'`);
+      recordLaunchTargetViolation(token, `Positional launch target override: '${token}'`);
       continue;
     }
 
@@ -286,14 +339,13 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
     if (token === "-cp" || token === "-classpath" || token === "--class-path") {
       isPrivileged = true;
       privilegedReasons.push(`Classpath override: '${token}'`);
-      if (i + 1 < tokens.length) {
-        i++; // consume operand so it is not treated as a positional main class
-      }
+      validateAndConsumeOperand(token);
       continue;
     }
     if (token.startsWith("-cp=") || token.startsWith("-classpath=") || token.startsWith("--class-path=")) {
       isPrivileged = true;
       privilegedReasons.push(`Classpath override: '${token}'`);
+      validateEqualsOperand(token.split("=")[0], token);
       continue;
     }
 
@@ -301,14 +353,13 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
     if (token === "-p" || token === "--module-path") {
       isPrivileged = true;
       privilegedReasons.push(`Module path override: '${token}'`);
-      if (i + 1 < tokens.length) {
-        i++;
-      }
+      validateAndConsumeOperand(token);
       continue;
     }
     if (token.startsWith("-p=") || token.startsWith("--module-path=")) {
       isPrivileged = true;
       privilegedReasons.push(`Module path override: '${token}'`);
+      validateEqualsOperand(token.split("=")[0], token);
       continue;
     }
 
@@ -317,8 +368,10 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
     if (moduleOptMatch) {
       isPrivileged = true;
       privilegedReasons.push(`Module configuration override: '${token}'`);
-      if (moduleOptMatch[2] === undefined && i + 1 < tokens.length) {
-        i++;
+      if (moduleOptMatch[2] === undefined) {
+        validateAndConsumeOperand(moduleOptMatch[1]);
+      } else {
+        validateEqualsOperand(moduleOptMatch[1], token);
       }
       continue;
     }
@@ -508,6 +561,10 @@ export class IpcBoundary {
     this.incrementDocumentGeneration();
   }
 
+  static setDocumentGeneration(generation: number): void {
+    this.documentGeneration = generation;
+  }
+
   static getDocumentGeneration(): number {
     return this.documentGeneration;
   }
@@ -584,9 +641,15 @@ export class IpcBoundary {
     if (!currentMainFrame || (typeof (currentMainFrame as any).isDestroyed === "function" && (currentMainFrame as any).isDestroyed())) {
       throw new IpcSecurityError("Cannot create approval snapshot: missing or destroyed main frame.");
     }
+    if ((currentMainFrame as any).detached === true) {
+      throw new IpcSecurityError("Cannot create approval snapshot: main frame is detached.");
+    }
     const frame = event.senderFrame;
     if (!frame || (typeof (frame as any).isDestroyed === "function" && (frame as any).isDestroyed())) {
       throw new IpcSecurityError("Cannot create approval snapshot: sender frame is destroyed.");
+    }
+    if ((frame as any).detached === true) {
+      throw new IpcSecurityError("Cannot create approval snapshot: sender frame is detached.");
     }
     if (frame !== currentMainFrame) {
       throw new IpcSecurityError("Cannot create approval snapshot: sender frame is not the active main frame.");
@@ -630,12 +693,19 @@ export class IpcBoundary {
     ) {
       throw new IpcSecurityError("Active main frame destroyed or unavailable while awaiting native user approval.");
     }
+    if ((currentMainFrame as any).detached === true) {
+      throw new IpcSecurityError("Active main frame detached while awaiting native user approval.");
+    }
     if (
       !snapshot.frame ||
-      (typeof (snapshot.frame as any).isDestroyed === "function" && (snapshot.frame as any).isDestroyed()) ||
-      snapshot.frame !== currentMainFrame ||
-      snapshot.frame.parent !== null
+      (typeof (snapshot.frame as any).isDestroyed === "function" && (snapshot.frame as any).isDestroyed())
     ) {
+      throw new IpcSecurityError("Sender frame invalidated while awaiting native user approval.");
+    }
+    if ((snapshot.frame as any).detached === true) {
+      throw new IpcSecurityError("Sender frame detached while awaiting native user approval.");
+    }
+    if (snapshot.frame !== currentMainFrame || snapshot.frame.parent !== null) {
       throw new IpcSecurityError("Sender frame invalidated while awaiting native user approval.");
     }
 
@@ -710,10 +780,19 @@ export class IpcBoundary {
       throw new IpcSecurityError("Unauthorized IPC caller: sender frame is detached or destroyed.");
     }
 
+    if ((frame as any).detached === true) {
+      throw new IpcSecurityError("Unauthorized IPC caller: sender frame is detached.");
+    }
+
     const mainFrame = this.mainWindowRef.webContents?.mainFrame;
     if (!mainFrame || (typeof (mainFrame as any).isDestroyed === "function" && (mainFrame as any).isDestroyed())) {
       throw new IpcSecurityError("Unauthorized IPC caller: missing or destroyed main frame.");
     }
+
+    if ((mainFrame as any).detached === true) {
+      throw new IpcSecurityError("Unauthorized IPC caller: main frame is detached.");
+    }
+
     if (frame !== mainFrame) {
       throw new IpcSecurityError("Unauthorized IPC caller: sender frame is not the active main frame.");
     }
@@ -1123,80 +1202,32 @@ export function scrubErrorText(text: string): string {
   return s.trim();
 }
 
+export function boundErrorMessage(msg: string, maxLen = 120): string {
+  if (msg.length <= maxLen) return msg;
+  return msg.slice(0, maxLen - 3) + "...";
+}
+
 export function sanitizeIpcError(err: any): Error {
-  if (err instanceof IpcSecurityError) {
+  // 1. Security violations return stable generic security error
+  if (err instanceof IpcSecurityError || (err && err.code === "SECURITY_VIOLATION")) {
     return new Error("Security violation: IPC request rejected.");
   }
 
-  if (err instanceof IpcValidationError) {
+  // 2. Main-owned domain, validation, cancellation, and operational conflict errors
+  if (
+    err instanceof IpcValidationError ||
+    err instanceof UserCancelledError ||
+    err instanceof OperationConflictError ||
+    err instanceof InstallationStateError ||
+    err instanceof ModPolicyError ||
+    (err && typeof err === "object" && (err as any).isMainOwnedError === true)
+  ) {
     const rawMsg = typeof err?.message === "string" ? err.message : "Validation error.";
     const scrubbed = scrubErrorText(rawMsg);
-    const bounded = scrubbed.length > 120 ? scrubbed.slice(0, 117) + "..." : scrubbed;
-    return new Error(bounded);
+    return new Error(boundErrorMessage(scrubbed, 120));
   }
 
-  // Handle test harness interception
-  if (err && typeof err.message === "string" && err.message.includes("[SecurityHarness]")) {
-    return new Error(err.message);
-  }
-
-  // Handle known expected domain / operational conflict errors
-  if (err && typeof err.message === "string") {
-    const msg = err.message;
-    if (
-      msg.includes("is currently in progress") ||
-      msg.includes("while Minecraft is running") ||
-      msg.includes("Cannot modify client mods while") ||
-      msg.includes("Authentication required") ||
-      msg.includes("Session expired") ||
-      msg.includes("No bound Minecraft account found") ||
-      msg.includes("Incompatible installation state detected") ||
-      msg.includes("Incompatible installation generation detected") ||
-      msg.includes("Missing installation state metadata") ||
-      msg.includes("Installation state metadata is empty") ||
-      msg.includes("Installation state metadata is missing") ||
-      msg.includes("Installation state metadata is corrupted") ||
-      msg.includes("No installed Lampas release found") ||
-      msg.includes("Release descriptor is corrupted") ||
-      msg.includes("Release descriptor metadata is missing") ||
-      msg.includes("Cannot disable unknown official mod") ||
-      msg.includes("is required and cannot be disabled") ||
-      msg.includes("is required by the server modpack and cannot be disabled") ||
-      msg.includes("Mod import cancelled by user") ||
-      msg.includes("Mod file must have a .jar extension") ||
-      msg.includes("Mod file does not exist") ||
-      msg.includes("Mod path is not a regular file") ||
-      msg.includes("Mod file exceeds maximum allowed size") ||
-      msg.includes("Privileged action rejected by user") ||
-      msg.includes("Privileged Java arguments rejected by user") ||
-      msg.includes("Custom Java executable update cancelled by user") ||
-      msg.includes("Configuration cancelled by user") ||
-      msg.includes("Move cancelled by user") ||
-      msg.includes("Native dialog service unavailable") ||
-      msg.includes("Document generation changed while awaiting native user approval") ||
-      msg.includes("Operation state changed while awaiting native user approval") ||
-      msg.includes("Custom Java arguments cannot override launch target") ||
-      msg.includes("Process argument sink rejected launch target override") ||
-      msg.includes("does not exist") ||
-      msg.includes("Expected file") ||
-      msg.includes("Expected directory") ||
-      msg.includes("Refusing to open") ||
-      msg.includes("escaping") ||
-      msg.includes("Cannot access file") ||
-      msg.includes("Access denied") ||
-      msg.includes("Location identifier must be a non-empty string") ||
-      msg.includes("No existing ancestor for path") ||
-      msg.includes("Portal URL") ||
-      msg.includes("Web URL") ||
-      msg.includes("Remote portal")
-    ) {
-      const scrubbed = scrubErrorText(msg);
-      const bounded = scrubbed.length > 200 ? scrubbed.slice(0, 197) + "..." : scrubbed;
-      return new Error(bounded);
-    }
-  }
-
-  // Unexpected backend failures return a stable generic public error
+  // 3. Unexpected backend errors return stable generic public error regardless of wording
   return new Error("Operation failed: An unexpected internal error occurred.");
 }
 
