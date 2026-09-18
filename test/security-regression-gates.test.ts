@@ -432,6 +432,278 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
     expect(SessionManager.isAuthenticated()).toBe(false);
     expect(ConfigManager.get().token).toBeUndefined();
   });
+
+  test("[Phase 3 Gate] Migration: Coexisting protected credentials and legacy plaintext prioritize protected record and scrub plaintext", () => {
+    class MockGateSafeStorage {
+      isEncryptionAvailable() { return true; }
+      encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
+      decryptString(buf: Buffer) {
+        const s = buf.toString("utf-8");
+        if (!s.startsWith("ENC:")) throw new Error("Invalid ciphertext");
+        return s.slice(4);
+      }
+    }
+    const mockStorage = new MockGateSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: "https://dev.lampas.town",
+      sessionPortalUrl: "https://dev.lampas.town",
+      token: "legacy-plaintext-token",
+      refreshToken: "legacy-plaintext-refresh",
+      minecraftAccessToken: "legacy-plaintext-mc",
+    }, null, 2));
+
+    CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "protected-store-token",
+      refreshToken: "protected-store-refresh",
+      portalAccountId: "user-protected-123",
+      portalUsername: "ProtectedUser",
+    });
+
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+
+    expect(outcome.protectedLoaded).toBe(true);
+    expect(outcome.legacyScrubbed).toBe(true);
+    expect(SessionManager.getCredentials()?.token).toBe("protected-store-token");
+
+    const onDisk = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(onDisk.token).toBeUndefined();
+    expect(onDisk.refreshToken).toBeUndefined();
+    expect(onDisk.minecraftAccessToken).toBeUndefined();
+  });
+
+  test("[Phase 3 Gate] Migration: Interrupted migration crash boundary recovers on restart and scrubs plaintext", () => {
+    class MockGateSafeStorage {
+      isEncryptionAvailable() { return true; }
+      encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
+      decryptString(buf: Buffer) {
+        const s = buf.toString("utf-8");
+        if (!s.startsWith("ENC:")) throw new Error("Invalid ciphertext");
+        return s.slice(4);
+      }
+    }
+    CredentialStore.setSafeStorageMockForTesting(new MockGateSafeStorage() as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: "https://dev.lampas.town",
+      sessionPortalUrl: "https://dev.lampas.town",
+      token: "leftover-plaintext-token",
+      refreshToken: "leftover-plaintext-refresh",
+    }, null, 2));
+
+    CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "protected-interrupted-token",
+      refreshToken: "protected-interrupted-refresh",
+      portalAccountId: "user-456",
+      portalUsername: "InterruptedUser",
+    });
+
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+
+    expect(outcome.legacyScrubbed).toBe(true);
+    expect(outcome.protectedLoaded).toBe(true);
+    expect(SessionManager.getCredentials()?.token).toBe("protected-interrupted-token");
+
+    const diskRaw = fs.readFileSync(configPath, "utf-8");
+    expect(diskRaw).not.toContain("leftover-plaintext-token");
+  });
+
+  test("[Phase 3 Gate] Migration: Failed protected record load with legacy plaintext fails closed and scrubs disk without restoring session", () => {
+    class MockGateSafeStorage {
+      isEncryptionAvailable() { return true; }
+      encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
+      decryptString() { throw new Error("Decryption hardware key revoked"); }
+    }
+    CredentialStore.setSafeStorageMockForTesting(new MockGateSafeStorage() as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: "https://dev.lampas.town",
+      sessionPortalUrl: "https://dev.lampas.town",
+      token: "untrusted-resurrect-token",
+      refreshToken: "untrusted-resurrect-refresh",
+    }, null, 2));
+
+    const credFile = CredentialStore.getCredentialsFilePath();
+    fs.writeFileSync(credFile, Buffer.from("ENC:CORRUPT_OR_KEY_REVOKED"));
+
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+
+    expect(SessionManager.isAuthenticated()).toBe(false);
+    expect(SessionManager.getCredentials()).toBeNull();
+    expect(outcome.failedProtectedLoad).toBe(true);
+    expect(outcome.legacyScrubbed).toBe(true);
+
+    const diskRaw = fs.readFileSync(configPath, "utf-8");
+    expect(diskRaw).not.toContain("untrusted-resurrect-token");
+    expect(fs.existsSync(credFile)).toBe(false);
+  });
+
+  test("[Phase 3 Gate] Persistence & Deletion: SaveCredentialsResult and ClearCredentialsResult report explicit outcomes and failure handling", () => {
+    class MockGateSafeStorage {
+      failEncrypt = false;
+      isEncryptionAvailable() { return true; }
+      encryptString(plain: string) {
+        if (this.failEncrypt) throw new Error("Simulated storage write error");
+        return Buffer.from("ENC:" + plain);
+      }
+      decryptString(buf: Buffer) {
+        const s = buf.toString("utf-8");
+        if (!s.startsWith("ENC:")) throw new Error("Invalid ciphertext");
+        return s.slice(4);
+      }
+    }
+    const mockStorage = new MockGateSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    // 1. Successful save
+    const saveResult = CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "save-outcome-token",
+      refreshToken: "save-outcome-refresh",
+      portalAccountId: "user-outcomes-1",
+      portalUsername: "OutcomesUser",
+    });
+    expect(saveResult.success).toBe(true);
+    expect(saveResult.sessionOnly).toBe(false);
+
+    // 2. Failure during write reports error and does not claim success
+    mockStorage.failEncrypt = true;
+    const failedSave = CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "fail-save-token",
+      portalAccountId: "user-outcomes-1",
+      portalUsername: "OutcomesUser",
+    });
+    expect(failedSave.success).toBe(false);
+    expect(failedSave.error).toBeDefined();
+    expect(failedSave.error).toContain("secure storage");
+    mockStorage.failEncrypt = false;
+
+    // 3. Successful clear
+    const clearResult = CredentialStore.clearCredentials();
+    expect(clearResult.success).toBe(true);
+    expect(clearResult.deletedTarget).toBe(true);
+
+    // 4. Idempotent clear when file absent
+    const clearIdempotent = CredentialStore.clearCredentials();
+    expect(clearIdempotent.success).toBe(true);
+    expect(clearIdempotent.deletedTarget).toBe(false);
+  });
+
+  test("[Phase 3 Gate] Session Replacement: establishNewSession does not inherit optional tokens; setCurrentUser blocks account relabeling", () => {
+    // 1. Establish initial session for Account 1 with full optional tokens
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-acc-1",
+      refreshToken: "refresh-acc-1",
+      minecraftAccessToken: "mc-token-acc-1",
+      portalAccountId: "acc-1",
+      portalUsername: "Alice",
+      minecraftUuid: "mc-uuid-1",
+      minecraftUsername: "AliceMC",
+    });
+
+    expect(SessionManager.getCredentials()?.minecraftAccessToken).toBe("mc-token-acc-1");
+    expect(SessionManager.getCurrentRecord()?.portalAccountId).toBe("acc-1");
+
+    // 2. Switch to Account 2 without supplying optional tokens
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-acc-2",
+      refreshToken: "refresh-acc-2",
+      portalAccountId: "acc-2",
+      portalUsername: "Bob",
+    });
+
+    // Invariant: Account 2 must NEVER inherit Account 1's optional tokens!
+    const acc2Creds = SessionManager.getCredentials();
+    const acc2Record = SessionManager.getCurrentRecord();
+    expect(acc2Creds?.token).toBe("token-acc-2");
+    expect(acc2Record?.portalAccountId).toBe("acc-2");
+    expect(acc2Creds?.minecraftAccessToken).toBeUndefined();
+    expect(acc2Record?.minecraftUuid).toBeUndefined();
+
+    // 3. Relabeling guard: setCurrentUser cannot alter account ID or portal origin
+    expect(() => {
+      SessionManager.setCurrentUser({
+        id: "acc-unauthorized",
+        name: "Eve",
+        minecraftUuid: "mc-uuid-unauthorized",
+        minecraftUsername: "EveMC",
+        isAdmin: false,
+        isTech: false,
+        roles: [],
+        allowedChannels: [],
+      });
+    }).toThrow("Cannot relabel credentials");
+  });
+
+  test("[Phase 3 Gate] Scoped Refresh Coalescing: In-flight refresh coalesces matching keys and isolates epochs", async () => {
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "pre-refresh-token",
+      refreshToken: "pre-refresh-token",
+      portalAccountId: "user-coalesce-1",
+      portalUsername: "CoalesceUser",
+    });
+
+    const currentEpoch = SessionManager.getSessionEpoch();
+    let invocationCount = 0;
+    const mockWorker = async () => {
+      invocationCount++;
+      await new Promise((r) => setTimeout(r, 20));
+      return { valid: true };
+    };
+
+    // 1. Same origin, account, epoch share single in-flight Promise
+    const p1 = SessionManager.getCoalescedRefresh("https://dev.lampas.town", "user-coalesce-1", currentEpoch, mockWorker);
+    const p2 = SessionManager.getCoalescedRefresh("https://dev.lampas.town", "user-coalesce-1", currentEpoch, mockWorker);
+
+    expect(p1).toBe(p2);
+    const [res1, res2] = await Promise.all([p1, p2]);
+    expect(res1.valid).toBe(true);
+    expect(res2.valid).toBe(true);
+    expect(invocationCount).toBe(1);
+
+    // 2. Epoch advancement creates independent coalescing key
+    SessionManager.advanceSessionEpoch();
+    const newEpoch = SessionManager.getSessionEpoch();
+    expect(newEpoch).not.toBe(currentEpoch);
+
+    const p3 = SessionManager.getCoalescedRefresh("https://dev.lampas.town", "user-coalesce-1", newEpoch, mockWorker);
+    expect(p3).not.toBe(p1);
+    await p3;
+    expect(invocationCount).toBe(2);
+  });
+
+  test("[Phase 3 Gate] Storage Status: getStorageStatus returns accurate non-secret DTO", () => {
+    const status = SessionManager.getStorageStatus();
+    expect(typeof status.backend).toBe("string");
+    expect(typeof status.sessionOnly).toBe("boolean");
+    expect(typeof status.persistenceAvailable).toBe("boolean");
+
+    // Negative invariant: no secrets leaked in status
+    const serialized = JSON.stringify(status);
+    expect(serialized).not.toContain("token");
+    expect(serialized).not.toContain("secret");
+  });
 });
 
 describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recovery (SEC-04, SEC-05)", () => {

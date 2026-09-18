@@ -14,6 +14,7 @@ import type {
   InstalledRuntimeInfo,
   UpdateSettingsDto,
   KnownLocationId,
+  AuthStorageStatusDto,
   LampasApi,
 } from "./types";
 
@@ -26,6 +27,8 @@ const api: LampasApi = {
       ipcRenderer.invoke("auth:verify"),
     refresh: (): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
       ipcRenderer.invoke("auth:refresh"),
+    getStorageStatus: (): Promise<AuthStorageStatusDto> =>
+      ipcRenderer.invoke("auth:getStorageStatus"),
   },
   server: {
     getStatus: (): Promise<ServerStatus> => ipcRenderer.invoke("server:getStatus"),

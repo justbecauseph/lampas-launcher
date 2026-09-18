@@ -644,6 +644,14 @@ if (btnLogin) {
       updateUserUI(res.user);
       void refreshServerStatus();
       showToast(`Welcome back, ${res.user.minecraftUsername || res.user.name || "Player"}!`, "success");
+      try {
+        const storageStatus = await window.lampas.auth.getStorageStatus();
+        if (storageStatus.sessionOnly) {
+          showToast("Session-only mode active: credentials are held in memory only.", "info");
+        } else if (storageStatus.lastPersistenceError) {
+          showToast(`Storage warning: ${storageStatus.lastPersistenceError}`, "warning");
+        }
+      } catch {}
     } catch (err) {
       showToast(`Login failed: ${err.message}`, "error", 5000);
     } finally {
@@ -668,7 +676,16 @@ if (btnLogout) {
       updateUserUI(null);
       latestServerStatus = null;
       renderServerStatus(null);
-      showToast("Logged out successfully.", "info");
+      try {
+        const storageStatus = await window.lampas.auth.getStorageStatus();
+        if (storageStatus.lastCleanupError) {
+          showToast(`Logout warning: Persistent cleanup incomplete (${storageStatus.lastCleanupError})`, "warning");
+        } else {
+          showToast("Logged out successfully.", "info");
+        }
+      } catch {
+        showToast("Logged out successfully.", "info");
+      }
     } catch (err) {
       showToast(`Logout failed: ${err.message}`, "error");
     }

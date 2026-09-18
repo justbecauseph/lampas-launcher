@@ -12,6 +12,8 @@ mock.module("electron", () => ({
     getName: () => "Lampas Launcher",
     getVersion: () => "2.0.0",
   },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
+  dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
 const { ConfigManager } = await import("../src/config");
@@ -101,7 +103,7 @@ describe("ServerStatusClient", () => {
   });
 
   test("requires a stored launcher token", async () => {
-    ConfigManager.set({ token: undefined });
+    ConfigManager.clearSession();
     await expect(ServerStatusClient.getStatus()).rejects.toThrow("Portal session is not available");
   });
 });

@@ -1,10 +1,15 @@
 import * as http from "node:http";
+import * as net from "node:net";
 import { createHash, randomBytes } from "node:crypto";
 import { shell } from "electron";
 import { ConfigManager, normalizePortalUrl, portalFetch, PortalRedirectPolicyError } from "./config";
 import { SessionManager } from "./session-manager";
+import { type ClearCredentialsResult } from "./credential-store";
 import type { UserProfile } from "./types";
 import { LauncherLogger } from "./logger";
+import { OperationConflictError, UserCancelledError } from "./ipc-boundary";
+
+export const LOGIN_TIMEOUT_MS = 120_000; // 120 seconds (2 minutes) timeout
 
 function base64Url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -80,25 +85,41 @@ function renderErrorHtml(message: string = "Authentication failed. Please return
 </html>`;
 }
 
+interface LoginOperationContext {
+  readonly id: string;
+  readonly epoch: number;
+  readonly deadline: number;
+  readonly abortController: AbortController;
+  isTerminal(): boolean;
+  terminate(
+    reason: "timeout" | "cancelled" | "superseded" | "denied" | "shutdown" | "server_error" | "browser_error" | "error",
+    err?: Error
+  ): void;
+  settleSuccess(data: { token: string; user: UserProfile }): void;
+}
+
 export class LauncherAuth {
-  private static activeLoginCleanup: (() => void) | null = null;
+  private static activeLoginContext: LoginOperationContext | null = null;
 
   /**
-   * Cancels any in-flight loopback OAuth login server and timer.
+   * Cancels any in-flight loopback OAuth login server, aborts requests, and terminates context.
    */
   static cancelLogin(): void {
-    if (this.activeLoginCleanup) {
-      this.activeLoginCleanup();
-      this.activeLoginCleanup = null;
+    if (this.activeLoginContext) {
+      this.activeLoginContext.terminate("cancelled", new UserCancelledError("Authentication cancelled by user."));
+      this.activeLoginContext = null;
     }
     SessionManager.advanceSessionEpoch();
   }
 
   static async loginWithPortal(_portalUrlOverride?: string): Promise<{ token: string; user: UserProfile }> {
-    // Clean up any superseding or previous in-flight login
-    if (this.activeLoginCleanup) {
-      this.activeLoginCleanup();
-      this.activeLoginCleanup = null;
+    // 1. Supersede any existing in-flight login operation
+    if (this.activeLoginContext) {
+      this.activeLoginContext.terminate(
+        "superseded",
+        new OperationConflictError("Login was superseded by a new login request.")
+      );
+      this.activeLoginContext = null;
     }
 
     const loginEpoch = SessionManager.nextLoginEpoch();
@@ -109,26 +130,80 @@ export class LauncherAuth {
     const state = randomBytes(16).toString("hex");
 
     return new Promise((resolve, reject) => {
-      let timeoutId: NodeJS.Timeout | null = null;
+      let isSettled = false;
+      let timeoutTimer: NodeJS.Timeout | null = null;
       let exchanged = false;
+      const abortController = new AbortController();
+      const clientSockets = new Set<net.Socket>();
 
-      const cleanup = () => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
+      const settleOnce = (result: { success: true; data: { token: string; user: UserProfile } } | { success: false; error: Error }) => {
+        if (isSettled) return;
+        isSettled = true;
+
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
         }
+
+        // Close sockets and server
+        for (const socket of clientSockets) {
+          try {
+            socket.destroy();
+          } catch {}
+        }
+        clientSockets.clear();
+
         try {
           server.close();
         } catch {}
-        if (LauncherAuth.activeLoginCleanup === cleanup) {
-          LauncherAuth.activeLoginCleanup = null;
+
+        if (LauncherAuth.activeLoginContext === opContext) {
+          LauncherAuth.activeLoginContext = null;
+        }
+
+        if (result.success) {
+          resolve(result.data);
+        } else {
+          reject(result.error);
         }
       };
 
-      LauncherAuth.activeLoginCleanup = cleanup;
+      const opContext: LoginOperationContext = {
+        id: randomBytes(8).toString("hex"),
+        epoch: loginEpoch,
+        deadline: Date.now() + LOGIN_TIMEOUT_MS,
+        abortController,
+        isTerminal: () => isSettled,
+        terminate: (reason, err) => {
+          if (isSettled) return;
+          abortController.abort();
+          const finalError = err || new Error(`Login terminated: ${reason}`);
+          settleOnce({ success: false, error: finalError });
+        },
+        settleSuccess: (data) => {
+          settleOnce({ success: true, data });
+        },
+      };
+
+      LauncherAuth.activeLoginContext = opContext;
+
+      // 120-second terminal deadline
+      timeoutTimer = setTimeout(() => {
+        LauncherLogger.warn("[Auth] Portal login timed out after 120 seconds.");
+        opContext.terminate("timeout", new Error("Login timed out after 120 seconds."));
+      }, LOGIN_TIMEOUT_MS);
 
       const server = http.createServer(async (req, res) => {
         try {
+          // Terminal barrier: ignore requests if already settled
+          if (opContext.isTerminal()) {
+            try {
+              res.writeHead(400, { "Content-Type": "text/plain" });
+              res.end("Login session is no longer active");
+            } catch {}
+            return;
+          }
+
           // 1. Method constraint
           if (req.method !== "GET") {
             res.writeHead(405, { "Content-Type": "text/plain" });
@@ -177,13 +252,12 @@ export class LauncherAuth {
           if (oauthError && returnedState === state) {
             res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml("Authentication was denied or cancelled on the portal."));
-            cleanup();
             LauncherLogger.warn("[Auth] OAuth login denied or cancelled by user on portal.");
-            reject(new Error("Authentication was denied or cancelled by user"));
+            opContext.terminate("denied", new Error("Authentication was denied or cancelled by user"));
             return;
           }
 
-          // Noise or invalid state probe: reject request without terminating server
+          // Noise or invalid state probe: reject request without terminating valid pending server
           if (!code || returnedState !== state) {
             res.writeHead(400, { "Content-Type": "text/plain" });
             res.end("Bad Request: Invalid callback state or missing code");
@@ -201,15 +275,14 @@ export class LauncherAuth {
           // 6. Check session snapshot before performing network exchange
           const currentConfig = ConfigManager.get();
           if (
+            opContext.isTerminal() ||
             loginEpoch !== SessionManager.getActiveLoginEpoch() ||
             SessionManager.getSessionEpoch() !== generationSnapshot ||
             normalizePortalUrl(currentConfig.portalUrl) !== portalUrl
           ) {
             res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml("Authentication session was superseded or cancelled."));
-            cleanup();
-            LauncherLogger.warn("[Auth] Rejected late OAuth callback: active portal changed or login was superseded.");
-            reject(new Error("Authentication session was invalidated or portal changed during login flow"));
+            opContext.terminate("superseded", new Error("Authentication session was invalidated or portal changed during login flow"));
             return;
           }
 
@@ -224,15 +297,17 @@ export class LauncherAuth {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ code, code_verifier: verifier }),
+              signal: abortController.signal,
             });
           } catch (netErr: any) {
+            if (opContext.isTerminal()) return;
             res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml("Network error communicating with the portal."));
-            cleanup();
-            reject(netErr);
+            opContext.terminate("error", netErr);
             return;
           }
 
+          if (opContext.isTerminal()) return;
           const durationMs = Date.now() - startTime;
 
           if (!resp.ok) {
@@ -246,17 +321,21 @@ export class LauncherAuth {
                 if (errText) errMsg = `${errMsg}: ${errText}`;
               } catch {}
             }
-            LauncherLogger.logApiResponse("POST", exchangeUrl, resp.status, durationMs, errMsg);
+            LauncherLogger.logApiResponse("POST", exchangeUrl, resp.status, durationMs, { error: errMsg });
 
             res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml("Token exchange failed. Please try logging in again."));
-            cleanup();
-            reject(new Error(errMsg));
+            opContext.terminate("error", new Error(errMsg));
             return;
           }
 
           const json = await resp.json();
-          LauncherLogger.logApiResponse("POST", exchangeUrl, resp.status, durationMs, json);
+          // Security: Do not log full credential-bearing response objects at source
+          LauncherLogger.logApiResponse("POST", exchangeUrl, resp.status, durationMs, {
+            user: json.user?.name || json.user?.id,
+            minecraftUsername: json.user?.minecraftUsername,
+            status: "token_issued",
+          });
 
           const user = json.user;
           if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
@@ -265,30 +344,37 @@ export class LauncherAuth {
 
             res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml("Minecraft account not bound. Please link your Minecraft Java account on the portal dashboard."));
-            cleanup();
-            reject(err);
+            opContext.terminate("error", err);
             return;
           }
 
           // 8. Snapshot check immediately before committing credentials
           if (
+            opContext.isTerminal() ||
             loginEpoch !== SessionManager.getActiveLoginEpoch() ||
             SessionManager.getSessionEpoch() !== generationSnapshot ||
             normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
           ) {
             res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml("Authentication session was superseded or cancelled."));
-            cleanup();
-            reject(new Error("Authentication session was invalidated or portal changed during token exchange"));
+            opContext.terminate("superseded", new Error("Authentication session was invalidated or portal changed during token exchange"));
             return;
           }
 
-          // 9. Persist credentials securely and establish session
-          await SessionManager.establishSession(portalUrl, {
-            token: json.token,
-            refreshToken: json.refreshToken || undefined,
-            minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
-          }, user);
+          // 9. Persist credentials securely and establish NEW session
+          SessionManager.establishNewSession(
+            portalUrl,
+            {
+              token: json.token,
+              refreshToken: json.refreshToken || undefined,
+              minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
+              portalAccountId: user.id,
+              portalUsername: user.name,
+              minecraftUuid: user.minecraftUuid,
+              minecraftUsername: user.minecraftUsername,
+            },
+            user
+          );
 
           LauncherLogger.info(`[Auth Success] Logged in as ${user.minecraftUsername} (UUID: ${user.minecraftUuid})`);
 
@@ -296,72 +382,75 @@ export class LauncherAuth {
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
           res.end(renderSuccessHtml());
 
-          cleanup();
-          resolve({
+          opContext.settleSuccess({
             token: json.token,
             user,
           });
         } catch (err: any) {
+          if (opContext.isTerminal()) return;
           try {
             res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml());
           } catch {}
-          cleanup();
           LauncherLogger.error(`[Auth Error] loginWithPortal failed: ${err.message}`);
-          reject(err);
+          opContext.terminate("error", err);
         }
       });
 
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address() as any;
-        const port = address.port;
-        const authUrl = `${portalUrl}/auth/launcher?code_challenge=${encodeURIComponent(challenge)}&port=${port}&state=${encodeURIComponent(state)}`;
-        LauncherLogger.info(`[Auth] Initiated portal login flow in browser at ${portalUrl} (callback port: ${port})`);
-        shell.openExternal(authUrl);
+      server.on("connection", (socket) => {
+        clientSockets.add(socket);
+        socket.once("close", () => clientSockets.delete(socket));
       });
 
-      // Timeout after 3 minutes (180s)
-      timeoutId = setTimeout(() => {
-        cleanup();
-        LauncherLogger.warn("[Auth] Portal login timed out after 3 minutes");
-        reject(new Error("Login timed out after 3 minutes"));
-      }, 180000);
+      server.on("error", (err: any) => {
+        LauncherLogger.error(`[Auth] Loopback server error: ${err.message}`);
+        opContext.terminate("server_error", new Error(`Loopback callback server failed: ${err.message}`));
+      });
+
+      server.listen(0, "127.0.0.1", () => {
+        try {
+          const address = server.address() as any;
+          const port = address.port;
+          const authUrl = `${portalUrl}/auth/launcher?code_challenge=${encodeURIComponent(challenge)}&port=${port}&state=${encodeURIComponent(state)}`;
+          LauncherLogger.info(`[Auth] Initiated portal login flow in browser at ${portalUrl} (callback port: ${port})`);
+          shell.openExternal(authUrl).catch((openErr: any) => {
+            LauncherLogger.error(`[Auth] Failed to open external browser: ${openErr.message}`);
+            opContext.terminate("browser_error", new Error(`Failed to open browser for authentication: ${openErr.message}`));
+          });
+        } catch (listenErr: any) {
+          opContext.terminate("server_error", listenErr);
+        }
+      });
     });
   }
 
   /**
-   * Refreshes the active session with single-flight request coalescing.
-   * Differentiates authentication refusal (401/403) from temporary transport outages.
+   * Refreshes the active session with request coalescing strictly scoped to (portalUrl, accountId, sessionEpoch).
+   * Differentiates authentication refusal (401/403) from transport outages.
    */
   static refreshSession(_portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
-    const existing = SessionManager.getActiveRefreshPromise();
-    if (existing) {
-      return existing;
+    const config = ConfigManager.get();
+    if (!config.token && !config.refreshToken) {
+      return Promise.resolve({ valid: false });
     }
 
-    let refreshTask!: Promise<{ valid: boolean; user?: UserProfile; token?: string }>;
-    refreshTask = (async () => {
-      try {
-        return await this.executeRefreshSession();
-      } finally {
-        if (SessionManager.getActiveRefreshPromise() === refreshTask) {
-          SessionManager.setActiveRefreshPromise(null);
-        }
-      }
-    })();
+    const portalUrl = normalizePortalUrl(config.portalUrl);
+    const accountId = SessionManager.getCurrentRecord()?.portalAccountId || "unknown";
+    const epoch = SessionManager.getSessionEpoch();
 
-    SessionManager.setActiveRefreshPromise(refreshTask);
-    return refreshTask;
+    return SessionManager.getCoalescedRefresh(portalUrl, accountId, epoch, () =>
+      this.executeRefreshSession(portalUrl, epoch)
+    );
   }
 
-  private static async executeRefreshSession(): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
+  private static async executeRefreshSession(
+    portalUrl: string,
+    generationSnapshot: number
+  ): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
     const config = ConfigManager.get();
     if (!config.token && !config.refreshToken) {
       return { valid: false };
     }
-
-    const portalUrl = normalizePortalUrl(config.portalUrl);
-    const generationSnapshot = SessionManager.getSessionEpoch();
 
     // Session Origin Binding
     if (!config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
@@ -369,7 +458,6 @@ export class LauncherAuth {
       return { valid: false };
     }
 
-    // 1. Attempt token refresh via /api/v1/auth/refresh
     try {
       const refreshUrl = `${portalUrl}/api/v1/auth/refresh`;
       const startTime = Date.now();
@@ -399,7 +487,12 @@ export class LauncherAuth {
 
       if (resp.ok) {
         const json = await resp.json();
-        LauncherLogger.logApiResponse("POST", refreshUrl, resp.status, durationMs, json);
+        // Security: Redact tokens from source log payload
+        LauncherLogger.logApiResponse("POST", refreshUrl, resp.status, durationMs, {
+          user: json.user?.name || json.user?.id,
+          minecraftUsername: json.user?.minecraftUsername,
+          status: "token_refreshed",
+        });
 
         const user = json.user;
         if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
@@ -408,7 +501,7 @@ export class LauncherAuth {
             SessionManager.getSessionEpoch() === generationSnapshot &&
             normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
           ) {
-            await SessionManager.clearSession();
+            SessionManager.clearSession();
           }
           return { valid: false };
         }
@@ -417,7 +510,7 @@ export class LauncherAuth {
         const newRefreshToken = json.refreshToken || config.refreshToken;
         const newMcToken = user?.minecraftAccessToken || json.minecraftAccessToken || config.minecraftAccessToken;
 
-        // Check snapshot immediately before establishing credentials
+        // Check snapshot immediately before updating credentials
         if (
           SessionManager.getSessionEpoch() !== generationSnapshot ||
           normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
@@ -425,11 +518,15 @@ export class LauncherAuth {
           return { valid: false };
         }
 
-        await SessionManager.establishSession(portalUrl, {
-          token: newToken,
-          refreshToken: newRefreshToken,
-          minecraftAccessToken: newMcToken,
-        }, user);
+        SessionManager.updateSessionFromRefresh(
+          portalUrl,
+          {
+            token: newToken,
+            refreshToken: newRefreshToken,
+            minecraftAccessToken: newMcToken,
+          },
+          user
+        );
 
         return {
           valid: true,
@@ -443,11 +540,12 @@ export class LauncherAuth {
           SessionManager.getSessionEpoch() === generationSnapshot &&
           normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
         ) {
-          await SessionManager.clearSession();
+          SessionManager.clearSession();
         }
         return { valid: false };
       } else {
         LauncherLogger.logApiResponse("POST", refreshUrl, resp.status, durationMs);
+        return { valid: false };
       }
     } catch (err: any) {
       if (err instanceof PortalRedirectPolicyError || err?.name === "PortalRedirectPolicyError") {
@@ -456,24 +554,13 @@ export class LauncherAuth {
           SessionManager.getSessionEpoch() === generationSnapshot &&
           normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
         ) {
-          await SessionManager.clearSession();
+          SessionManager.clearSession();
         }
         return { valid: false };
       }
       LauncherLogger.logApiError("POST", `${portalUrl}/api/v1/auth/refresh`, err);
-      // Fall through to verifySession
-    }
-
-    // Check snapshot before fallback
-    if (
-      SessionManager.getSessionEpoch() !== generationSnapshot ||
-      normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
-    ) {
       return { valid: false };
     }
-
-    // 2. Fallback to /api/v1/auth/verify
-    return this.verifySession();
   }
 
   static async verifySession(_portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile }> {
@@ -517,86 +604,16 @@ export class LauncherAuth {
       if (!resp.ok) {
         LauncherLogger.logApiResponse("POST", verifyUrl, resp.status, durationMs);
 
-        // If 401 and refresh token exists, attempt refresh
+        // If 401 and refresh token exists, route through the coordinated refresh mechanism
         if (resp.status === 401 && config.refreshToken) {
-          try {
-            const refreshUrl = `${portalUrl}/api/v1/auth/refresh`;
-            const refreshStart = Date.now();
-            LauncherLogger.logApiRequest("POST", refreshUrl);
-
-            const refreshResp = await portalFetch(refreshUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ refreshToken: config.refreshToken }),
-            });
-            const refreshDur = Date.now() - refreshStart;
-
-            // Check snapshot after refresh await
-            if (
-              SessionManager.getSessionEpoch() !== generationSnapshot ||
-              normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
-            ) {
-              return { valid: false };
-            }
-
-            if (refreshResp.ok) {
-              const json = await refreshResp.json();
-              LauncherLogger.logApiResponse("POST", refreshUrl, refreshResp.status, refreshDur, json);
-
-              const user = json.user;
-              if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
-                if (
-                  SessionManager.getSessionEpoch() === generationSnapshot &&
-                  normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
-                ) {
-                  await SessionManager.clearSession();
-                }
-                return { valid: false };
-              }
-
-              // Check snapshot immediately before establishing credentials
-              if (
-                SessionManager.getSessionEpoch() !== generationSnapshot ||
-                normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
-              ) {
-                return { valid: false };
-              }
-
-              await SessionManager.establishSession(portalUrl, {
-                token: json.token,
-                refreshToken: json.refreshToken || config.refreshToken,
-                minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
-              }, user);
-              return { valid: true, user };
-            } else if (refreshResp.status === 401 || refreshResp.status === 403) {
-              LauncherLogger.logApiResponse("POST", refreshUrl, refreshResp.status, refreshDur);
-              if (
-                SessionManager.getSessionEpoch() === generationSnapshot &&
-                normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
-              ) {
-                await SessionManager.clearSession();
-              }
-              return { valid: false };
-            }
-          } catch (refErr: any) {
-            if (refErr instanceof PortalRedirectPolicyError || refErr?.name === "PortalRedirectPolicyError") {
-              if (
-                SessionManager.getSessionEpoch() === generationSnapshot &&
-                normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
-              ) {
-                await SessionManager.clearSession();
-              }
-              return { valid: false };
-            }
-            LauncherLogger.logApiError("POST", `${portalUrl}/api/v1/auth/refresh`, refErr);
-          }
+          const refreshResult = await this.refreshSession();
+          return { valid: refreshResult.valid, user: refreshResult.user };
         } else if (resp.status === 401 || resp.status === 403) {
-          // Verify 401 without refreshToken or 403: clear session
           if (
             SessionManager.getSessionEpoch() === generationSnapshot &&
             normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
           ) {
-            await SessionManager.clearSession();
+            SessionManager.clearSession();
           }
           return { valid: false };
         }
@@ -605,7 +622,10 @@ export class LauncherAuth {
       }
 
       const json = await resp.json();
-      LauncherLogger.logApiResponse("POST", verifyUrl, resp.status, durationMs, json);
+      LauncherLogger.logApiResponse("POST", verifyUrl, resp.status, durationMs, {
+        valid: json.valid,
+        user: json.user?.name || json.user?.id,
+      });
 
       const user = json.user;
       if (!json.valid || !user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
@@ -613,7 +633,7 @@ export class LauncherAuth {
           SessionManager.getSessionEpoch() === generationSnapshot &&
           normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
         ) {
-          await SessionManager.clearSession();
+          SessionManager.clearSession();
         }
         return { valid: false };
       }
@@ -627,11 +647,15 @@ export class LauncherAuth {
       }
 
       if (user?.minecraftAccessToken) {
-        await SessionManager.establishSession(portalUrl, {
-          token: config.token!,
-          refreshToken: config.refreshToken,
-          minecraftAccessToken: user.minecraftAccessToken,
-        }, user);
+        SessionManager.updateSessionFromRefresh(
+          portalUrl,
+          {
+            token: config.token!,
+            refreshToken: config.refreshToken,
+            minecraftAccessToken: user.minecraftAccessToken,
+          },
+          user
+        );
       } else {
         SessionManager.setCurrentUser(user);
       }
@@ -646,7 +670,7 @@ export class LauncherAuth {
           SessionManager.getSessionEpoch() === generationSnapshot &&
           normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
         ) {
-          await SessionManager.clearSession();
+          SessionManager.clearSession();
         }
         return { valid: false };
       }
@@ -659,9 +683,11 @@ export class LauncherAuth {
    * Clears in-memory and persistent secrets and increments session epoch.
    * Note: Local logout does not terminate a running Minecraft subprocess or clear
    * browser session cookies in the system browser.
+   * Returns explicit deletion outcomes.
    */
-  static logout(): void {
+  static logout(): ClearCredentialsResult {
     LauncherAuth.cancelLogin();
     ConfigManager.clearSession();
+    return SessionManager.clearSession();
   }
 }

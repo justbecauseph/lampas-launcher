@@ -81,6 +81,14 @@ export function initAuthView(options: AuthViewOptions): {
         const res = await window.lampas.auth.login();
         updateUserUI(res.user);
         showToast(`Welcome, ${res.user.minecraftUsername || res.user.name}!`, "success");
+        try {
+          const storageStatus = await window.lampas.auth.getStorageStatus();
+          if (storageStatus.sessionOnly) {
+            showToast("Session-only mode active: credentials will not persist across restarts.", "info");
+          } else if (storageStatus.lastPersistenceError) {
+            showToast(`Storage warning: ${storageStatus.lastPersistenceError}`, "error");
+          }
+        } catch {}
       } catch (err: any) {
         showToast(`Login failed: ${formatFriendlyError(err)}`, "error");
       } finally {
@@ -97,7 +105,16 @@ export function initAuthView(options: AuthViewOptions): {
       try {
         await window.lampas.auth.logout();
         updateUserUI(null);
-        showToast("Logged out successfully.", "info");
+        try {
+          const storageStatus = await window.lampas.auth.getStorageStatus();
+          if (storageStatus.lastCleanupError) {
+            showToast(`Logout warning: Persistent cleanup incomplete (${storageStatus.lastCleanupError})`, "error");
+          } else {
+            showToast("Logged out successfully.", "info");
+          }
+        } catch {
+          showToast("Logged out successfully.", "info");
+        }
       } catch (err: any) {
         showToast(`Could not log out: ${formatFriendlyError(err)}`, "error");
       }

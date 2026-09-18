@@ -469,12 +469,12 @@ Executed using real operating-system processes (`electron.exe` and packaged `Lam
 |---|---|---|---|---|
 | **SEC-01** | P0 / High | Phase 1 | **Remediated & Verified** | Complete Phase 1 remediation preserved intact: canonical origin policy, session origin binding, race safety, manual redirect rejection, disk scrubbing. |
 | **SEC-02** | P0 / High | Phase 1 / Phase 2 | **Remediated & Verified** | All 38 inbound IPC channels registered through unified security boundary; sender frame & attachment validation; strict allowlist schema; launch target override prohibition; native approval lifecycle; dual permission lockdown; strict CSP. |
-| **SEC-03** | P1 / High | Phase 3 | **Remediated & Verified** | Plaintext credential separation complete. Main-only `CredentialStore` using OS-encrypted DPAPI (`credentials.enc`), `session_only` fallback for insecure backends (`basic_text`), atomic writes with `0o600` permissions, safe corruption recovery, deterministic 3-checkpoint migration, and token-free `config.json` on disk. |
+| **SEC-03** | P1 / High | Phase 3 | **Remediated & Verified (Amended)** | Plaintext credential separation complete. Restart-safe migration state machine, fail-closed protected record recovery, explicit `SaveCredentialsResult`/`ClearCredentialsResult` contracts, safe corruption purge, account-specific token replacement (zero cross-account inheritance), DPAPI/Linux keyring/session-only storage with `auth:getStorageStatus` IPC and UI status toasts, token-free `config.json` on disk. |
 | **SEC-04** | P0 / High | Phase 4 | Pending | Path containment & ownership inconsistencies (`isPathProtected`). Deferred to Phase 4. |
 | **SEC-05** | P1 / Med-High | Phase 4 | Pending | Move recovery recursive deletion of unvalidated staging path. Deferred to Phase 4. |
 | **SEC-06** | P1 / High-Cond | Phase 5 | Pending | Executable verification fails open (missing hash fallback). Deferred to Phase 5. |
 | **SEC-07** | P1 / High-Cond | Phase 5 | Pending | Inappropriate fallback on HTTP 410 REVOKED releases. Deferred to Phase 5. |
-| **SEC-08** | P1 / Medium | Phase 3 | **Remediated & Verified** | Loopback OAuth listener hardened. Bounded method (`GET`), URL (<= 2048), and `Host` validation. Noise-tolerant routing (404 without flow abort). Single-use exchange with replay rejection (HTTP 409). Session epoch coordination discarding late responses. Single-flight refresh coalescing. Information-disclosure-free completion HTML. Unified deterministic cleanup. |
+| **SEC-08** | P1 / Medium | Phase 3 | **Remediated & Verified (Amended)** | Loopback OAuth listener hardened. Bounded method (`GET`), URL (<= 2048), and `Host` validation. Noise-tolerant routing (404 without flow abort). Single-use exchange with replay rejection (HTTP 409). 120s timeout, terminal lifecycle with socket destruction and `AbortController`. Scoped refresh coalescing keyed by `(portalUrl, accountId, sessionEpoch)`. Late response rejection via monotonic epochs. Information-disclosure-free HTML. |
 | **SEC-09** | P1 / Medium | Phase 6 | Pending | Logging redaction gaps (`refresh_token`, URL query codes, CLI args). Deferred to Phase 6. |
 | **SEC-10** | P2 / Med-Priv | Phase 6 | Pending | Third-party information disclosure (`mc-heads.net`, unvalidated image URLs). Deferred to Phase 6. |
 | **SEC-11** | P2 / Medium | Phase 5 | Pending | Unbounded decompression ingestion budgets in `ensureNatives`. Deferred to Phase 5. |
@@ -482,25 +482,178 @@ Executed using real operating-system processes (`electron.exe` and packaged `Lam
 
 ---
 
-### 9. Review Gate 3 Acceptance & Pause Declaration
+## Review Gate 3 Amendment — Separate Secrets and Make Authentication Race-Safe (SEC-03, SEC-08)
 
-- **Phase 3 Scope Fully Implemented & Verified:**
-  - `src/credential-store.ts` and `src/session-manager.ts` implemented and integrated.
-  - Credential record contract schema v1 enforced with origin binding.
-  - Storage backends (`windows_dpapi`, `linux_keyring`, `session_only` fallback) verified.
-  - Deterministic migration state machine and crash-consistency boundary verified.
-  - Monotonic `sessionEpoch` coordination and continuation invalidation barriers verified.
-  - Loopback OAuth listener hardened (method/URL/Host validation, noise resilience, single-use replay defense, HTML sanitization, and deterministic cleanup).
-  - Single-flight refresh coalescing verified.
-  - Synchronous logout semantics verified.
-  - Token-free settings persistence verified (`config.json` contains zero secrets).
-  - Zero synthetic secrets leaked in IPC, logs, or disk files.
-- **Pre-Existing Invariants:**
-  - All baseline, Phase 1, and Phase 2 protections preserved intact.
-  - Full suite: 287 passed, 0 failed across all 34 test files.
-- **Dependencies & Lockfile:**
-  - `bun.lock` is byte-for-byte identical with baseline (zero package mutations).
-- **Typecheck & Packaging:**
-  - Production typecheck, security test typecheck, production Vite build, and Electron smoke tests (`--strict`, without `--no-sandbox`) pass cleanly with 0 errors.
+- **Execution Date:** 19 September 2026
+- **Status:** Ready for Review (Gate 3 Amendment Complete)
+- **Accepted Review Gate 2 Checkpoint:** `16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`
+- **Reviewed Gate 3 Checkpoint:** `589edc703580fab16c5cc20cbdffbb1572d5eff0`
+- **Current Working Branch:** `feat/security`
+- **Scope Restriction:** Strictly restricted to Phase 3 amendment ("Separate secrets and make authentication race-safe"). Phase 4 (Path containment), Phase 5 (Integrity checks fail-closed), and subsequent phases remain paused. Acceptance does not authorize merging, tagging, or publication.
 
-**STOPPING AT REVIEW GATE 3.** Phase 4 (Unify metadata, path ownership and safe recovery) has not been started and remains paused. Acceptance does not authorize merging, tagging, or publication. Ready for human review.
+---
+
+### 1. Review Gate 3 Amendment Details (Eight Targeted Requirements)
+
+Following the Review Gate 3 evaluation of checkpoint `589edc703580fab16c5cc20cbdffbb1572d5eff0`, all eight targeted amendment items have been fully resolved, verified with dedicated pre-change failure path reproductions, and validated with exact-version native Electron evidence:
+
+#### Item 1: Failure Path Reproductions Before Production Changes
+- **Defects Remediated:**
+  - Need for reproducible verification of real failure modes (cancellation/timeout/supersession, deletion failure resurrection, failed account replacement, duplicate encrypted/plaintext migration, scrub-write failure + restart, cross-account token inheritance, and temporary path clobbering/link cases) without adding production test exemptions.
+- **Implementation:**
+  - Created `test/security-failure-reproductions.test.ts` covering 7 targeted failure paths using real production operations, synthetic credentials, controlled timers, and deferred request barriers:
+    1. **Cancellation, Timeout, and Supersession:** Proves loopback OAuth listeners destroy all client sockets, abort signal triggers, and terminate promise lifecycle. Late HTTP callback attempts receive HTTP 409 Conflict with zero token exchange.
+    2. **Failed Credential Deletion on Logout:** Emulates locked/EBUSY `credentials.enc`. Proves `clearCredentials()` returns `{ success: false }`, attempts zero-byte overwrite, records `credentials.invalidated` marker, and prevents stale credential resurrection upon restart.
+    3. **Failed Account Replacement:** Emulates disk-full / persistence failure during new account login. Proves older account credentials are not restored; launcher falls back to session-only mode for the new user.
+    4. **Duplicate Encrypted and Plaintext Records:** Proves valid protected credentials take precedence over coexisting legacy plaintext, and legacy plaintext is scrubbed immediately from `config.json`.
+    5. **Scrub-Write Failure on config.json:** Emulates `EPERM` during legacy plaintext scrub. Proves `legacyScrubbed: false` is tracked and legacy scrub is safely resumed and completed on subsequent restart.
+    6. **Cross-Account Optional Token Inheritance:** Proves logging into Account B without optional tokens (`minecraftAccessToken`, `minecraftUuid`) guarantees zero token bleed from prior Account A.
+    7. **Fixed Temporary Path Link Case:** Proves exclusive creation flags (`O_CREAT | O_EXCL`) and randomized temporary filenames prevent symlink or pre-existing file hijacking.
+- **Evidence:**
+  - `test/security-failure-reproductions.test.ts`: **7 passed, 0 failed** (33 expect calls).
+
+#### Item 2: Single Idempotent Terminal-State Path for Login
+- **Defects Remediated:**
+  - Loopback OAuth login operations lacked strict time-bounding, potentially leaving loopback HTTP listeners open indefinitely.
+  - Concurrent or superseding login requests did not terminate prior in-flight sockets, creating race conditions and socket leaks.
+- **Implementation:**
+  - Introduced `LoginOperationContext` in `src/auth.ts`:
+    - Fixed 120-second timeout (`LOGIN_TIMEOUT_MS = 120_000`).
+    - Dedicated `AbortController` aborted upon timeout, cancellation, or supersession.
+    - Set of active client `net.Socket` instances tracked and explicitly destroyed on termination.
+    - `settleOnce` terminal barrier: closes server, clears timer, destroys sockets, and rejects subsequent incoming requests with HTTP 409 Conflict.
+  - Superseding login requests terminate prior active login contexts with `OperationConflictError`.
+  - User cancellation (`LauncherAuth.cancelLogin()`) destroys active sockets, closes the listener, and increments session epoch.
+  - Sockets in connection queue during shutdown are destroyed immediately with error handling.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Cancellation, timeout, and supersession settle login promise and clean up resources` (passed, 10.73ms).
+  - Characterization Test 59 (Loopback OAuth listener bounds, single-use, and replay resistance) passed.
+  - Characterization Test 60 (OAuth callback lifecycle, replay resistance, cancellation cleanup) passed.
+
+#### Item 3: Explicit Credential Persistence and Deletion Outcomes
+- **Defects Remediated:**
+  - Persistence operations previously returned void or implicit booleans without distinguishing storage backend, session-only mode, or disk write failures.
+  - Deletion failures (e.g. `EBUSY` or permission errors on logout) were swallowed, claiming successful logout while encrypted credentials lingered on disk.
+- **Implementation:**
+  - Defined `SaveCredentialsResult`: `{ success: boolean; backend: StorageBackendType; sessionOnly: boolean; error?: string }`.
+  - Defined `ClearCredentialsResult`: `{ success: boolean; error?: string; deletedTarget: boolean; deletedTemp: boolean }`.
+  - `CredentialStore.saveCredentials` validates schema version 1, detects OS backend, writes atomically via `credentials.enc.tmp.<pid>.<time>.<random>` with exclusive flags and `0o600` permissions, and returns explicit failure on disk error without falsely claiming persistence.
+  - `CredentialStore.clearCredentials` unlinks `credentials.enc` and temporary files. On deletion failure, attempts zero-byte overwrite, writes durable `credentials.invalidated` marker, logs the error, records `lastCleanupError`, and returns `{ success: false, error: ... }`.
+  - `CredentialStore.loadCredentials` checks for `credentials.invalidated`; if present, rejects loading stale credentials fail-closed.
+  - `LauncherAuth.logout()` invokes `SessionManager.clearSession()`, which returns `ClearCredentialsResult`.
+- **Evidence:**
+  - `[Phase 3 Gate] Persistence & Deletion: SaveCredentialsResult and ClearCredentialsResult report explicit outcomes and failure handling` (passed, 4.93ms).
+  - `[Phase 3 Failure Path Reproductions] Failed credential deletion on logout must report failure and prevent silent resurrection` (passed, 8.60ms).
+
+#### Item 4: Restart-Safe, Failure-Aware Migration State Machine
+- **Defects Remediated:**
+  - Prior migration logic could return before inspecting or cleaning legacy plaintext if a valid protected record existed, or could fail to reconcile coexisting records safely.
+  - Corrupted or un-decryptable protected records could fail open or attempt to silently resurrect legacy plaintext.
+  - Invented placeholder accounts (e.g. `"unverified-migration"` or `"account"`) could mask unverified credential state.
+- **Implementation:**
+  - Hardened `SessionManager.initialize(configPath, activePortalUrl)` to inspect both the protected credential store and `config.json` unconditionally.
+  - **Coexistence Precedence:** If both protected credentials and legacy plaintext exist, the valid protected record takes precedence, and legacy plaintext is scrubbed immediately (`legacyScrubbed: true`).
+  - **Interrupted Migration Recovery:** If a crash occurred after protected write but before legacy removal, the restart inspects both records, verifies protected integrity, and completes the pending scrub.
+  - **Fail-Closed Corrupt Record Handling:** If the protected credentials file exists on disk but cannot be decrypted or parsed, `CredentialStore.loadCredentials()` safely purges the corrupt file and returns `null`. `SessionManager.initialize` marks `failedProtectedLoad: true`, scrubs legacy plaintext from `config.json`, and refuses to restore a session from legacy plaintext, requiring clean interactive re-authentication.
+  - **Trusted Identity Requirement:** Legacy migration strictly requires trusted account identity (`portalAccountId` and `portalUsername`). If missing, discards unverified claims, scrubs `config.json`, advances session epoch, and requires re-authentication. No placeholder accounts are invented.
+  - **Settings Preservation:** Non-secret user settings (`ram`, `javaPath`, `javaArgs`, `portalUrl`) in `config.json` are preserved intact during credential scrubbing.
+  - **Explicit Outcome Contract:** `MigrationOutcome` reports `{ protectedLoaded, failedProtectedLoad, legacyPlaintextDetected, legacyScrubbed, migrated, error }`.
+- **Evidence:**
+  - `[Phase 3 Gate] Migration: Coexisting protected credentials and legacy plaintext prioritize protected record and scrub plaintext` (passed, 6.37ms).
+  - `[Phase 3 Gate] Migration: Interrupted migration crash boundary recovers on restart and scrubs plaintext` (passed, 5.91ms).
+  - `[Phase 3 Gate] Migration: Failed protected record load with legacy plaintext fails closed and scrubs disk without restoring session` (passed, 2.69ms).
+  - `[Phase 3 Failure Path Reproductions] Scrub-write failure on config.json is tracked and retried on restart` (passed, 8.09ms).
+
+#### Item 5: Account-Scoped Session Ownership & Refresh Coalescing
+- **Defects Remediated:**
+  - Switching accounts previously carried over optional tokens (such as `minecraftAccessToken`) from the prior user session if the new login response omitted them.
+  - `setCurrentUser` lacked validation to prevent re-labeling an existing session to a different account ID or Minecraft UUID.
+  - Generic `ConfigManager.set` allowed secret injection into settings state.
+- **Implementation:**
+  - Separated `SessionManager.establishNewSession(...)` from `SessionManager.updateSessionFromRefresh(...)`.
+  - `establishNewSession`: Strictly initializes session state with newly authenticated credentials. Optional tokens (`minecraftAccessToken`, `minecraftUuid`, `minecraftUsername`) are NEVER inherited from older accounts or prior sessions.
+  - Separated Portal account identity (`portalAccountId`, `portalUsername`) from Minecraft identity (`minecraftUuid`, `minecraftUsername`), while maintaining normalized aliases for backwards compatibility.
+  - `SessionManager.setCurrentUser`: Guards active credentials against identity spoofing; throws an error if an attempt is made to relabel credentials to a different Portal user ID or Minecraft UUID without authenticating.
+  - `ConfigManager.set`: Completely strips `token`, `refreshToken`, `minecraftAccessToken`, and `sessionPortalUrl`. Secrets are never accepted via generic settings mutation and are never written to `config.json`.
+  - Coalescing in `SessionManager.getCoalescedRefresh` is strictly keyed by `(portalUrl, accountId, sessionEpoch)`.
+  - Monotonic `sessionEpoch` advancement automatically invalidates prior refresh keys and isolates concurrent callers.
+- **Evidence:**
+  - `[Phase 3 Gate] Session Replacement: establishNewSession does not inherit optional tokens; setCurrentUser blocks account relabeling` (passed, 0.36ms).
+  - `[Phase 3 Gate] Scoped Refresh Coalescing: In-flight refresh coalesces matching keys and isolates epochs` (passed, 42.09ms).
+  - `[Phase 3 Failure Path Reproductions] Cross-account optional token inheritance must never occur in establishNewSession` (passed, 7.83ms).
+
+#### Item 6: Hardened Credential Writer & Exposed Storage State
+- **Defects Remediated:**
+  - Fixed temporary file naming could allow symlink hijacking or race conditions.
+  - Storage provider errors exposed internal low-level exception details.
+- **Implementation:**
+  - `CredentialStore.saveCredentials` generates exclusive, unpredictable temporary filenames: `credentials.enc.tmp.<pid>.<time>.<random16>`.
+  - Uses `fs.openSync` with `O_CREAT | O_EXCL | O_WRONLY` and mode `0o600` inside trusted directory (`0o700`).
+  - Performs pre-rename `fs.lstatSync` verification to ensure the file is a regular file, not a symlink, with `stats.nlink === 1`.
+  - Added `sanitizeProviderError(...)` mapping internal OS/SafeStorage errors into sanitized local public error strings.
+  - Added secure IPC channel `auth:getStorageStatus` returning `AuthStorageStatusDto`:
+    - `backend`: `"windows_dpapi" | "linux_keyring" | "session_only"`
+    - `sessionOnly`: boolean
+    - `persistenceAvailable`: boolean
+    - `lastPersistenceError`: string | null
+    - `lastCleanupError`: string | null
+  - Preload bridge exposes `window.lampas.auth.getStorageStatus()`.
+  - UI integration: `ui/src/views/auth-view.ts` and `ui/renderer.js` render a prominent warning toast when running in `session_only` mode or when cleanup errors occur.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Fixed temporary path link case — pre-existing temporary file or link must be prevented from clobbering` (passed, 4.65ms).
+  - `[Phase 3 Gate] Storage Status: getStorageStatus returns accurate non-secret DTO` (passed, 0.16ms).
+  - Characterization Test 1: Verifies all 38 secure IPC handlers, including `auth:getStorageStatus`.
+
+#### Item 7: Exact-Version Native Evidence & Windows ACL Verification
+- **Defects Remediated:**
+  - Lack of multi-process restart verification demonstrating DPAPI ciphertext survival across distinct process invocations and lack of filesystem ACL verification on Windows.
+- **Implementation:**
+  - Hardened `test/electron-dpapi-restart.test.ts`:
+    - **Process 1:** Spawns real `electron.exe` (Electron 44.0.0). Verifies `safeStorage.isEncryptionAvailable()`. Encrypts synthetic payload via `safeStorage.encryptString()`. Writes `credentials.enc` to custom `userData`. Verifies `Local State` (DPAPI key) and `credentials.enc` on disk contain zero plaintext. Exits cleanly via `app.quit()`.
+    - **Process 2:** Spawns a completely SEPARATE `electron.exe` process lifecycle pointing to the same `userData`. Loads `credentials.enc`, decrypts via `safeStorage.decryptString()`, and verifies exact byte-for-byte equality with the original plaintext payload.
+    - **Process 3:** Spawns a third `electron.exe` process to delete `credentials.enc` and verifies clean unlinking.
+    - **Windows ACL Verification:** Uses native Windows `icacls` to inspect the permissions of the credential directory and `credentials.enc`. Confirms that access is restricted strictly to `NT AUTHORITY\SYSTEM` and the active user (`(OI)(CI)(F)` or `(F)`), with unapproved inherited access disabled.
+  - **Platform Availability Documentation:** Windows DPAPI separate-process restart check and ACL validation are verified natively on Windows (host system). Linux Secret Service / Keyring validation is platform-specific to Linux and executed in Linux CI environments (`.github/workflows/release-pack.yml`).
+  - Integrated `auth:getStorageStatus` check into `--smoke-test` executed by real `electron.exe` and packaged `Lampas Launcher.exe` (ASAR).
+- **Evidence:**
+  - `test/electron-dpapi-restart.test.ts`: Passed (407.97ms, 16 assertions).
+  - Strict Electron smoke test (`bun test/smoke/electron-smoke.ts --strict`): All 7 checks passed, including unpacked dev/dist and packaged binary ASAR execution. Real Electron Chromium sandbox active; zero `--no-sandbox` flags.
+
+#### Item 8: Comprehensive Validation & Verification
+- **Test Suite Results:**
+  - Full suite (`bun test`): **302 passed, 0 failed, 4 skipped, 6 todo across 36 files** (1273 expect calls).
+  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **7 passed, 0 failed** (33 expect calls).
+  - Security regression gates (`test/security-regression-gates.test.ts`): **17 passed, 0 failed, 4 skipped, 6 todo** (141 expect calls).
+  - Boundary characterization (`test/security-boundary-characterization.ts`): **61 passed, 0 failed, 0 skipped, 0 outbound violations** in isolated child process.
+  - Security characterization parent suite (`test/security-characterization.test.ts`): **16 passed, 0 failed** (108 expect calls).
+  - Real Electron DPAPI restart test (`test/electron-dpapi-restart.test.ts`): **1 passed, 0 failed** (16 expect calls).
+  - Production & test typechecks: 0 errors across `tsconfig.json`, `tsconfig.renderer.json`, and `tsconfig.security-test.json`.
+  - Production build: `bun run build` transforms 12 modules and bundles in 154ms.
+  - Strict smoke test: `bun test/smoke/electron-smoke.ts --strict` exits with code 0.
+- **Dependency & Lockfile Verification:**
+  - `git diff bun.lock`: **0 changes (byte-for-byte identical to baseline)**.
+  - `bun.lock` SHA-256: `51834981eaa1925b2234e14295e5b733bdebc72697e575efb2046479821e4b3a`.
+
+---
+
+### 2. Review Gate 3 Acceptance & Pause Declaration
+
+- **Phase 3 Hardening Fully Implemented, Amended & Verified:**
+  - Dedicated pre-change failure path reproductions pass unconditionally across all 7 target scenarios.
+  - Restart-safe, failure-aware migration state machine with coexistence precedence and fail-closed corrupt record purge.
+  - Ineligible legacy records require trusted identity; unverified claims fail closed and trigger clean re-auth without synthetic placeholder accounts.
+  - Explicit `SaveCredentialsResult` and `ClearCredentialsResult` contracts with error reporting, zero-byte overwrite, and durable invalidation markers.
+  - Account-specific session replacement with zero cross-account token inheritance.
+  - Terminal 120s login lifecycle with socket destruction and `AbortController`.
+  - Scoped refresh coalescing keyed by `(portalUrl, accountId, sessionEpoch)`.
+  - Hardened exclusive temporary file writer (`O_CREAT | O_EXCL`) with link validation (`stats.nlink === 1`).
+  - Generic `ConfigManager.set` stripped of secret mutations; `config.json` on disk is 100% token-free.
+  - `auth:getStorageStatus` IPC channel and UI session-only mode toasts.
+  - Exact-version Electron 44.0.0 Windows DPAPI separate-process restart and Windows ACL (`icacls`) verification.
+  - Real Electron smoke tests passed in strict mode without `--no-sandbox`.
+- **Pre-Existing Invariants Intact:**
+  - Phase 1 (SEC-01) and Phase 2 (SEC-02) protections preserved.
+  - Dependencies, pinned versions, and lockfile preserved with zero drift.
+
+**STOPPING AT REVIEW GATE 3.** Phase 4 (Unify metadata, path ownership and safe recovery) has not been started and remains paused. Acceptance does not authorize merging, tagging, or publication. Ready for user review.
+

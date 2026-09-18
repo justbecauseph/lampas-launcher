@@ -177,10 +177,22 @@ export class ConfigManager {
     const current = { ...this.get() };
 
     // Security invariant: sessionPortalUrl cannot be forged or modified via generic set()
+    const attemptedSessionPortalForgery = "sessionPortalUrl" in newConfig;
     const sanitizedConfig = { ...newConfig };
     delete (sanitizedConfig as any).sessionPortalUrl;
+    delete (sanitizedConfig as any).token;
+    delete (sanitizedConfig as any).refreshToken;
+    delete (sanitizedConfig as any).minecraftAccessToken;
 
     const updated = { ...current, ...sanitizedConfig };
+
+    // Phase 3 SEC-03/SEC-08: Credential mutation is removed from generic ConfigManager.set().
+    // Preserves token-free renderer DTOs and origin isolation. Sessions must be managed
+    // exclusively via SessionManager (or ConfigManager.establishSession / clearSession).
+    updated.token = current.token;
+    updated.refreshToken = current.refreshToken;
+    updated.minecraftAccessToken = current.minecraftAccessToken;
+    updated.sessionPortalUrl = current.sessionPortalUrl;
 
     if (sanitizedConfig.portalUrl !== undefined) {
       const priorCanonical = normalizePortalUrl(current.portalUrl);
@@ -200,20 +212,6 @@ export class ConfigManager {
         updated.sessionPortalUrl = undefined;
         this.incrementSessionGeneration();
       }
-    }
-
-    if ("token" in newConfig && !newConfig.token) {
-      SessionManager.clearSession();
-      updated.token = undefined;
-      updated.refreshToken = undefined;
-      updated.minecraftAccessToken = undefined;
-      updated.sessionPortalUrl = undefined;
-    } else if (newConfig.token && updated.sessionPortalUrl) {
-      SessionManager.establishSession(updated.sessionPortalUrl, {
-        token: newConfig.token,
-        refreshToken: newConfig.refreshToken ?? current.refreshToken,
-        minecraftAccessToken: newConfig.minecraftAccessToken ?? current.minecraftAccessToken,
-      });
     }
 
     // Ensure sessionPortalUrl remains unset if there are no tokens

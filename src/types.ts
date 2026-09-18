@@ -277,12 +277,21 @@ export interface UpdateSettingsDto {
   javaArgs?: string;
 }
 
+export interface AuthStorageStatusDto {
+  backend: "windows_dpapi" | "linux_keyring" | "session_only";
+  sessionOnly: boolean;
+  persistenceAvailable: boolean;
+  lastPersistenceError?: string | null;
+  lastCleanupError?: string | null;
+}
+
 export interface LampasApi {
   auth: {
     login: () => Promise<{ user: RendererUserProfile }>;
     logout: () => Promise<void>;
     verify: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
     refresh: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
+    getStorageStatus: () => Promise<AuthStorageStatusDto>;
   };
   server: {
     getStatus: () => Promise<ServerStatus>;

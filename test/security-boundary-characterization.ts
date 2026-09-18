@@ -522,12 +522,13 @@ try {
   ConfigManager.set({ gameDir });
 
   // 1. Inbound IPC Registration Inventory
-  await runTest("Registration harness confirms 37 handles and 1 on channel", () => {
-    if (ipcHandlers.size !== 37) throw new Error(`Expected 37 handles, got ${ipcHandlers.size}`);
+  await runTest("Registration harness confirms 38 handles and 1 on channel", () => {
+    if (ipcHandlers.size !== 38) throw new Error(`Expected 38 handles, got ${ipcHandlers.size}`);
     if (ipcListeners.size !== 1) throw new Error(`Expected 1 listener, got ${ipcListeners.size}`);
     if (!ipcListeners.has("game:logAck")) throw new Error("Missing game:logAck listener");
     if (!ipcHandlers.has("utils:openSourcePage")) throw new Error("Missing utils:openSourcePage handle");
     if (!ipcHandlers.has("utils:openKnownLocation")) throw new Error("Missing utils:openKnownLocation handle");
+    if (!ipcHandlers.has("auth:getStorageStatus")) throw new Error("Missing auth:getStorageStatus handle");
   });
 
   // 2. Production utils:openPath handler rejects unapproved arbitrary local paths
@@ -3424,11 +3425,10 @@ try {
     fs.writeFileSync(releasePath, JSON.stringify(validRelease, null, 2));
 
     // Ensure session credentials are present for LauncherAuth.refreshSession
-    ConfigManager.set({
-      gameDir,
+    ConfigManager.set({ gameDir });
+    ConfigManager.establishSession(originAPortal, {
       token: "valid-launch-token",
       refreshToken: "valid-launch-refresh",
-      sessionPortalUrl: originAPortal,
     });
 
     // Spy Java runtime and bootstrap to isolate process execution sink
@@ -4015,6 +4015,8 @@ try {
       portalUrl: originAPortal,
       sessionPortalUrl: originAPortal,
       token: "session-only-migrated",
+      portalAccountId: "user-migrated",
+      portalUsername: "MigratedUser",
     }));
     SessionManager.resetForTesting();
     SessionManager.initialize(configPath, originAPortal);
@@ -4034,6 +4036,8 @@ try {
       portalUrl: originAPortal,
       sessionPortalUrl: originAPortal,
       token: "fail-encrypt-token",
+      portalAccountId: "user-migrated",
+      portalUsername: "MigratedUser",
     }));
     SessionManager.resetForTesting();
     SessionManager.initialize(configPath, originAPortal);
@@ -4048,6 +4052,8 @@ try {
       portalUrl: originAPortal,
       sessionPortalUrl: originAPortal,
       token: "fail-verify-token",
+      portalAccountId: "user-migrated",
+      portalUsername: "MigratedUser",
     }));
     SessionManager.resetForTesting();
     SessionManager.initialize(configPath, originAPortal);

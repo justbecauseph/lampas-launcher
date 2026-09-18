@@ -109,11 +109,11 @@ async function runWarmSyncBenchmark(): Promise<BenchmarkResult> {
   });
 
   ConfigManager.set({
-    token: "bench-token",
     portalUrl: `http://127.0.0.1:${server.port}`,
     selectedChannel: "stable",
     gameDir,
   });
+  ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "bench-token" });
 
   try {
     // Warm run
@@ -197,11 +197,11 @@ async function runFullRepairBenchmark(): Promise<BenchmarkResult> {
   });
 
   ConfigManager.set({
-    token: "bench-token",
     portalUrl: `http://127.0.0.1:${server.port}`,
     selectedChannel: "stable",
     gameDir,
   });
+  ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "bench-token" });
 
   try {
     const start = performance.now();

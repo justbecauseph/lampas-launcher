@@ -77,9 +77,9 @@ beforeAll(() => {
   fs.mkdirSync(path.join(gameDir, ".lampas"), { recursive: true });
   ConfigManager.set({
     gameDir,
-    token: "mock-token",
     allocatedRamGb: 4,
   });
+  ConfigManager.establishSession("https://lampas.town", { token: "mock-token" });
 });
 
 beforeEach(() => {
@@ -98,9 +98,9 @@ beforeEach(() => {
   bootstrapCalls = [];
   ConfigManager.set({
     gameDir,
-    token: "mock-token",
     allocatedRamGb: 4,
   });
+  ConfigManager.establishSession("https://lampas.town", { token: "mock-token" });
 });
 
 afterAll(() => {

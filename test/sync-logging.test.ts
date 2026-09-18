@@ -247,7 +247,7 @@ describe("Launcher sync and mod management logging", () => {
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain('[Config] selectedChannel changed: "stable" -> "beta"');
 
-    ConfigManager.set({ token: "super-secret-token-xyz" });
+    ConfigManager.establishSession("https://dev.lampas.town", { token: "super-secret-token-xyz" });
     await LauncherLogger.flush();
     logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Config] token changed: [REDACTED] -> [REDACTED]");

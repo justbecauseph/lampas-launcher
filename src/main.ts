@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from "electro
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ConfigManager, validateWebUrl, PortalPolicy, getUserDataDir } from "./config";
+import { SessionManager } from "./session-manager";
 import { LauncherAuth } from "./auth";
 import { LauncherSync } from "./sync";
 import { GameRunner, parseJavaArgs } from "./game-runner";
@@ -597,6 +598,7 @@ app.whenReady().then(async () => {
     const res = await LauncherAuth.refreshSession();
     return { valid: res.valid, user: toRendererUserProfile(res.user) };
   });
+  registerSecureHandler("auth:getStorageStatus", IpcSchemas.noArgs, () => SessionManager.getStorageStatus());
 
   // IPC Handlers: Server presence. Portal credentials stay in the main process.
   registerSecureHandler("server:getStatus", IpcSchemas.noArgs, () => ServerStatusClient.getStatus());
@@ -847,6 +849,12 @@ app.whenReady().then(async () => {
               }
             } catch (permErr) {
               return { passed: false, reason: "Permission query threw exception instead of returning denied: " + (permErr && permErr.message) };
+            }
+
+            // 6. Auth storage status verification
+            const storageStatus = await window.lampas.auth.getStorageStatus();
+            if (!storageStatus || typeof storageStatus.sessionOnly !== 'boolean' || !storageStatus.backend) {
+              return { passed: false, reason: "getStorageStatus did not return valid AuthStorageStatusDto: " + JSON.stringify(storageStatus) };
             }
             return { passed: true };
           })()
