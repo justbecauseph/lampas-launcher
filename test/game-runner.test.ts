@@ -52,21 +52,17 @@ let mockSessionUser: any = {
   allowedChannels: ["stable"],
 };
 
-mock.module("../src/auth", () => ({
-  LauncherAuth: {
-    refreshSession: async () => ({
-      valid: !!mockSessionUser,
-      user: mockSessionUser,
-    }),
-  },
-}));
-
 const { JavaRuntimeManager } = await import("../src/java-runtime");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { ConfigManager } = await import("../src/config");
 const { GameRunner } = await import("../src/game-runner");
+const { LauncherAuth } = await import("../src/auth");
 
 const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(async () => "C:\\Java25\\bin\\java.exe");
+const authSpy = spyOn(LauncherAuth, "refreshSession").mockImplementation(async () => ({
+  valid: !!mockSessionUser,
+  user: mockSessionUser,
+}));
 const bootstrapSpy = spyOn(MinecraftBootstrap, "prepareGameEnvironment").mockImplementation(async (targetDir: string, runtime: any) => {
   bootstrapCalls.push({ gameDir: targetDir, runtime });
   return {
@@ -110,6 +106,7 @@ beforeEach(() => {
 afterAll(() => {
   javaSpy.mockRestore();
   bootstrapSpy.mockRestore();
+  authSpy.mockRestore();
   GameRunner.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });

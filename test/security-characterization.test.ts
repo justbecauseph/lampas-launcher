@@ -136,22 +136,22 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
     expect(jsonStart).toBeGreaterThanOrEqual(0);
     const parsed = JSON.parse(stdout.slice(jsonStart + sentinel.length).trim().split("\n")[0]);
 
-    expect(parsed.totalPassed).toBe(51);
+    expect(parsed.totalPassed).toBe(61);
     expect(parsed.totalSkipped).toBe(0);
-    expect(parsed.tests.length).toBe(51);
+    expect(parsed.tests.length).toBe(61);
     for (const t of parsed.tests) {
       expect(t.passed).toBe(true);
     }
   });
 });
 
-describe("Phase 0 Security Characterization — SEC-03: Plaintext Credential Persistence", () => {
-  test("ConfigManager persists authentication secrets in unencrypted plaintext JSON", () => {
+describe("Phase 3 Security Verification — SEC-03: Plaintext Credential Separation", () => {
+  test("ConfigManager and SessionManager never persist authentication secrets in plaintext config.json", () => {
     const fakeToken = "sensitive_jwt_token_header.payload.signature";
     const fakeRefresh = "sensitive_refresh_token_string";
     const fakeMinecraft = "sensitive_mc_access_token";
 
-    ConfigManager.set({
+    ConfigManager.establishSession("https://dev.lampas.town", {
       token: fakeToken,
       refreshToken: fakeRefresh,
       minecraftAccessToken: fakeMinecraft,
@@ -163,13 +163,18 @@ describe("Phase 0 Security Characterization — SEC-03: Plaintext Credential Per
     const content = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(content);
 
-    expect(parsed.token).toBe(fakeToken);
-    expect(parsed.refreshToken).toBe(fakeRefresh);
-    expect(parsed.minecraftAccessToken).toBe(fakeMinecraft);
+    expect(parsed.token).toBeUndefined();
+    expect(parsed.refreshToken).toBeUndefined();
+    expect(parsed.minecraftAccessToken).toBeUndefined();
 
-    expect(content).toContain(fakeToken);
-    expect(content).toContain(fakeRefresh);
-    expect(content).toContain(fakeMinecraft);
+    expect(content).not.toContain(fakeToken);
+    expect(content).not.toContain(fakeRefresh);
+    expect(content).not.toContain(fakeMinecraft);
+
+    const inMemory = ConfigManager.get();
+    expect(inMemory.token).toBe(fakeToken);
+    expect(inMemory.refreshToken).toBe(fakeRefresh);
+    expect(inMemory.minecraftAccessToken).toBe(fakeMinecraft);
   });
 });
 

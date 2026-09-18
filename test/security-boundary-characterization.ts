@@ -451,6 +451,47 @@ try {
   const { JavaRuntimeManager } = javaRuntimeMod;
   const bootstrapMod = await import("../src/minecraft-bootstrap");
   const { MinecraftBootstrap } = bootstrapMod;
+  const credentialStoreMod = await import("../src/credential-store");
+  const { CredentialStore } = credentialStoreMod;
+  const sessionManagerMod = await import("../src/session-manager");
+  const { SessionManager } = sessionManagerMod;
+
+  class MockSafeStorage {
+    private key = crypto.randomBytes(32);
+    private iv = crypto.randomBytes(16);
+    public available: boolean = true;
+    public backend: string = "windows_dpapi";
+    public failEncryption: boolean = false;
+    public failDecryption: boolean = false;
+    public onEncryptCallback: (() => void) | null = null;
+
+    isEncryptionAvailable(): boolean {
+      return this.available;
+    }
+
+    getSelectedStorageBackend(): string {
+      return this.backend;
+    }
+
+    setUsePlainTextEncryption(_usePlainText: boolean): void {}
+
+    encryptString(plainText: string): Buffer {
+      if (!this.available) throw new Error("SafeStorage encryption not available");
+      if (this.failEncryption) throw new Error("SafeStorage encryption internal error");
+      if (this.onEncryptCallback) {
+        this.onEncryptCallback();
+      }
+      const cipher = crypto.createCipheriv("aes-256-cbc", this.key, this.iv);
+      return Buffer.concat([cipher.update(plainText, "utf8"), cipher.final()]);
+    }
+
+    decryptString(encrypted: Buffer): string {
+      if (!this.available) throw new Error("SafeStorage encryption not available");
+      if (this.failDecryption) throw new Error("Decryption failed: bad key or MAC mismatch");
+      const decipher = crypto.createDecipheriv("aes-256-cbc", this.key, this.iv);
+      return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+    }
+  }
 
   // Supply explicit development policy for test harness
   PortalPolicy.configureDevelopmentPolicy({
@@ -3734,6 +3775,518 @@ try {
     if (MAX_CUSTOM_MOD_FILE_SIZE_BYTES !== 100 * 1024 * 1024) {
       throw new Error(`Expected MAX_CUSTOM_MOD_FILE_SIZE_BYTES to be 100MB (104857600 bytes), got ${MAX_CUSTOM_MOD_FILE_SIZE_BYTES}`);
     }
+  });
+
+  // 52. [Phase 3] Secure-store round trip, encryption integrity, and application restart
+  await runTest("[Phase 3] Secure-store round trip, encryption integrity, and application restart", async () => {
+    SessionManager.resetForTesting();
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    const record = {
+      version: 1 as const,
+      portalUrl: originAPortal,
+      accountId: "player-uuid-1234",
+      accountUsername: "PlayerOne",
+      token: "secret-bearer-token-val",
+      refreshToken: "secret-refresh-token-val",
+      minecraftAccessToken: "secret-mc-access-token-val",
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    const saveResult = CredentialStore.saveCredentials(record);
+    if (!saveResult.success || saveResult.sessionOnly) {
+      throw new Error(`Expected successful secure save, got: ${JSON.stringify(saveResult)}`);
+    }
+
+    // Disk integrity: credentials.enc exists, is non-empty, and contains NO plaintext secrets
+    const credPath = CredentialStore.getCredentialsFilePath();
+    if (!fs.existsSync(credPath)) {
+      throw new Error(`credentials.enc does not exist at ${credPath}`);
+    }
+    const rawDisk = fs.readFileSync(credPath);
+    const rawStr = rawDisk.toString("utf-8");
+    if (rawStr.includes("secret-bearer-token-val") || rawStr.includes("secret-refresh-token-val") || rawStr.includes("PlayerOne")) {
+      throw new Error("Plaintext credentials found on disk in credentials.enc!");
+    }
+
+    // Decryption round-trip
+    const loaded = CredentialStore.loadCredentials();
+    if (!loaded) throw new Error("loadCredentials returned null after successful save");
+    if (loaded.token !== record.token || loaded.accountUsername !== "PlayerOne" || loaded.accountId !== "player-uuid-1234") {
+      throw new Error(`Decrypted record mismatch: ${JSON.stringify(loaded)}`);
+    }
+
+    // Application restart simulation
+    SessionManager.resetForTesting();
+    const configPath = path.join(userDataDir, "config.json");
+    SessionManager.initialize(configPath, originAPortal);
+
+    if (!SessionManager.isAuthenticated()) {
+      throw new Error("Session was not restored on restart");
+    }
+    const creds = SessionManager.getCredentials();
+    if (creds?.token !== "secret-bearer-token-val") {
+      throw new Error(`Token mismatch after restart: ${creds?.token}`);
+    }
+    const user = SessionManager.getCurrentUser();
+    if (user?.minecraftUsername !== "PlayerOne") {
+      throw new Error(`User mismatch after restart: ${user?.minecraftUsername}`);
+    }
+
+    CredentialStore.clearCredentials();
+  });
+
+  // 53. [Phase 3] Session-only behavior with unavailable or insecure storage backends
+  await runTest("[Phase 3] Session-only behavior with unavailable or insecure storage backends", async () => {
+    SessionManager.resetForTesting();
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    const record = {
+      version: 1 as const,
+      portalUrl: originAPortal,
+      accountId: "player-uuid-53",
+      accountUsername: "SessionOnlyUser",
+      token: "session-only-token-53",
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+
+    // Case A: Encryption unavailable
+    mockStorage.available = false;
+    if (CredentialStore.detectStorageBackend() !== "session_only") {
+      throw new Error("Expected session_only backend when encryption unavailable");
+    }
+    const resA = CredentialStore.saveCredentials(record);
+    if (!resA.success || !resA.sessionOnly) {
+      throw new Error(`Expected sessionOnly=true when unavailable, got ${JSON.stringify(resA)}`);
+    }
+    if (fs.existsSync(CredentialStore.getCredentialsFilePath())) {
+      throw new Error("credentials.enc was created on disk in session_only mode!");
+    }
+    if (CredentialStore.loadCredentials() !== null) {
+      throw new Error("loadCredentials did not return null in session_only mode");
+    }
+
+    // Case B: Insecure Linux fallback (basic_text / unknown)
+    mockStorage.available = true;
+    const origPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      mockStorage.backend = "basic_text";
+      if (CredentialStore.detectStorageBackend() !== "session_only") {
+        throw new Error("Expected basic_text on Linux to resolve to session_only");
+      }
+      const resB = CredentialStore.saveCredentials(record);
+      if (!resB.sessionOnly) throw new Error("basic_text did not trigger sessionOnly");
+
+      mockStorage.backend = "unknown";
+      if (CredentialStore.detectStorageBackend() !== "session_only") {
+        throw new Error("Expected unknown backend on Linux to resolve to session_only");
+      }
+
+      // Valid Linux keyring
+      mockStorage.backend = "gnome_libsecret";
+      if (CredentialStore.detectStorageBackend() !== "linux_keyring") {
+        throw new Error("Expected gnome_libsecret to resolve to linux_keyring");
+      }
+    } finally {
+      Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+    }
+  });
+
+  // 54. [Phase 3] Locked provider and corrupt ciphertext handling fail closed without crashing
+  await runTest("[Phase 3] Locked provider and corrupt ciphertext handling fail closed without crashing", async () => {
+    SessionManager.resetForTesting();
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    const credPath = CredentialStore.getCredentialsFilePath();
+
+    // 1. Corrupt ciphertext bytes on disk
+    fs.writeFileSync(credPath, Buffer.from("not-valid-aes-ciphertext-random-junk"));
+    mockStorage.failDecryption = true;
+
+    // loadCredentials must catch error, delete corrupt file, and return null
+    const loaded = CredentialStore.loadCredentials();
+    if (loaded !== null) {
+      throw new Error("Expected null for corrupt ciphertext");
+    }
+    if (fs.existsSync(credPath)) {
+      throw new Error("Corrupted credentials.enc was not unlinked from disk");
+    }
+
+    // 2. Schema corruption (valid decryption, but malformed JSON schema)
+    mockStorage.failDecryption = false;
+    const malformedBuffer = mockStorage.encryptString(JSON.stringify({
+      version: 99,
+      token: "leaked",
+    }));
+    fs.writeFileSync(credPath, malformedBuffer);
+
+    const loadedSchema = CredentialStore.loadCredentials();
+    if (loadedSchema !== null) {
+      throw new Error("Expected null for invalid schema version");
+    }
+    if (fs.existsSync(credPath)) {
+      throw new Error("Malformed schema credentials.enc was not unlinked from disk");
+    }
+  });
+
+  // 55. [Phase 3] Origin mismatch and stale records are purged fail-closed on initialization
+  await runTest("[Phase 3] Origin mismatch and stale records are purged fail-closed on initialization", async () => {
+    SessionManager.resetForTesting();
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    // Save record for originAPortal
+    CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: originAPortal,
+      accountId: "acc-1",
+      accountUsername: "UserA",
+      token: "token-for-origin-a",
+      createdAt: 100,
+      updatedAt: 200,
+    });
+
+    // Initialize with attackerPortal (mismatch)
+    const configPath = path.join(userDataDir, "config.json");
+    SessionManager.initialize(configPath, attackerPortal);
+
+    if (SessionManager.isAuthenticated()) {
+      throw new Error("Wrong-origin credentials were authenticated!");
+    }
+    if (fs.existsSync(CredentialStore.getCredentialsFilePath())) {
+      throw new Error("Wrong-origin credentials were not purged from disk!");
+    }
+
+    // SessionManager.onPortalUrlChanged wipes mismatched active session
+    SessionManager.establishSession(originAPortal, { token: "new-token-a" });
+    if (!SessionManager.isAuthenticated()) throw new Error("Failed to establish session");
+    SessionManager.onPortalUrlChanged(attackerPortal);
+    if (SessionManager.isAuthenticated()) {
+      throw new Error("Session remained active after portal changed to attackerPortal");
+    }
+  });
+
+  // 56. [Phase 3] Migration state machine handles each checkpoint failure cleanly without resurrecting plaintext
+  await runTest("[Phase 3] Migration state machine handles each checkpoint failure cleanly without resurrecting plaintext", async () => {
+    SessionManager.resetForTesting();
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+    const configPath = path.join(userDataDir, "config.json");
+
+    // Checkpoint A: Unbound origin in config.json
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: originAPortal,
+      token: "unbound-token",
+      refreshToken: "unbound-refresh",
+    }));
+    SessionManager.resetForTesting();
+    SessionManager.initialize(configPath, originAPortal);
+    if (SessionManager.isAuthenticated()) throw new Error("Unbound credentials were authenticated");
+    const rawA = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (rawA.token || rawA.refreshToken) throw new Error("Unbound plaintext tokens were not scrubbed from config.json");
+
+    // Checkpoint B: Mismatched sessionPortalUrl
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: originAPortal,
+      sessionPortalUrl: attackerPortal,
+      token: "mismatched-token",
+    }));
+    SessionManager.resetForTesting();
+    SessionManager.initialize(configPath, originAPortal);
+    if (SessionManager.isAuthenticated()) throw new Error("Mismatched credentials were authenticated");
+    const rawB = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (rawB.token) throw new Error("Mismatched plaintext tokens were not scrubbed from config.json");
+
+    // Checkpoint C: Storage is session_only
+    mockStorage.available = false;
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: originAPortal,
+      sessionPortalUrl: originAPortal,
+      token: "session-only-migrated",
+    }));
+    SessionManager.resetForTesting();
+    SessionManager.initialize(configPath, originAPortal);
+    if (!SessionManager.isAuthenticated() || SessionManager.getCredentials()?.token !== "session-only-migrated") {
+      throw new Error("Failed to migrate into session_only memory");
+    }
+    const rawC = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (rawC.token) throw new Error("Plaintext tokens not scrubbed from config.json in session_only migration");
+    if (fs.existsSync(CredentialStore.getCredentialsFilePath())) {
+      throw new Error("credentials.enc was created in session_only migration");
+    }
+
+    // Checkpoint D: Encryption failure during migration
+    mockStorage.available = true;
+    mockStorage.failEncryption = true;
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: originAPortal,
+      sessionPortalUrl: originAPortal,
+      token: "fail-encrypt-token",
+    }));
+    SessionManager.resetForTesting();
+    SessionManager.initialize(configPath, originAPortal);
+    if (SessionManager.isAuthenticated()) throw new Error("Authenticated despite encryption failure");
+    const rawD = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (rawD.token) throw new Error("Plaintext not scrubbed on encryption failure");
+
+    // Checkpoint E: Read-back verification failure
+    mockStorage.failEncryption = false;
+    mockStorage.failDecryption = true;
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: originAPortal,
+      sessionPortalUrl: originAPortal,
+      token: "fail-verify-token",
+    }));
+    SessionManager.resetForTesting();
+    SessionManager.initialize(configPath, originAPortal);
+    if (SessionManager.isAuthenticated()) throw new Error("Authenticated despite read-back verification failure");
+    const rawE = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (rawE.token) throw new Error("Plaintext not scrubbed on read-back verification failure");
+
+    mockStorage.failDecryption = false;
+  });
+
+  // 57. [Phase 3] Logout during persistent credential write invalidates session epoch and rolls back disk store
+  await runTest("[Phase 3] Logout during persistent credential write invalidates session epoch and rolls back disk store", async () => {
+    SessionManager.resetForTesting();
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+
+    // Hook encryption step to simulate a concurrent logout occurring during encryption
+    mockStorage.onEncryptCallback = () => {
+      SessionManager.clearSession();
+    };
+
+    SessionManager.establishSession(originAPortal, {
+      token: "aborted-race-token",
+      refreshToken: "aborted-race-refresh",
+    });
+
+    if (SessionManager.isAuthenticated()) {
+      throw new Error("Session was established despite concurrent logout during encryption!");
+    }
+    if (SessionManager.getCredentials() !== null) {
+      throw new Error("Credentials leaked into memory despite concurrent logout!");
+    }
+    if (fs.existsSync(CredentialStore.getCredentialsFilePath())) {
+      throw new Error("Disk store was not rolled back after concurrent logout during write!");
+    }
+    mockStorage.onEncryptCallback = null;
+  });
+
+  // 58. [Phase 3] Invalidation barriers discard late responses and prevent cross-session contamination
+  await runTest("[Phase 3] Invalidation barriers discard late responses and prevent cross-session contamination", async () => {
+    SessionManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+
+    // Establish session
+    SessionManager.establishSession(originAPortal, {
+      token: "session-58-token",
+      refreshToken: "session-58-refresh",
+    });
+
+    // Simulate in-flight refresh with delay
+    delayNextServerAResponse = 40;
+    const inFlight = LauncherAuth.refreshSession();
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Logout while refresh is in flight
+    LauncherAuth.logout();
+    if (SessionManager.isAuthenticated()) {
+      throw new Error("Expected session to be logged out");
+    }
+
+    const res = await inFlight;
+    if (res.valid !== false) {
+      throw new Error("Expected late refresh to resolve to valid: false after logout");
+    }
+    if (SessionManager.isAuthenticated()) {
+      throw new Error("Late refresh resurrected session after logout!");
+    }
+    if (ConfigManager.get().token !== undefined) {
+      throw new Error("Late refresh resurrected token in config!");
+    }
+  });
+
+  // 59. [Phase 3] Single-flight refresh coalesces concurrent callers and superseding login invalidates in-flight operations
+  await runTest("[Phase 3] Single-flight refresh coalesces concurrent callers and superseding login invalidates in-flight operations", async () => {
+    SessionManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+    ConfigManager.establishSession(originAPortal, {
+      token: "singleflight-token",
+      refreshToken: "singleflight-refresh",
+    });
+
+    delayNextServerAResponse = 40;
+    capturedRequestsA.length = 0;
+
+    const p1 = LauncherAuth.refreshSession();
+    const p2 = LauncherAuth.refreshSession();
+
+    // Verify coalesced promise
+    if (p1 !== p2) {
+      throw new Error("Expected concurrent refresh callers to share the same promise");
+    }
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    if (!r1.valid || !r2.valid) {
+      throw new Error("Expected both callers to receive valid refresh result");
+    }
+
+    // Only 1 network request dispatched to /api/v1/auth/refresh
+    const refreshRequests = capturedRequestsA.filter((r) => r.url === "/api/v1/auth/refresh");
+    if (refreshRequests.length !== 1) {
+      throw new Error(`Expected 1 network request, got ${refreshRequests.length}`);
+    }
+
+    // Superseding login cancels in-flight refresh
+    delayNextServerAResponse = 40;
+    const pendingRefresh = LauncherAuth.refreshSession();
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Superseding login begins
+    SessionManager.nextLoginEpoch();
+    const refreshResult = await pendingRefresh;
+    if (refreshResult.valid !== false) {
+      throw new Error("Expected in-flight refresh to be invalidated by superseding login");
+    }
+  });
+
+  // 60. [Phase 3] Loopback OAuth listener enforces method, path, host, single-use, and deterministic cleanup
+  await runTest("[Phase 3] Loopback OAuth listener enforces method, path, host, single-use, and deterministic cleanup", async () => {
+    SessionManager.resetForTesting();
+    ConfigManager.set({ portalUrl: originAPortal });
+    openedExternals.length = 0;
+
+    const loginPromise = LauncherAuth.loginWithPortal();
+
+    const deadline = Date.now() + 3000;
+    while (openedExternals.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const lastUrl = openedExternals[openedExternals.length - 1];
+    const parsed = new URL(lastUrl);
+    const callbackPort = parsed.searchParams.get("port")!;
+    const state = parsed.searchParams.get("state")!;
+    const cbOrigin = `http://127.0.0.1:${callbackPort}`;
+    allowedDestinations.add(cbOrigin);
+    // 1. Method constraint: POST rejected
+    const postRes = await fetch(`${cbOrigin}/callback?code=foo&state=${state}`, { method: "POST" });
+    if (postRes.status !== 405) {
+      throw new Error(`Expected 405 Method Not Allowed, got: ${postRes.status}`);
+    }
+
+    // 2. URI length constraint: >2048 chars rejected
+    const longParam = "a".repeat(2100);
+    const longRes = await fetch(`${cbOrigin}/callback?code=${longParam}&state=${state}`);
+    if (longRes.status !== 414) {
+      throw new Error(`Expected 414 URI Too Long, got: ${longRes.status}`);
+    }
+
+    // 3. Host header constraint: mismatch rejected
+    const badHostRes = await fetch(`${cbOrigin}/callback?code=foo&state=${state}`, {
+      headers: { Host: "evil.attacker.invalid" },
+    });
+    if (badHostRes.status !== 400) {
+      throw new Error(`Expected 400 Host Header Mismatch, got: ${badHostRes.status}`);
+    }
+
+    // 4. Noise tolerance: non-callback path returns 404 without closing server
+    const noiseRes = await fetch(`${cbOrigin}/favicon.ico`);
+    if (noiseRes.status !== 404) {
+      throw new Error(`Expected 404 for noise path, got: ${noiseRes.status}`);
+    }
+
+    // 5. State mismatch returns 400 without terminating server
+    const badStateRes = await fetch(`${cbOrigin}/callback?code=test-code&state=wrong-state`);
+    if (badStateRes.status !== 400) {
+      throw new Error(`Expected 400 for bad state, got: ${badStateRes.status}`);
+    }
+
+    // 6. Concurrently send valid callback and replay request: first gets 200, replay gets 409
+    const [resA, resB] = await Promise.all([
+      fetch(`${cbOrigin}/callback?code=auth-code-legitimate&state=${encodeURIComponent(state)}`),
+      fetch(`${cbOrigin}/callback?code=auth-code-legitimate&state=${encodeURIComponent(state)}`),
+    ]);
+
+    const statuses = [resA.status, resB.status].sort();
+    if (statuses[0] !== 200 || statuses[1] !== 409) {
+      throw new Error(`Expected statuses [200, 409], got: [${resA.status}, ${resB.status}]`);
+    }
+    const successRes = resA.status === 200 ? resA : resB;
+    const htmlBody = await successRes.text();
+    if (htmlBody.includes("auth-code-legitimate")) {
+      throw new Error("Raw authorization code reflected into HTML response!");
+    }
+
+    const authResult = await loginPromise;
+    if (!authResult.token) throw new Error("Expected token from loginPromise");
+
+    // 7. Cancellation cleanup
+    LauncherAuth.cancelLogin();
+  });
+
+  // 61. [Phase 3] Complete absence of synthetic secrets from settings, IPC responses, and disk metadata
+  await runTest("[Phase 3] Complete absence of synthetic secrets from settings, IPC responses, and disk metadata", async () => {
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    CredentialStore.setCustomUserDataDirForTesting(userDataDir);
+    SessionManager.resetForTesting();
+
+    const synSecretToken = "syn-bearer-token-secret-999";
+    const synSecretRefresh = "syn-refresh-token-secret-888";
+    const synSecretMc = "syn-mc-token-secret-777";
+
+    ConfigManager.establishSession(originAPortal, {
+      token: synSecretToken,
+      refreshToken: synSecretRefresh,
+      minecraftAccessToken: synSecretMc,
+    });
+
+    // 1. Inspect config.json on disk
+    const configPath = path.join(userDataDir, "config.json");
+    const rawConfig = fs.readFileSync(configPath, "utf-8");
+    if (rawConfig.includes(synSecretToken) || rawConfig.includes(synSecretRefresh) || rawConfig.includes(synSecretMc)) {
+      throw new Error("Synthetic secrets leaked into config.json on disk!");
+    }
+
+    // 2. Inspect IPC config:get response
+    const configGetHandler = ipcHandlers.get("config:get")!;
+    const settingsDto = await configGetHandler({});
+    const serializedDto = JSON.stringify(settingsDto);
+    if (serializedDto.includes(synSecretToken) || serializedDto.includes(synSecretRefresh) || serializedDto.includes(synSecretMc)) {
+      throw new Error(`Synthetic secrets leaked into config:get IPC response: ${serializedDto}`);
+    }
+    if ((settingsDto as any).token || (settingsDto as any).refreshToken || (settingsDto as any).minecraftAccessToken || (settingsDto as any).sessionPortalUrl) {
+      throw new Error("Credential fields leaked into RendererSettingsDto!");
+    }
+
+    // 3. Inspect IPC sync:getInstalledRuntime
+    const runtimeHandler = ipcHandlers.get("sync:getInstalledRuntime")!;
+    const runtimeDto = await runtimeHandler({});
+    if (runtimeDto) {
+      const serializedRuntime = JSON.stringify(runtimeDto);
+      if (serializedRuntime.includes(synSecretToken) || serializedRuntime.includes(synSecretRefresh) || serializedRuntime.includes(synSecretMc)) {
+        throw new Error("Synthetic secrets leaked into getInstalledRuntime response!");
+      }
+    }
+
+    // Cleanup
+    SessionManager.clearSession();
   });
 
   // Assert outbound request policy compliance: zero unapproved network attempts

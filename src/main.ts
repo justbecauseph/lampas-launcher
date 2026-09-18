@@ -890,6 +890,7 @@ app.on("before-quit", async (event) => {
   if (isQuitting) return;
   event.preventDefault();
   isQuitting = true;
+  LauncherAuth.cancelLogin();
   try {
     await Promise.race([
       Promise.all([

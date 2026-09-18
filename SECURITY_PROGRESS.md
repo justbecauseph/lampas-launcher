@@ -3,11 +3,11 @@
 ## Review Gate 2 — Narrow IPC Capabilities and Lock Down the Renderer (SEC-02)
 
 - **Execution Date:** 17-18 September 2026
-- **Status:** Complete (Review Gate 2 amended implementation verified; Phase 2 complete; paused before Phase 3)
+- **Status:** Accepted (Accepted at checkpoint `16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`)
 - **Accepted Baseline Checkpoint:** `149f10021efce2939c6c12150a3a07dd61b622dc`
 - **Accepted Review Gate 1 Checkpoint:** `e1d029112bd4b2843d61ccc19891556192e3efeb`
-- **Reviewed Gate 2 Checkpoints:** `689800eda9c6b56910546cf608b34f243029d1db`, `f39ad0db8351c08e3bcf8c0c4f68ff6bed1b6f4a`, `f222afde515676d1cd26d1e6f8a7e624345667ff`
-- **Amended Gate 2 Checkpoint:** `HEAD` on branch `feat/security`
+- **Accepted Review Gate 2 Checkpoint:** `16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`
+- **Reviewed Gate 2 Iterations:** `689800eda9c6b56910546cf608b34f243029d1db`, `f39ad0db8351c08e3bcf8c0c4f68ff6bed1b6f4a`, `f222afde515676d1cd26d1e6f8a7e624345667ff`
 - **Current Branch:** `feat/security`
 - **Scope Restriction:** Strictly restricted to Phase 2 ("Narrow IPC capabilities and lock down the renderer"). Phase 3 (OS keyring/DPAPI), Phase 4 (Path containment), and subsequent phases remain paused. Acceptance does not close any subsequent production security finding or authorize merging, tagging, or publication.
 
@@ -74,15 +74,15 @@ Following review of checkpoint `f222afde515676d1cd26d1e6f8a7e624345667ff`, all f
     - Added pre-pass token scanner rejecting any `@`-prefixed argument before argument decomposition.
     - Hardened `validateAndConsumeOperand` and `validateEqualsOperand` in `src/ipc-boundary.ts` to explicitly check operand values against `isLaunchTargetToken`.
     - Preserved identical rejection decisions across both separate-token (`-cp @file`, `-p @file`, `--patch-module mod=@file`) and equals syntax (`--class-path=@file`, `--module-path=@file`, `--patch-module=mod=@file`).
-  - **Policy Correction for `java.library.path`:**
-    - Explicitly classified `java.library.path` as a prohibited launch target override (`hasLaunchTargetOverride: true`), not merely confirmation-gated. Documented and enforced at both the settings handler (`config:set`) and the process sink (`buildLaunchArguments`).
+  - **Policy Correction for `java.library.path` and Native-Search Overrides:**
+    - Explicitly classified `java.library.path` (and equivalent overrides including `org.lwjgl.librarypath` and `minecraft.applet.TargetDirectory`) as prohibited launch target overrides (`hasLaunchTargetOverride: true`), not merely confirmation-gated. Documented and enforced at both the settings handler (`config:set`) and the process sink (`buildLaunchArguments`), rejecting code loading/native-search override fail-closed before native confirmation and before the spawn sink.
   - **Pre-Dialog Rejection & Zero Spawn Sink Enforcement:**
     - Rejection of launch target overrides in `config:set` occurs strictly before any native confirmation dialog is displayed, even if a confirmation mock would approve.
     - Rejection in `buildLaunchArguments` occurs with zero process execution (throws `InstallationStateError`).
 - **Verification (Failing-Before vs Passing-After):**
   - *Before:* `-cp @args.txt` and `--class-path=@args.txt` allowed `@args.txt` as a consumed operand without triggering launch target rejection; `-Djava.library.path=/path` was confirmation-gated instead of rejected fail-closed.
   - *After:*
-    - Standalone `@args.txt`, `-cp @args.txt`, `--class-path=@args.txt`, `-p @args.txt`, `--module-path=@args.txt`, `--patch-module mod=@args.txt`, `--patch-module=mod=@args.txt`, and `-Djava.library.path=...` are all classified as `hasLaunchTargetOverride: true`.
+    - Standalone `@args.txt`, `-cp @args.txt`, `--class-path=@args.txt`, `-p @args.txt`, `--module-path=@args.txt`, `--patch-module mod=@args.txt`, `--patch-module=mod=@args.txt`, `-Djava.library.path=...`, `-Dorg.lwjgl.librarypath=...`, and `-Dminecraft.applet.TargetDirectory=...` are all classified as `hasLaunchTargetOverride: true`.
     - All rejected fail-closed in `config:set` before native dialog.
     - All rejected in `buildLaunchArguments` before `child_process.spawn` is reached.
     - Characterization Test 47 passes all 19 target override and privilege classification assertions.
@@ -182,45 +182,46 @@ All 38 inbound IPC channels (37 handlers + 1 listener) are registered through th
 
 ---
 
-### 4. Verification Evidence
+### 4. Verification Evidence (Categorized by Test Layer)
 
-#### A. Security Boundary Characterization Suite (`test/security-boundary-characterization.ts`)
-Executed in isolated child process with outbound network enforcement and complete Electron mocks:
+#### A. Direct Component Checks (Isolated Unit & Functional Suites)
+Executed directly under the Bun test runner exercising isolated TypeScript modules without an active Electron windowing layer:
+- **Parent Characterization Suite (`test/security-characterization.test.ts`):**
+  - Total: **16 passed, 0 failed, 95 expect() calls**.
+  - Direct checks: `normalizePortalUrl` bypass checks, uppercase scheme upgrades, legacy config migration assertions, and characterization test sentinels.
+- **Full Launcher Suite (`bun test`):**
+  - Total: **285 passed, 0 failed, 5 skipped, 7 todo across 34 test files** (1151 expect() calls).
+  - Direct checks: Config manager, file transfer, logger, resource pack hashing, mod catalogs, server status, sync engine, and Minecraft bootstrap.
+
+#### B. Registered-Handler Boundary Tests (Isolated Subprocess with Electron Mocking Harness)
+Executed in an isolated child process (`test/security-boundary-characterization.ts`) with strict outbound network firewalling and comprehensive Electron API mocks (`BrowserWindow`, `WebContents`, `IpcMain`, `WebFrameMain`):
 - Total Tests: **51 passed, 0 failed, 0 outbound policy violations, 0 skipped**
-- **Phase 2 Tests (Tests 39-51):**
-  - **Test 39:** Unauthorized IPC callers rejected (foreign BrowserWindow webContents, child frames with `parent !== null`, unapproved document origins).
-  - **Test 40:** `config:set` allowlist schema strictly enforced (rejects `gameDir`, `token`, `sessionPortalUrl`, unexpected keys, prototype pollution).
-  - **Test 41:** Main-owned launch authority (`game:launch` rejects renderer-supplied overrides; fetches user and release main-side).
-  - **Test 42:** Main-owned mod authority (`mods:setOfficialEnabled` blocks disabling official mods when `canDisable !== true` in catalog).
-  - **Test 43:** Custom mod import validation (`mods:addPaths` rejects non-jar files, directory paths, and non-existent files).
-  - **Test 44:** Native approval & privileged `javaArgs` detection (flags `-javaagent:`, `@argfile`, etc.; single-use consumption; document generation invalidation).
-  - **Test 45:** Packaged build renderer lockdown (production rejects loopback dev server, requires `file://` index).
-  - **Test 46:** Positive end-to-end paths (secure handlers succeed with valid sender, top-level frame, and approved inputs).
-  - **Test 47:** Complete Java-argument privilege classification across full taxonomy (launch target overrides, sensitive options, ordinary tuning, settings handler confirmation/rejection, and process argument sink).
-  - **Test 48:** Document trust independent of load observations and strict sender frame validation (did-finish-load does not approve arbitrary documents, unapproved dev ports rejected, detached frames rejected, foreign file URL authorities rejected).
-  - **Test 49:** Native approval binding (snapshot revalidation on generation advance, window loss, or frame detachment; operation conflict barriers during dialog; single-use consumption; platform-correct case normalization; 60s TTL).
-  - **Test 50:** Main-owned launch admission (consolidated auth refresh; mandatory `installation.json` existence, non-emptiness, and version matching; `noSync` admission preservation; intercepted spawn verification).
-  - **Test 51:** Renderer permission lockdown and error sanitization (dual check/request handler denial; error sanitization masking security errors and scrubbing paths).
+- **Phase 2 Boundary & Registered-Handler Tests (Tests 39-51):**
+  - **Test 39 (Handler Registration):** Unauthorized IPC callers rejected (foreign BrowserWindow webContents, child frames with `parent !== null`, unapproved document origins).
+  - **Test 40 (Handler Validation):** `config:set` allowlist schema strictly enforced (rejects `gameDir`, `token`, `sessionPortalUrl`, unexpected keys, prototype pollution).
+  - **Test 41 (Handler Authority):** Main-owned launch authority (`game:launch` rejects renderer-supplied overrides; fetches user and release main-side).
+  - **Test 42 (Handler Authority):** Main-owned mod authority (`mods:setOfficialEnabled` blocks disabling official mods when `canDisable !== true` in catalog).
+  - **Test 43 (Handler Validation):** Custom mod import validation (`mods:addPaths` rejects non-jar files, directory paths, and non-existent files).
+  - **Test 44 (Handler Approval):** Native approval & privileged `javaArgs` detection (flags `-javaagent:`, `@argfile`, etc.; single-use consumption; document generation invalidation).
+  - **Test 45 (Startup Policy):** Packaged build renderer lockdown (production rejects loopback dev server, requires `file://` index).
+  - **Test 46 (End-to-End Handlers):** Positive end-to-end paths (secure handlers succeed with valid sender, top-level frame, and approved inputs).
+  - **Test 47 (Component & Sink):** Complete Java-argument privilege classification across full taxonomy (launch target overrides, sensitive options, ordinary tuning, settings handler confirmation/rejection, and process argument sink).
+  - **Test 48 (Frame & Document):** Document trust independent of load observations and strict sender frame validation (did-finish-load does not approve arbitrary documents, unapproved dev ports rejected, detached frames rejected, foreign file URL authorities rejected).
+  - **Test 49 (Approval Lifecycle):** Native approval binding (snapshot revalidation on generation advance, window loss, or frame detachment; operation conflict barriers during dialog; single-use consumption; platform-correct case normalization; 60s TTL).
+  - **Test 50 (Admission & Process):** Main-owned launch admission (consolidated auth refresh; mandatory `installation.json` existence, non-emptiness, and version matching; `noSync` admission preservation; out-of-band intercepted spawn verification).
+  - **Test 51 (Permissions & Sanitization):** Renderer permission lockdown and error sanitization (dual check/request handler denial; error sanitization masking security errors and scrubbing paths).
+- **Regression Gates Suite (`test/security-regression-gates.test.ts`):**
+  - Total Tests: **8 passed, 0 failed, 5 skipped (Phases 3/4/6), 7 todo (Phases 3-7)**
+  - Phase 1 Gates (6 tests): URL normalization, production portal policy, origin-change invalidation, web link sink protocol enforcement, session origin binding, legacy migration disk cleanup.
+  - Phase 2 Gates (2 tests): Sender frame validation (`validateIpcSender`), `config:set` allowlist schema (`validateConfigSet`).
 
-#### B. Regression Gates Suite (`test/security-regression-gates.test.ts`)
-- Total Tests: **8 passed, 0 failed, 5 skipped (Phases 3/4/6), 7 todo (Phases 3-7)**
-- **Phase 1 Gates (6 tests):** URL helper normalization, production portal policy, origin-change invalidation, web link sink protocol enforcement, session origin binding, legacy migration disk cleanup. All passed.
-- **Phase 2 Gates (2 tests):**
-  - Sender frame validation and rejection of foreign windows, child iframes, and desynced documents (Passed).
-  - `config:set` strict allowlist schema rejecting unapproved runtime fields and credential injection (Passed).
-
-#### C. Parent Characterization Suite (`test/security-characterization.test.ts`)
-- Total Tests: **16 passed, 0 failed, 95 expect() calls**
-- 15 unit/component security tests + 1 child runner assertion verifying all 51 boundary characterizations.
-
-#### D. Full Launcher Test Suite (`bun test`)
-- Total Tests: **285 passed, 0 failed, 5 skipped, 7 todo across 34 test files** (1151 expect() calls).
-
-#### E. Strict Packaged Electron Smoke & Adversarial Verification (`bun run smoke --strict`)
-- **Unpacked dev/dist execution:** Exit code 0, init: true, handlers: true, roundTrip: true, adversarial: true.
-- **Packaged distribution execution:** ASAR size 3.27 MB, Exit code 0, init: true, handlers: true, roundTrip: true, adversarial: true.
-- **Publishing safety:** publish: never, CI linux artifacts guaranteed.
-- **Zero `--no-sandbox`:** Tests run under standard sandbox constraints.
+#### C. Real Electron & Platform Evidence (Actual Sandboxed Runtime & Packaged ASAR Execution)
+Executed using real operating-system processes (`electron.exe` and packaged `Lampas Launcher.exe`) under real Chromium sandbox constraints (strictly **without** `--no-sandbox`):
+- **Strict Smoke Test Suite (`bun test/smoke/electron-smoke.ts --strict`):**
+  - **Unpacked dev/dist execution:** Exit code 0, init: true, handlers: true, roundTrip: true, adversarial: true. Verified that real Electron Chromium sandbox and Node integration behave identically to unit specifications.
+  - **Packaged distribution execution:** Real Windows executable (`release\win-unpacked\Lampas Launcher.exe`) and packaged ASAR archive (`resources\app.asar`, 3.27 MB). Exit code 0, init: true, handlers: true, roundTrip: true, adversarial: true.
+  - **Security Fuses & Sandboxing:** Real Electron process executed with sandbox active; no sandbox-bypass flags.
+  - **Publishing safety:** `publish: never` enforced; CI artifacts verified.
 
 #### F. Dependency & Lockfile Integrity
 - `git diff bun.lock`: **0 changes (byte-for-byte identical)**.
@@ -249,22 +250,257 @@ Executed in isolated child process with outbound network enforcement and complet
 
 ### 6. Review Gate 2 Acceptance Confirmation
 
-- **Phase 2 Scope Fully Implemented & Verified:**
-  - Complete IPC registration and validation boundary in place (`registerSecureHandler`, `registerSecureListener`).
-  - All 38 inbound channels inventoried, validated, and protected against unauthorized or desynced callers.
-  - Complete Java-argument privilege classification across the full taxonomy; launch-target control strictly reserved to main; verified at settings handler and process sink.
-  - Document trust independent of load observations; top-level mainFrame attachment check; confined development endpoint; foreign file authorities rejected.
-  - Native approval bound to operation snapshot with revalidation, operation conflict rechecks, platform-correct case normalization, and 60-second TTL.
-  - Main-owned launch admission with consolidated auth refresh and mandatory `installation.json` evidence.
-  - Dual permission check and request lockdown; IPC error sanitization masking security errors and scrubbing paths.
-  - Packaged renderer hardened with strict CSP and navigation denial.
-- **Outbound Request Policy Harness Verified:**
-  - Zero unapproved outbound network requests detected during isolated boundary execution.
-- **Pre-Existing Invariants:**
-  - All baseline and Phase 1 tests pass with zero regressions (285 passed across 34 test files).
-- **Dependencies & Lockfile:**
-  - `bun.lock` is byte-for-byte identical with baseline. Zero dependency mutations.
-- **Typecheck & Packaging:**
-  - Production typecheck (`bun run typecheck`), security test typecheck (`tsconfig.security-test.json`), production Vite packaging (`bun run build`), and Electron smoke tests (`bun run smoke --strict`) pass cleanly with 0 errors without `--no-sandbox`.
+- **Acceptance Checkpoint:** `16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`
+- **Review Gate 2 Accepted:** Verified complete Phase 2 remediation across all 5 targeted items.
+- **Historical Evidence Preservation:** Historical test evidence, artifact hashes, and metrics are preserved intact at their original checkpoint.
+- **Transitional Authorization:** Acceptance of Review Gate 2 authorized targeted execution of Phase 3 only ("Separate secrets and make authentication race-safe"). Acceptance does not authorize merging, tagging, or publication.
 
-**STOPPING AT REVIEW GATE 2.** Phase 3 (Keyring / Session Store & Race-Safe Auth) has not been implemented and remains paused. Ready for commit, push, and Review Gate 2 review.
+---
+
+## Review Gate 3 — Separate Secrets and Make Authentication Race-Safe (SEC-03, SEC-08)
+
+- **Execution Date:** 18 September 2026
+- **Status:** Complete (Review Gate 3 implementation verified; Phase 3 complete; paused before Phase 4)
+- **Accepted Baseline Checkpoint:** `149f10021efce2939c6c12150a3a07dd61b622dc`
+- **Accepted Review Gate 1 Checkpoint:** `e1d029112bd4b2843d61ccc19891556192e3efeb`
+- **Accepted Review Gate 2 Checkpoint:** `16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`
+- **Amended Gate 3 Checkpoint:** `HEAD` on branch `feat/security`
+- **Current Branch:** `feat/security`
+- **Scope Restriction:** Strictly restricted to Phase 3 ("Separate secrets and make authentication race-safe", remediating SEC-03 and SEC-08). Phase 4 (Path containment and safe recovery) and subsequent phases remain paused. Acceptance does not close any subsequent production security finding or authorize merging, tagging, or publication.
+
+---
+
+### 1. Code Drift, Commit Hierarchy & Baseline Verification
+
+A complete audit of changes was performed against accepted Review Gate 2 checkpoint (`16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`) and earlier checkpoints:
+
+| Dimension | Accepted Baseline (`149f100`) | Accepted RG 1 (`e1d0291`) | Accepted RG 2 (`16bd12d`) | Review Gate 3 (`HEAD`) | Drift Evaluation |
+|---|---|---|---|---|---|
+| **Production Code (`src/`, `ui/`)** | Pristine baseline (`0 lines`) | 8 files modified, 1 added | 9 files modified, 2 added | 12 files modified, 4 added (`src/credential-store.ts`, `src/session-manager.ts`, `src/portal-policy.ts`, `src/ipc-boundary.ts`) | **Constrained strictly to Phase 3 hardening** |
+| **Dependencies (`bun.lock`, `package.json`)** | Pinned | Pinned (identical) | Pinned (identical) | Pinned (identical) | **Byte-identical lockfile & package versions** |
+| **Lockfile SHA-256** | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | **Byte-identical (zero package mutations; 0 diff)** |
+| **Package Version** | `1.3.0` | `1.3.0` | `1.3.0` | `1.3.0` | **Byte-identical** |
+| **Child Boundary Runner (`security-boundary-characterization.ts`)** | 8 passed (RG 0.1) | 38 passed | 51 passed | **61 passed, 0 failed, 0 outbound violations, 0 skipped** | **+10 Phase 3 dynamic tests (Tests 52-61)** |
+| **Parent Characterization Suite (`security-characterization.test.ts`)** | 16 passed | 16 passed | 16 passed | **16 passed, 0 failed (108 expect calls)** | **Phase 3 SEC-03 verification passing** |
+| **Regression Gates (`test/security-regression-gates.test.ts`)** | 6 passed (Phase 1) | 6 passed | 8 passed | **10 passed, 0 failed, 4 skipped, 6 todo** | **Phase 3 persistence and epoch gates unskipped & passing** |
+| **Full Test Suite (`bun test`)** | 277 passed | 283 passed | 285 passed | **287 passed, 0 failed, 4 skipped, 6 todo across 34 files** | **All 34 test files pass cleanly (1,180 expect calls)** |
+| **Security Test Typecheck** | 0 errors | 0 errors | 0 errors | **0 errors (`tsconfig.security-test.json`)** | **0 errors** |
+| **Production Typecheck & Build** | Clean | Clean | Clean | **0 errors (`tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit` and `vite build`)** | **0 errors** |
+| **Electron Smoke & Adversarial Tests** | Passed | Passed | Passed | **Passed (unpacked dev/dist + packaged binary ASAR + adversarial assertions)** | **0 errors (no `--no-sandbox`)** |
+
+---
+
+### 2. Credential Contract & Main-Only Storage Architecture (SEC-03)
+
+1. **Schema Version 1 Credential Contract (`StoredCredentialRecord`):**
+   - Stored in main-only file `credentials.enc` located in Electron `userData` directory (completely isolated from `gameDir` and `config.json`).
+   - Schema defined in `src/credential-store.ts`:
+     - `version: 1` (integer schema version identifier)
+     - `portalUrl: string` (canonical issuing origin URL)
+     - `accountId: string` (canonical user / Minecraft UUID identifier)
+     - `accountUsername: string` (canonical username)
+     - `token: string` (Portal JWT bearer token)
+     - `refreshToken?: string` (Portal OAuth refresh token)
+     - `minecraftAccessToken?: string` (Minecraft game session token)
+     - `createdAt: number` (epoch timestamp)
+     - `updatedAt: number` (epoch timestamp)
+
+2. **Total Separation from `config.json`:**
+   - Non-secret configuration properties (`gameDir`, `allocatedRamGb`, `selectedChannel`, `noSync`, `customJavaPath`, etc.) remain serialized in `config.json`.
+   - `config.json` on disk is strictly **token-free**. `ConfigManager.persistAndEmit` deletes `token`, `refreshToken`, `minecraftAccessToken`, and `sessionPortalUrl` before atomic serialization to disk.
+   - `ConfigManager.get()` dynamically overlays in-memory credentials from `SessionManager.getCredentials()` so main-process consumers observe active authenticated state without disk persistence.
+   - Decoupled Observer pattern: `SessionManager` notifies registered listeners upon session changes, keeping `ConfigManager` in-memory cache synchronized without circular imports.
+
+3. **Origin Binding & Integrity Verification:**
+   - Stored records require explicit canonical origin matching (`stored.portalUrl === canonicalActivePortal`).
+   - If active portal URL changes or origin mismatches, stored credentials are treated as invalid and purged fail-closed on initialization.
+
+---
+
+### 3. Platform Storage Backends & Fallback Policy
+
+1. **Storage Backend Detection (`CredentialStore.detectStorageBackend`):**
+   - **Windows:** Uses `safeStorage.isEncryptionAvailable()` to confirm Windows DPAPI backing (`"windows_dpapi"`).
+   - **Linux:** Inspects `safeStorage.getSelectedStorageBackend()`. If backend is `"gnome_libsecret"`, `"kwallet5"`, or `"kwallet6"`, resolves to `"linux_keyring"`.
+   - **Session-Only Fallback:** If the detected backend is `"basic_text"`, `"unknown"`, or if `isEncryptionAvailable()` returns `false` (e.g. locked keyring, headless container, or unavailable DPAPI), storage mode resolves strictly to `"session_only"`. Plaintext credentials are **NEVER** silently written to disk.
+
+2. **Atomic Encrypted Writes & Permissions:**
+   - Encrypted files are written atomically via temporary sibling `credentials.enc.tmp` before renaming to `credentials.enc`.
+   - On POSIX platforms, file creation enforces owner-only permissions (`0o600`).
+
+3. **Safe Corruption & Provider-Lock Handling:**
+   - Decryption failures (corrupt ciphertext, key change, or provider lock) fail closed:
+     - Error is caught safely and logged as a warning; never throws to callers or crashes the application.
+     - Corrupt file is purged from disk immediately.
+     - Returns `null`, requiring clean reauthentication without corrupting state or resurrecting plaintext.
+
+---
+
+### 4. Migration State Machine
+
+A deterministic three-checkpoint state machine is implemented in `SessionManager.initialize()`:
+
+1. **Checkpoint 1 (OS-Encrypted Store Inspection):**
+   - Attempt to read and decrypt `credentials.enc`.
+   - If present, valid schema v1, and `stored.portalUrl === activePortalUrl`: restore session into memory.
+   - If present but origin does not match: purge stored credentials from disk and advance session epoch.
+
+2. **Checkpoint 2 (Legacy Plaintext Detection in `config.json`):**
+   - Check `config.json` for legacy unencrypted fields (`token`, `refreshToken`, `minecraftAccessToken`).
+   - If legacy credentials exist but have no `sessionPortalUrl` or mismatch `activePortalUrl`:
+     - Scrub plaintext fields from `config.json` immediately using atomic write.
+     - Leave session unauthenticated (fail closed; requires reauthentication).
+
+3. **Checkpoint 3 (Eligible Legacy Credential Migration):**
+   - If legacy credentials match the active portal origin:
+     - **In `session_only` mode:** Load credentials into memory for current session and scrub plaintext from `config.json` immediately.
+     - **In secure storage mode:** Encrypt and write to `CredentialStore`. Perform immediate verification read-back. Only after read-back succeeds, scrub plaintext from `config.json`. If encryption or read-back fails, scrub plaintext from `config.json` and require reauthentication.
+   - Old plaintext is **never** resurrected, and no unencrypted backup files are created.
+
+---
+
+### 5. Race-Safe Session Epochs & Authentication Lifecycle (SEC-08)
+
+1. **Session Epoch Authority (`SessionManager`):**
+   - Main-process session authority maintains atomic numeric `sessionEpoch`.
+   - Epoch advances monotonically upon:
+     - User logout (`LauncherAuth.logout()`)
+     - Portal origin change (`SessionManager.onPortalUrlChanged()`)
+     - Account identity change
+     - Superseding login initialization (`SessionManager.startLoginSession()`)
+
+2. **Asynchronous Invalidation Barriers:**
+   - Every asynchronous authentication continuation snapshots `sessionEpoch` and canonical `portalUrl` prior to network dispatch (`token exchange`, `profile verification`, `session refresh`).
+   - Upon completion of the asynchronous call, `SessionManager.getSessionEpoch() === snapshot` and `ConfigManager.get().portalUrl === portalUrl` are validated before updating in-memory or on-disk credentials.
+   - Any late arrival from a cancelled, superseded, or logged-out session is silently discarded with a warning log.
+
+3. **Single-Flight Refresh Coalescing:**
+   - Concurrent calls to `LauncherAuth.refreshSession()` coalesce onto the exact same in-flight `Promise` reference (`p1 === p2`).
+   - Eliminates parallel token refresh storms and prevents race conditions between overlapping refresh operations.
+   - Cleared cleanly in a `finally` block upon resolution or rejection.
+
+4. **Synchronous Logout Semantics:**
+   - `LauncherAuth.logout()` executes synchronously:
+     - Cancels active loopback OAuth server and pending login flow.
+     - Advances `sessionEpoch`, invalidating all pending asynchronous callbacks.
+     - Clears in-memory credentials and user profile.
+     - Unlinks `credentials.enc` from disk.
+   - **Honest Logout Scope:** Documentation and audit confirm that local launcher logout clears local launcher credentials, but does not terminate an already running external Minecraft child process or clear session cookies in the user's external system browser.
+
+---
+
+### 6. Hardened Loopback OAuth Listener (SEC-08)
+
+1. **Loopback-Bound Ephemeral Server:**
+   - Listens exclusively on `127.0.0.1` on an OS-assigned random port (`server.listen(0, "127.0.0.1")`).
+
+2. **Strict Request & Authority Validation:**
+   - **HTTP Method:** Rejects non-`GET` requests with HTTP 405 Method Not Allowed.
+   - **URI Length Bounding:** Rejects request URLs exceeding 2,048 characters with HTTP 414 URI Too Long.
+   - **Host Header Check:** Enforces that `Host` matches `127.0.0.1:${port}` or `localhost:${port}`, rejecting external or DNS-rebinding Host values with HTTP 400 Bad Request.
+
+3. **Noise Resilience & Replay Protection:**
+   - **Noise Tolerance:** Requests to non-`/callback` paths (such as `/favicon.ico` or browser preflights) return HTTP 404 text without closing the server or terminating the pending login flow.
+   - **Invalid Query Handling:** Requests missing `code` or with mismatched `state` return HTTP 400 text without terminating the valid pending flow.
+   - **Single-Use Replay Protection:** An atomic `exchanged` boolean flag guarantees the authorization code exchange is executed at most once. Concurrent or subsequent requests with the same state receive HTTP 409 Conflict.
+
+4. **Zero Information Disclosure & HTML Safety:**
+   - Browser completion HTML is served **only after** token exchange succeeds, Minecraft UUID is validated, and session is established.
+   - Browser HTML responses never reflect raw authorization codes, tokens, or backend error strings.
+   - All errors return generic, static user-friendly HTML text.
+
+5. **Deterministic Lifecycle Cleanup:**
+   - A single `cleanup()` handler removes all server listeners, closes the HTTP server, clears the 120-second timeout timer, and releases the login lock.
+   - Cleanup is invoked deterministically across all exit paths: success, exchange failure, network timeout, explicit user cancellation (`cancelLogin()`), superseding login, and application quit (`app.on("before-quit")`).
+
+---
+
+### 7. Verification Evidence (Categorized by Test Layer)
+
+#### A. Direct Component Checks (Isolated Unit & Functional Suites)
+Executed directly under the Bun test runner exercising isolated TypeScript modules:
+- **Parent Characterization Suite (`test/security-characterization.test.ts`):**
+  - Total: **16 passed, 0 failed, 108 expect() calls**.
+  - Includes Phase 3 SEC-03 test: `ConfigManager and SessionManager never persist authentication secrets in plaintext config.json`.
+- **Full Launcher Suite (`bun test`):**
+  - Total: **287 passed, 0 failed, 4 skipped (Phases 4/6), 6 todo (Phases 4-7) across 34 test files** (1,180 expect() calls).
+  - Verified across game runner, server status, sync logging, mod management, and file transfer modules.
+
+#### B. Registered-Handler & Isolated Boundary Tests (`test/security-boundary-characterization.ts`)
+Executed in an isolated child process with complete Electron mocks and outbound firewall enforcement:
+- Total Tests: **61 passed, 0 failed, 0 outbound policy violations, 0 skipped**
+- **Phase 3 Boundary Tests (Tests 52-61):**
+  - **Test 52 (Secure-Store Round Trip):** Verifies encryption, atomic write to `credentials.enc`, application restart simulation, and credential restoration.
+  - **Test 53 (Session-Only Fallback):** Verifies that unavailable encryption or insecure backends (`basic_text`, `unknown`) operate purely in-memory with zero disk persistence.
+  - **Test 54 (Corrupt Ciphertext & Locked Provider):** Verifies that corrupted encrypted files or decryption errors fail closed, return null, purge corrupt data, and avoid crashes.
+  - **Test 55 (Origin Mismatch Purge):** Verifies that stale credentials or origin mismatches are purged fail-closed on initialization.
+  - **Test 56 (Migration State Machine):** Verifies deterministic migration across each checkpoint (origin validation, read-back verification, and failure handling without resurrecting plaintext).
+  - **Test 57 (Logout Atomicity & Disk Rollback):** Verifies that logout during persistent credential write invalidates the session epoch and rolls back disk storage.
+  - **Test 58 (Invalidation Barriers):** Verifies that late responses from network continuations are discarded if session epoch advanced after logout or origin change.
+  - **Test 59 (Single-Flight Refresh):** Verifies that concurrent calls coalesce onto identical Promise references and superseding login invalidates in-flight refreshes.
+  - **Test 60 (Hardened Loopback OAuth Server):** Verifies `GET` enforcement, URI length bounds, Host header validation, noise resilience, concurrent single-use replay rejection (HTTP 409), and deterministic cleanup.
+  - **Test 61 (Absence of Synthetic Secrets):** Verifies complete absence of synthetic test credentials in `config.json`, IPC DTOs, and serialized metadata.
+- **Regression Gates Suite (`test/security-regression-gates.test.ts`):**
+  - Total Tests: **10 passed, 0 failed, 4 skipped, 6 todo** (97 expect() calls).
+  - **Phase 3 Gate 1 (Persistence):** `config.json` on disk contains no plaintext tokens or credentials. Attempting to set credentials via generic `ConfigManager.set` is stripped from disk.
+  - **Phase 3 Gate 2 (Operation-level):** Authentication lifecycle uses session epochs, advances epoch on logout, wipes memory and disk store, and ignores late arrivals after logout.
+
+#### C. Real Electron & Platform Evidence (Actual Sandboxed Runtime & Packaged ASAR Execution)
+Executed using real operating-system processes (`electron.exe` and packaged `Lampas Launcher.exe`) under real Chromium sandbox constraints (strictly **without** `--no-sandbox`):
+- **Strict Smoke Test Suite (`bun test/smoke/electron-smoke.ts --strict`):**
+  - **Unpacked dev/dist execution:** Exit code 0, init: true, handlers: true, roundTrip: true, adversarial: true. Real Electron Chromium sandbox and Node integration verified.
+  - **Packaged distribution execution:** Real Windows executable (`release\win-unpacked\Lampas Launcher.exe`) and packaged ASAR archive (`resources\app.asar`, 3.32 MB). Exit code 0, init: true, handlers: true, roundTrip: true, adversarial: true.
+  - **Security Fuses & Sandboxing:** Real Electron process executed with sandbox active; zero sandbox-bypass flags.
+  - **Publishing safety:** `publish: never` enforced; CI linux artifacts guaranteed.
+
+#### D. Dependency & Lockfile Integrity
+- `git diff bun.lock`: **0 changes (byte-for-byte identical to baseline)**.
+- Package versions and dependency tree completely unchanged.
+
+#### E. Packaged Artifact Hashes (SHA-256)
+- `release\win-unpacked\resources\app.asar`: `B82E066C89D95703881F4B7BA2FE534F8A2384C85D83A8D1F74FAB19F58E495A`
+- `release\win-unpacked\Lampas Launcher.exe`: `A5A2A14D038E3091344C2848345461E91C103D1E67B4A0622427313092975D23`
+
+---
+
+### 8. Finding Status & Remaining Scope (SEC-01 to SEC-12)
+
+| Finding ID | Priority | Phase | Status at Review Gate 3 | Remediation & Remaining Scope |
+|---|---|---|---|---|
+| **SEC-01** | P0 / High | Phase 1 | **Remediated & Verified** | Complete Phase 1 remediation preserved intact: canonical origin policy, session origin binding, race safety, manual redirect rejection, disk scrubbing. |
+| **SEC-02** | P0 / High | Phase 1 / Phase 2 | **Remediated & Verified** | All 38 inbound IPC channels registered through unified security boundary; sender frame & attachment validation; strict allowlist schema; launch target override prohibition; native approval lifecycle; dual permission lockdown; strict CSP. |
+| **SEC-03** | P1 / High | Phase 3 | **Remediated & Verified** | Plaintext credential separation complete. Main-only `CredentialStore` using OS-encrypted DPAPI (`credentials.enc`), `session_only` fallback for insecure backends (`basic_text`), atomic writes with `0o600` permissions, safe corruption recovery, deterministic 3-checkpoint migration, and token-free `config.json` on disk. |
+| **SEC-04** | P0 / High | Phase 4 | Pending | Path containment & ownership inconsistencies (`isPathProtected`). Deferred to Phase 4. |
+| **SEC-05** | P1 / Med-High | Phase 4 | Pending | Move recovery recursive deletion of unvalidated staging path. Deferred to Phase 4. |
+| **SEC-06** | P1 / High-Cond | Phase 5 | Pending | Executable verification fails open (missing hash fallback). Deferred to Phase 5. |
+| **SEC-07** | P1 / High-Cond | Phase 5 | Pending | Inappropriate fallback on HTTP 410 REVOKED releases. Deferred to Phase 5. |
+| **SEC-08** | P1 / Medium | Phase 3 | **Remediated & Verified** | Loopback OAuth listener hardened. Bounded method (`GET`), URL (<= 2048), and `Host` validation. Noise-tolerant routing (404 without flow abort). Single-use exchange with replay rejection (HTTP 409). Session epoch coordination discarding late responses. Single-flight refresh coalescing. Information-disclosure-free completion HTML. Unified deterministic cleanup. |
+| **SEC-09** | P1 / Medium | Phase 6 | Pending | Logging redaction gaps (`refresh_token`, URL query codes, CLI args). Deferred to Phase 6. |
+| **SEC-10** | P2 / Med-Priv | Phase 6 | Pending | Third-party information disclosure (`mc-heads.net`, unvalidated image URLs). Deferred to Phase 6. |
+| **SEC-11** | P2 / Medium | Phase 5 | Pending | Unbounded decompression ingestion budgets in `ensureNatives`. Deferred to Phase 5. |
+| **SEC-12** | P2 / Medium | Phase 7 | Pending | Release pipeline permissions and mutable action pins. Deferred to Phase 7. |
+
+---
+
+### 9. Review Gate 3 Acceptance & Pause Declaration
+
+- **Phase 3 Scope Fully Implemented & Verified:**
+  - `src/credential-store.ts` and `src/session-manager.ts` implemented and integrated.
+  - Credential record contract schema v1 enforced with origin binding.
+  - Storage backends (`windows_dpapi`, `linux_keyring`, `session_only` fallback) verified.
+  - Deterministic migration state machine and crash-consistency boundary verified.
+  - Monotonic `sessionEpoch` coordination and continuation invalidation barriers verified.
+  - Loopback OAuth listener hardened (method/URL/Host validation, noise resilience, single-use replay defense, HTML sanitization, and deterministic cleanup).
+  - Single-flight refresh coalescing verified.
+  - Synchronous logout semantics verified.
+  - Token-free settings persistence verified (`config.json` contains zero secrets).
+  - Zero synthetic secrets leaked in IPC, logs, or disk files.
+- **Pre-Existing Invariants:**
+  - All baseline, Phase 1, and Phase 2 protections preserved intact.
+  - Full suite: 287 passed, 0 failed across all 34 test files.
+- **Dependencies & Lockfile:**
+  - `bun.lock` is byte-for-byte identical with baseline (zero package mutations).
+- **Typecheck & Packaging:**
+  - Production typecheck, security test typecheck, production Vite build, and Electron smoke tests (`--strict`, without `--no-sandbox`) pass cleanly with 0 errors.
+
+**STOPPING AT REVIEW GATE 3.** Phase 4 (Unify metadata, path ownership and safe recovery) has not been started and remains paused. Acceptance does not authorize merging, tagging, or publication. Ready for human review.
