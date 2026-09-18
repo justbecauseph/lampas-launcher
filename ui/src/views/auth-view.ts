@@ -103,17 +103,14 @@ export function initAuthView(options: AuthViewOptions): {
   if (btnLogout) {
     btnLogout.onclick = async () => {
       try {
-        await window.lampas.auth.logout();
+        const logoutResult = await window.lampas.auth.logout();
         updateUserUI(null);
-        try {
-          const storageStatus = await window.lampas.auth.getStorageStatus();
-          if (storageStatus.lastCleanupError) {
-            showToast(`Logout warning: Persistent cleanup incomplete (${storageStatus.lastCleanupError})`, "error");
-          } else {
-            showToast("Logged out successfully.", "info");
-          }
-        } catch {
+        if (logoutResult && !logoutResult.success) {
+          showToast(`Logout warning: Persistent cleanup incomplete (${logoutResult.error || "cleanup error"})`, "error");
+        } else if (logoutResult && logoutResult.success) {
           showToast("Logged out successfully.", "info");
+        } else {
+          showToast("Logged out (session cleared). Persistent cleanup unverified.", "error");
         }
       } catch (err: any) {
         showToast(`Could not log out: ${formatFriendlyError(err)}`, "error");

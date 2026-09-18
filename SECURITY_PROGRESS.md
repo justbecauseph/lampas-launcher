@@ -636,24 +636,159 @@ Following the Review Gate 3 evaluation of checkpoint `589edc703580fab16c5cc20cbd
 
 ---
 
+## Review Gate 3 Second Amendment — Checkpoint 609623feb5a00b826f5e91069a2284bfd76a59a8
+
+- **Execution Date:** 19 September 2026
+- **Status:** Ready for Review (Gate 3 Second Amendment Complete)
+- **Accepted Review Gate 2 Checkpoint:** `16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`
+- **Reviewed Checkpoint:** `609623feb5a00b826f5e91069a2284bfd76a59a8`
+- **Current Working Branch:** `feat/security`
+- **Scope Restriction:** Strictly restricted to Phase 3 amendment ("Separate secrets and make authentication race-safe"). Phase 4 (Path containment), Phase 5 (Integrity checks fail-closed), and subsequent phases remain paused. Acceptance does not authorize merging, tagging, or publication.
+
+---
+
+### 1. Review Gate 3 Amendment Details (Seven Targeted Requirements)
+
+Following review of checkpoint `609623feb5a00b826f5e91069a2284bfd76a59a8` and `LAMPAS_RG3_609623_AMENDMENT_PLAN.md`, all seven targeted amendment requirements have been fully addressed, verified with failing-before vs passing-after evidence, and integrated:
+
+#### Requirement 1: Invalidate Persisted Eligibility Independently of currentRecord
+- **Defects Remediated:**
+  - Persisting account A, restarting with provider unavailable, establishing account B in session-only mode, then restoring provider and restarting previously allowed account A to silently resurrect from encrypted disk storage because `establishNewSession` only cleared disk if `currentRecord` was already loaded in memory.
+  - Undefined authority of retained encrypted records after account replacement, logout, and token rotation.
+- **Implementation:**
+  - `SessionManager.establishNewSession`: Whenever persistence fails or runs in session-only mode (`saveResult.sessionOnly || !saveResult.success`), the on-disk credential store is unlinked unconditionally via `CredentialStore.clearCredentials()`, independently of whether `currentRecord` was loaded.
+  - Defined explicit authority of retained encrypted records: retained encrypted files on disk are invalid and purged unless they match the active verified session and active portal origin. If durable cleanup cannot succeed, a durable invalidation marker (`credentials.invalidated`) is written to disk and `ClearCredentialsResult` reports `{ success: false, error: ... }`.
+  - Added reproduction test in `test/security-failure-reproductions.test.ts` (Defect 1): verifies Persist A -> restart unavailable -> establish B session-only -> restore provider and restart -> A does not silently return.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 1: Persist A, restart with provider unavailable, establish B in session-only mode, restore provider and restart — A must not resurrect` (passed, 5.40ms).
+
+#### Requirement 2: Reject Invalid Authentication Data Before Publication
+- **Defects Remediated:**
+  - Schema/identity failures previously fell back to session-only storage downgrade instead of aborting.
+  - Fallback expressions invented `"account"`, `"player"`, or `"unverified-migration"` identities.
+  - Restoring credentials without `minecraftUuid` fell back to `stored.accountId` (Portal-ID-as-Minecraft-UUID restoration).
+- **Implementation:**
+  - `SessionManager.establishNewSession`: Validates that `token`, `portalAccountId`, and `portalUsername` are non-empty strings and not placeholder identities (`"account"`, `"unverified-migration"`). Throws an exception and aborts publication immediately if invalid.
+  - `LauncherAuth.loginWithPortal`: Validates exchange response `token` and `user` (id and name) before committing; rejects missing, empty, or placeholder identities without publishing or downgrading.
+  - `SessionManager.initialize`: When restoring protected records, `currentUser.minecraftUuid` is strictly populated from `stored.minecraftUuid` (zero fallback to `stored.accountId`).
+  - Added reproduction test in `test/security-failure-reproductions.test.ts` (Defect 2): verifies empty tokens and missing identities throw and do not publish; verifies no Portal-ID-as-Minecraft-UUID fallback.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 2: Reject invalid authentication data before publication (no session-only downgrade, no placeholders, no Portal-ID-as-Minecraft-UUID)` (passed, 4.09ms).
+
+#### Requirement 3: Make Malformed Legacy Data Ineligible Without Bypassing Cleanup
+- **Defects Remediated:**
+  - Malformed legacy data (e.g. invalid portal URLs or non-string tokens) could throw during normalization or parsing, aborting initialization before legacy plaintext cleanup occurred.
+  - Legacy cleanup previously risked wiping non-secret settings.
+- **Implementation:**
+  - `SessionManager.initialize`: Wrapped `normalizePortalUrl(parsed.sessionPortalUrl)` in safe try-catch; if normalization fails, marks legacy credentials as ineligible and proceeds directly to scrub.
+  - `SessionManager.scrubPlaintextFromConfig`: Safely removes sensitive fields (`token`, `refreshToken`, `minecraftAccessToken`, `sessionPortalUrl`) while preserving all non-secret settings (`ram`, `gameDir`, `javaPath`, `javaArgs`, `portalUrl`).
+  - Coexistence precedence: If protected record exists and legacy config has malformed data, cleanup still runs and strips the plaintext keys.
+  - Added reproduction test in `test/security-failure-reproductions.test.ts` (Defect 3): verifies malformed legacy URL `:::not-a-valid-url:::` does not abort cleanup; plaintext is scrubbed while `ram` and `gameDir` are preserved.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 3: Malformed legacy data is ineligible without bypassing cleanup; preserves settings` (passed, 2.90ms).
+
+#### Requirement 4: Complete Credential Commit Contract
+- **Defects Remediated:**
+  - Short/zero-progress writes were not explicitly detected during temporary file writes.
+  - `saveCredentials` could report success even if the `credentials.invalidated` marker could not be deleted prior to commit (which would cause the new record to be rejected on reload).
+  - Write, flush, rename, marker, and cleanup failure paths were not tested independently.
+- **Implementation:**
+  - `CredentialStore.saveCredentials`: Implemented chunked write loop verifying `written <= 0` and throwing `"Zero-progress write encountered"`.
+  - Explicit flush: Calls `fs.fsyncSync(fd)` before closing temporary file descriptor.
+  - Pre-commit marker check: If `credentials.invalidated` exists, attempts to unlink it before rename. If marker unlinking fails, aborts commit, unlinks temporary file, and returns `{ success: false, error: "Failed to clear invalidation marker..." }`.
+  - Post-commit double-check: Verifies marker is not recreated during rename.
+  - Replacement ordering strictly preserved: write exclusive temp -> fsync -> validate stats (`stats.nlink === 1`) -> clear invalidation marker -> atomic rename -> verify marker clean -> scrub fallback/plaintext.
+  - Added independent reproduction tests in `test/security-failure-reproductions.test.ts`:
+    - Defect 4: Short write and invalidation marker persistence contract.
+    - Defect 4b: Independent write failure path (`EIO` in `fs.writeSync`) unlinks temp and fails cleanly.
+    - Defect 4c: Independent flush failure path (`EIO` in `fs.fsyncSync`) unlinks temp and fails cleanly.
+    - Defect 4d: Independent rename failure path (`EBUSY` in `fs.renameSync`) unlinks temp and fails cleanly.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 4: Short write and invalidation marker persistence contract` (passed, 5.10ms).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 4b: Independent write failure path unlinks temp and fails cleanly` (passed, 1.50ms).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 4c: Independent flush failure path unlinks temp and fails cleanly` (passed, 0.81ms).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 4d: Independent rename failure path unlinks temp and fails cleanly` (passed, 3.71ms).
+
+#### Requirement 5: Make Storage Status Truthful and Safe
+- **Defects Remediated:**
+  - Storage status reported `sessionOnly: false` whenever provider was available, even if the active session was held in memory due to persistence failure.
+  - Error messages could expose internal filesystem paths or low-level provider exceptions.
+  - UI adapters did not consume the single `ClearCredentialsResult` from logout.
+- **Implementation:**
+  - Added `SessionManager.isCurrentSessionPersisted: boolean` to track whether the active session was actually committed to encrypted storage.
+  - `SessionManager.getStorageStatus()`: Computes `sessionOnly = !persistenceAvailable || (hasActiveSession && !this.isCurrentSessionPersisted)` and returns `sessionPersisted: this.isCurrentSessionPersisted`.
+  - Added `sanitizeCleanupError(err)` in `src/credential-store.ts` mapping error codes to bounded main-chosen strings (<= 120 chars) without raw paths:
+    - `"Failed to delete stored credentials file: resource busy or locked"`
+    - `"Failed to delete stored credentials file: permission denied"`
+    - `"Failed to delete stored credentials file: disk error"`
+  - Updated preload and UI (`ui/src/views/auth-view.ts` and `ui/renderer.js`): `window.lampas.auth.logout()` returns `Promise<ClearCredentialsResult>` directly; UI reports toast notification reflecting actual cleanup outcome without claiming success if unverified.
+  - Added reproduction test in `test/security-failure-reproductions.test.ts` (Defect 5): verifies `sessionPersisted: false` and `sessionOnly: true` when encryption fails, and verifies error message length <= 120 chars without path leakage.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 5: Storage status tracks session persistence separately from provider and returns bounded safe error` (passed, 0.49ms).
+
+#### Requirement 6: Strengthen Tests and Native Evidence
+- **Defects Remediated:**
+  - Need for held-exchange timeout, cancellation, and supersession tests with deterministic request barriers and explicit nonpublication assertions.
+  - Native Electron restart test ran raw `safeStorage` scripts instead of requiring and exercising the built launcher store and session modules across processes.
+  - Need to assert Electron runtime version (`44.0.0`).
+  - Windows ACL verification used fragile substring checks (`everyone`, `users:(i)(f)`) instead of parsing principals and rights.
+  - Unavailable native platforms were silently skipped rather than marked skipped/unverified.
+- **Implementation:**
+  - Added held-exchange deterministic barrier tests in `test/security-failure-reproductions.test.ts`:
+    - **Defect 6 (Cancellation):** Exchange is held at barrier; user cancels login; barrier released; late token response arrives and is discarded; nonpublication verified (0 token in memory, 0 in config).
+    - **Defect 6b (Timeout):** Exchange is held at barrier; 120s timeout terminates context; barrier released; late response discarded; nonpublication verified.
+    - **Defect 6c (Supersession):** Attempt A enters exchange and is held at barrier; Attempt B starts, supersedes A, and completes with Token B; barrier for A is released; Attempt A's response is discarded; Token B remains active.
+  - Hardened `test/electron-dpapi-restart.test.ts`:
+    - **Electron Version Assertion:** Child processes assert `process.versions.electron === "44.0.0"`.
+    - **Built Module Execution:** Spawns distinct Electron 44.0.0 processes requiring `dist/credential-store.js` and `dist/session-manager.js`:
+      - Process 1: `SessionManager.establishNewSession(...)` persists credentials via DPAPI.
+      - Process 2: Completely separate Electron process calls `CredentialStore.loadCredentials()` and `SessionManager.initialize()`, verifying exact payload restoration.
+      - Process 3: Completely separate Electron process calls `SessionManager.clearSession()`, verifying clean deletion and null reload.
+    - **Parsed `icacls` ACL Verification:** Implemented `parseIcacls(output)` and `verifyAclSecurity(targetPath)`. Verifies that for both `userDataDir` and `credentials.enc`:
+      - No dangerous/world principals (`Everyone`, `Users`, `Guests`, `Anonymous`, `World`) have write, modify, or full control permissions (`(F)`, `(M)`, `(W)`, `(WD)`, `(AD)`).
+      - Privileged/owner principals (`SYSTEM`, `Administrators`, active user) exist and have access.
+    - **Platform Skip Handling:** Uses `test.skipIf(!isWindows)` and registers `test.skip("Windows DPAPI credential store native verification (unverified on non-Windows platform)")` so unavailable platforms are explicitly marked skipped.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 6: Held-exchange cancellation and supersession with deterministic barriers and nonpublication` (passed, 78.92ms).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 6b: Held-exchange timeout with deterministic barrier and nonpublication` (passed, 74.98ms).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 6c: Held-exchange supersession with deterministic barrier and nonpublication` (passed, 114.41ms).
+  - `test/electron-dpapi-restart.test.ts`: **1 passed, 0 failed** (29 expect calls, 412.61ms).
+
+#### Requirement 7: Comprehensive Validation & Verification
+- **Test Suite Results:**
+  - Full suite (`bun test`): **313 passed, 0 failed, 4 skipped, 6 todo across 36 files** (1347 expect calls).
+  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **18 passed, 0 failed** (94 expect calls).
+  - Security regression gates (`test/security-regression-gates.test.ts`): **17 passed, 0 failed, 4 skipped, 6 todo** (141 expect calls).
+  - Boundary characterization (`test/security-boundary-characterization.ts`): **61 passed, 0 failed, 0 skipped, 0 outbound violations** in isolated child process.
+  - Real Electron DPAPI restart test (`test/electron-dpapi-restart.test.ts`): **1 passed, 0 failed** (29 expect calls).
+  - Production & test typechecks: 0 errors across `tsconfig.json`, `tsconfig.renderer.json`, and `tsconfig.security-test.json`.
+  - Production build: `bun run build` and `bun run package:dir` bundle and package with zero errors.
+  - Strict smoke test: `bun test/smoke/electron-smoke.ts --strict` exits with code 0 (all 7 checks passed, real Electron sandbox active, zero `--no-sandbox`).
+- **Dependency & Lockfile Verification:**
+  - `git diff bun.lock`: **0 changes (byte-for-byte identical to baseline)**.
+  - `bun.lock` SHA-256: `51834981eaa1925b2234e14295e5b733bdebc72697e575efb2046479821e4b3a`.
+
+---
+
 ### 2. Review Gate 3 Acceptance & Pause Declaration
 
 - **Phase 3 Hardening Fully Implemented, Amended & Verified:**
-  - Dedicated pre-change failure path reproductions pass unconditionally across all 7 target scenarios.
-  - Restart-safe, failure-aware migration state machine with coexistence precedence and fail-closed corrupt record purge.
+  - Dedicated pre-change failure path reproductions pass unconditionally across all 18 target scenarios.
+  - Restart-safe, failure-aware migration state machine with coexistence precedence, malformed data handling, and fail-closed corrupt record purge.
   - Ineligible legacy records require trusted identity; unverified claims fail closed and trigger clean re-auth without synthetic placeholder accounts.
-  - Explicit `SaveCredentialsResult` and `ClearCredentialsResult` contracts with error reporting, zero-byte overwrite, and durable invalidation markers.
+  - Explicit `SaveCredentialsResult` and `ClearCredentialsResult` contracts with bounded error reporting, zero-byte overwrite, and durable invalidation markers.
   - Account-specific session replacement with zero cross-account token inheritance.
   - Terminal 120s login lifecycle with socket destruction and `AbortController`.
   - Scoped refresh coalescing keyed by `(portalUrl, accountId, sessionEpoch)`.
-  - Hardened exclusive temporary file writer (`O_CREAT | O_EXCL`) with link validation (`stats.nlink === 1`).
+  - Hardened exclusive temporary file writer (`O_CREAT | O_EXCL`) with link validation (`stats.nlink === 1`) and short-write detection.
   - Generic `ConfigManager.set` stripped of secret mutations; `config.json` on disk is 100% token-free.
-  - `auth:getStorageStatus` IPC channel and UI session-only mode toasts.
-  - Exact-version Electron 44.0.0 Windows DPAPI separate-process restart and Windows ACL (`icacls`) verification.
+  - `auth:getStorageStatus` IPC channel, `sessionPersisted` tracking, and UI session-only mode toasts.
+  - Exact-version Electron 44.0.0 Windows DPAPI separate-process restart exercising built launcher store/session modules, with parsed `icacls` Windows ACL verification.
   - Real Electron smoke tests passed in strict mode without `--no-sandbox`.
 - **Pre-Existing Invariants Intact:**
   - Phase 1 (SEC-01) and Phase 2 (SEC-02) protections preserved.
   - Dependencies, pinned versions, and lockfile preserved with zero drift.
 
 **STOPPING AT REVIEW GATE 3.** Phase 4 (Unify metadata, path ownership and safe recovery) has not been started and remains paused. Acceptance does not authorize merging, tagging, or publication. Ready for user review.
+
 

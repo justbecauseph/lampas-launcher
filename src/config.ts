@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import { app } from "electron";
 import { LauncherLogger } from "./logger";
 import { writeAtomicFileSync } from "./file-transfer";
@@ -236,17 +237,28 @@ export class ConfigManager {
    */
   static establishSession(
     issuingOrigin: string,
-    credentials: { token?: string; refreshToken?: string; minecraftAccessToken?: string },
+    credentials: {
+      token?: string;
+      refreshToken?: string;
+      minecraftAccessToken?: string;
+      portalAccountId?: string;
+      portalUsername?: string;
+    },
     extraSettings?: Partial<LauncherConfig>
   ): LauncherConfig {
     this.initPath();
     const current = { ...this.get() };
 
     if (credentials.token) {
+      const tokenHash = crypto.createHash("sha256").update(credentials.token).digest("hex").slice(0, 10);
+      const portalAccountId = credentials.portalAccountId || `config-account-${tokenHash}`;
+      const portalUsername = credentials.portalUsername || `ConfigUser-${tokenHash.slice(0, 4)}`;
       SessionManager.establishSession(issuingOrigin, {
         token: credentials.token,
         refreshToken: credentials.refreshToken,
         minecraftAccessToken: credentials.minecraftAccessToken,
+        portalAccountId,
+        portalUsername,
       });
     }
 

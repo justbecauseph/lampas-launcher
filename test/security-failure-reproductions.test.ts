@@ -149,7 +149,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
       // Clear must report failure (not falsely claim success!)
       expect(clearResult.success).toBe(false);
-      expect(clearResult.error).toContain("EBUSY");
+      expect(clearResult.error).toContain("busy or locked");
       expect(CredentialStore.getLastCleanupError()).toBeDefined();
 
       // On restart / loadCredentials: if file could not be deleted,
@@ -323,4 +323,575 @@ describe("Phase 3 Failure Path Reproductions", () => {
     // Clean up
     fs.unlinkSync(fixedTemp);
   });
+
+  test("Reproduce Defect 1: Persist A, restart with provider unavailable, establish B in session-only mode, restore provider and restart — A must not resurrect", () => {
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ portalUrl: "https://dev.lampas.town" }));
+
+    // Step 1: Persist A
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-acc-a",
+      refreshToken: "refresh-acc-a",
+      portalAccountId: "acc-a",
+      portalUsername: "Alice",
+    });
+    expect(SessionManager.getCredentials()?.token).toBe("token-acc-a");
+    expect(CredentialStore.hasStoredCredentialsFile()).toBe(true);
+
+    // Step 2: Restart with provider unavailable
+    mockStorage.available = false;
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    SessionManager.initialize(configPath, "https://dev.lampas.town");
+    expect(SessionManager.getCredentials()).toBeNull();
+    expect(SessionManager.getCurrentRecord()).toBeNull();
+
+    // Step 3: Establish B in session-only mode
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-acc-b",
+      refreshToken: "refresh-acc-b",
+      portalAccountId: "acc-b",
+      portalUsername: "Bob",
+    });
+    expect(SessionManager.getCredentials()?.token).toBe("token-acc-b");
+
+    // Step 4: Restore provider and restart
+    mockStorage.available = true;
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    SessionManager.initialize(configPath, "https://dev.lampas.town");
+
+    // Account A MUST NOT SILENTLY RESURRECT!
+    expect(SessionManager.getCredentials()?.token).not.toBe("token-acc-a");
+    expect(CredentialStore.loadCredentials()).toBeNull();
+  });
+
+  test("Reproduce Defect 2: Reject invalid authentication data before publication (no session-only downgrade, no placeholders, no Portal-ID-as-Minecraft-UUID)", () => {
+    // 1. Missing or empty token must throw, not downgrade to session-only and publish
+    expect(() => {
+      SessionManager.establishNewSession("https://dev.lampas.town", {
+        token: "",
+        portalAccountId: "acc-1",
+        portalUsername: "User1",
+      });
+    }).toThrow();
+    expect(SessionManager.getCredentials()).toBeNull();
+
+    // 2. Missing account ID or username must throw, not downgrade or use 'account'/'player' placeholder
+    expect(() => {
+      SessionManager.establishNewSession("https://dev.lampas.town", {
+        token: "valid-token",
+        portalAccountId: "",
+        portalUsername: "",
+      });
+    }).toThrow();
+    expect(SessionManager.getCredentials()).toBeNull();
+
+    // 3. Restoring credentials without minecraftUuid must NOT set minecraftUuid to accountId
+    const testRecord: any = {
+      version: 1,
+      schemaVersion: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "token-valid",
+      portalAccountId: "portal-id-789",
+      portalUsername: "TestUser",
+    };
+    CredentialStore.saveCredentials(testRecord);
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ portalUrl: "https://dev.lampas.town" }));
+    SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const restoredUser = SessionManager.getCurrentUser();
+    expect(restoredUser?.id).toBe("portal-id-789");
+    expect(restoredUser?.minecraftUuid).not.toBe("portal-id-789");
+    expect(restoredUser?.minecraftUuid).toBeUndefined();
+  });
+
+  test("Reproduce Defect 3: Malformed legacy data is ineligible without bypassing cleanup; preserves settings", () => {
+    CredentialStore.clearCredentials();
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      portalUrl: "https://dev.lampas.town",
+      sessionPortalUrl: ":::not-a-valid-url:::", // Malformed URL throws in normalizePortalUrl
+      token: 12345, // Malformed non-string token
+      refreshToken: true,
+      ram: 6,
+      gameDir: "C:\\CustomGames",
+    }, null, 2));
+
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+
+    // Legacy data is ineligible
+    expect(outcome.migrated).toBe(false);
+    expect(SessionManager.getCredentials()).toBeNull();
+
+    // But cleanup MUST still run and succeed!
+    expect(outcome.legacyScrubbed).toBe(true);
+    const scrubbed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(scrubbed.token).toBeUndefined();
+    expect(scrubbed.sessionPortalUrl).toBeUndefined();
+    // Non-secret settings must be preserved
+    expect(scrubbed.ram).toBe(6);
+    expect(scrubbed.gameDir).toBe("C:\\CustomGames");
+  });
+
+  test("Reproduce Defect 4: Short write and invalidation marker persistence contract", () => {
+    // 1. Invalidation marker exists and cannot be unlinked -> saveCredentials must NOT report success!
+    const markerPath = CredentialStore.getInvalidationMarkerPath();
+    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now() }), "utf-8");
+
+    const origUnlink = fs.unlinkSync.bind(fs);
+    const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((p: any) => {
+      if (p.toString().includes("credentials.invalidated")) {
+        const err: any = new Error("EPERM: cannot delete invalidation marker");
+        err.code = "EPERM";
+        throw err;
+      }
+      return origUnlink(p);
+    });
+
+    try {
+      const result = CredentialStore.saveCredentials({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "token-cannot-commit",
+        portalAccountId: "acc-fail",
+        portalUsername: "UserFail",
+      });
+
+      // MUST NOT report success when invalidation marker will reject the record on reload!
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+    } finally {
+      unlinkSpy.mockRestore();
+      try { fs.unlinkSync(markerPath); } catch {}
+    }
+  });
+
+  test("Reproduce Defect 4b: Independent write failure path unlinks temp and fails cleanly", () => {
+    const origWrite = fs.writeSync.bind(fs);
+    const writeSpy = spyOn(fs, "writeSync").mockImplementation((...args: any[]) => {
+      const err: any = new Error("EIO: I/O error during write");
+      err.code = "EIO";
+      throw err;
+    });
+
+    try {
+      const result = CredentialStore.saveCredentials({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "token-write-fail",
+        portalAccountId: "acc-write-fail",
+        portalUsername: "WriteFailUser",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+
+      const dir = path.dirname(CredentialStore.getCredentialsFilePath());
+      const tempFiles = fs.readdirSync(dir).filter((f) => f.includes(".tmp"));
+      expect(tempFiles.length).toBe(0);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  test("Reproduce Defect 4c: Independent flush failure path unlinks temp and fails cleanly", () => {
+    const origFsync = fs.fsyncSync.bind(fs);
+    const fsyncSpy = spyOn(fs, "fsyncSync").mockImplementation((...args: any[]) => {
+      const err: any = new Error("EIO: I/O error during fsync");
+      err.code = "EIO";
+      throw err;
+    });
+
+    try {
+      const result = CredentialStore.saveCredentials({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "token-fsync-fail",
+        portalAccountId: "acc-fsync-fail",
+        portalUsername: "FsyncFailUser",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+
+      const dir = path.dirname(CredentialStore.getCredentialsFilePath());
+      const tempFiles = fs.readdirSync(dir).filter((f) => f.includes(".tmp"));
+      expect(tempFiles.length).toBe(0);
+    } finally {
+      fsyncSpy.mockRestore();
+    }
+  });
+
+  test("Reproduce Defect 4d: Independent rename failure path unlinks temp and fails cleanly", () => {
+    const origRename = fs.renameSync.bind(fs);
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation((oldP: any, newP: any) => {
+      if (oldP.toString().includes("credentials.enc.tmp")) {
+        const err: any = new Error("EBUSY: resource busy or locked");
+        err.code = "EBUSY";
+        throw err;
+      }
+      return origRename(oldP, newP);
+    });
+
+    try {
+      const result = CredentialStore.saveCredentials({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "token-rename-fail",
+        portalAccountId: "acc-rename-fail",
+        portalUsername: "RenameFailUser",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+
+      const dir = path.dirname(CredentialStore.getCredentialsFilePath());
+      const tempFiles = fs.readdirSync(dir).filter((f) => f.includes(".tmp"));
+      expect(tempFiles.length).toBe(0);
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
+
+  test("Reproduce Defect 5: Storage status tracks session persistence separately from provider and returns bounded safe error", () => {
+    const mockStorage = new MockSafeStorage();
+    mockStorage.failEncrypt = true;
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-session-mem",
+      portalAccountId: "acc-mem",
+      portalUsername: "MemUser",
+    });
+
+    const status = SessionManager.getStorageStatus();
+    expect(status.persistenceAvailable).toBe(true);
+    expect(status.sessionOnly).toBe(true);
+    expect(status.sessionPersisted).toBe(false);
+
+    if (status.lastPersistenceError) {
+      expect(status.lastPersistenceError.includes("C:\\")).toBe(false);
+      expect(status.lastPersistenceError.length).toBeLessThanOrEqual(120);
+    }
+  });
+
+  test("Reproduce Defect 6: Held-exchange cancellation and supersession with deterministic barriers and nonpublication", async () => {
+    let barrierResolve: (value: any) => void;
+    const barrierPromise = new Promise((resolve) => {
+      barrierResolve = resolve;
+    });
+
+    // Mock fetch for token exchange to hold at barrier
+    const origFetch = globalThis.fetch;
+    let exchangeStarted = false;
+    let exchangeDone = false;
+
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
+      if (url.toString().includes("/api/v1/auth/exchange")) {
+        exchangeStarted = true;
+        await barrierPromise;
+        exchangeDone = true;
+        return new Response(
+          JSON.stringify({
+            token: "late-token-should-not-publish",
+            user: {
+              id: "late-user-id",
+              name: "LateUser",
+              minecraftUuid: "11111111-1111-1111-1111-111111111111",
+              minecraftUsername: "LateUserMC",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return origFetch(url, init);
+    });
+
+    try {
+      // Start login flow with error capture
+      let loginErr: any = null;
+      const loginPromise = LauncherAuth.loginWithPortal();
+      loginPromise.catch((err: any) => {
+        loginErr = err;
+      });
+
+      const context = LauncherAuth.activeLoginContext;
+      expect(context).not.toBeNull();
+
+      // Wait until loopback listener is ready and context.authUrl is populated
+      while (!context.authUrl) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Send callback request to trigger exchange
+      const authUrl = context.authUrl || "";
+      const portMatch = authUrl.match(/port=(\d+)/);
+      const stateMatch = authUrl.match(/state=([^&]+)/);
+      const port = parseInt(portMatch![1], 10);
+      const state = decodeURIComponent(stateMatch![1]);
+
+      const clientReq = http.request({
+        hostname: "127.0.0.1",
+        port,
+        path: `/callback?code=test-auth-code&state=${encodeURIComponent(state)}`,
+        method: "GET",
+      });
+      clientReq.on("error", () => {});
+      clientReq.on("response", (res) => {
+        res.resume();
+      });
+      clientReq.end();
+
+      // Wait until exchange is held at barrier
+      while (!exchangeStarted) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Now cancel login WHILE exchange is held
+      LauncherAuth.cancelLogin();
+
+      // Release barrier so held exchange completes or aborts
+      barrierResolve!(true);
+
+      // Wait for late exchange response to be processed and discarded
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(loginErr).toBeDefined();
+      expect(loginErr.message).toContain("cancelled");
+
+      // Explicit nonpublication assertions:
+      expect(SessionManager.getCredentials()).toBeNull();
+      expect(SessionManager.getCurrentUser()).toBeNull();
+      expect(ConfigManager.get().token).toBeUndefined();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("Reproduce Defect 6b: Held-exchange timeout with deterministic barrier and nonpublication", async () => {
+    let barrierResolve: (value: any) => void;
+    const barrierPromise = new Promise((resolve) => {
+      barrierResolve = resolve;
+    });
+
+    let exchangeStarted = false;
+    const origFetch = globalThis.fetch;
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
+      if (url.toString().includes("/api/v1/auth/exchange")) {
+        exchangeStarted = true;
+        await barrierPromise;
+        return new Response(
+          JSON.stringify({
+            token: "timed-out-token-should-not-publish",
+            user: {
+              id: "timed-out-user-id",
+              name: "TimedOutUser",
+              minecraftUuid: "22222222-2222-2222-2222-222222222222",
+              minecraftUsername: "TimedOutMC",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return origFetch(url, init);
+    });
+
+    try {
+      let loginErr: any = null;
+      const loginPromise = LauncherAuth.loginWithPortal();
+      loginPromise.catch((err: any) => {
+        loginErr = err;
+      });
+
+      const context = LauncherAuth.activeLoginContext;
+      expect(context).not.toBeNull();
+
+      while (!context.authUrl) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      const authUrl = context.authUrl || "";
+      const portMatch = authUrl.match(/port=(\d+)/);
+      const stateMatch = authUrl.match(/state=([^&]+)/);
+      const port = parseInt(portMatch![1], 10);
+      const state = decodeURIComponent(stateMatch![1]);
+
+      const clientReq = http.request({
+        hostname: "127.0.0.1",
+        port,
+        path: `/callback?code=timeout-auth-code&state=${encodeURIComponent(state)}`,
+        method: "GET",
+      });
+      clientReq.on("error", () => {});
+      clientReq.on("response", (res) => {
+        res.resume();
+      });
+      clientReq.end();
+
+      while (!exchangeStarted) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // Simulate timeout termination on active context
+      context.terminate("Login timed out after 120s");
+
+      // Release barrier after timeout termination
+      barrierResolve!(true);
+
+      // Wait for late response to settle
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(loginErr).toBeDefined();
+      expect(loginErr.message).toContain("timed out");
+
+      // Nonpublication assertions
+      expect(SessionManager.getCredentials()).toBeNull();
+      expect(SessionManager.getCurrentUser()).toBeNull();
+      expect(ConfigManager.get().token).toBeUndefined();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("Reproduce Defect 6c: Held-exchange supersession with deterministic barrier and nonpublication", async () => {
+    let barrierResolveA: (value: any) => void;
+    const barrierPromiseA = new Promise((resolve) => {
+      barrierResolveA = resolve;
+    });
+
+    let exchangeAStarted = false;
+    let exchangeBStarted = false;
+    const origFetch = globalThis.fetch;
+
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
+      if (url.toString().includes("/api/v1/auth/exchange")) {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        if (body.code === "code-A") {
+          exchangeAStarted = true;
+          await barrierPromiseA;
+          return new Response(
+            JSON.stringify({
+              token: "token-A-superseded",
+              user: {
+                id: "user-A",
+                name: "UserA",
+                minecraftUuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                minecraftUsername: "UserAMC",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        } else if (body.code === "code-B") {
+          exchangeBStarted = true;
+          return new Response(
+            JSON.stringify({
+              token: "token-B-active",
+              user: {
+                id: "user-B",
+                name: "UserB",
+                minecraftUuid: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                minecraftUsername: "UserBMC",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+      }
+      return origFetch(url, init);
+    });
+
+    try {
+      // 1. Start Login Attempt A
+      let loginErrA: any = null;
+      const loginPromiseA = LauncherAuth.loginWithPortal();
+      loginPromiseA.catch((err: any) => {
+        loginErrA = err;
+      });
+
+      const contextA = LauncherAuth.activeLoginContext;
+      expect(contextA).not.toBeNull();
+
+      while (!contextA.authUrl) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      const portA = parseInt(contextA.authUrl.match(/port=(\d+)/)![1], 10);
+      const stateA = decodeURIComponent(contextA.authUrl.match(/state=([^&]+)/)![1]);
+
+      // Trigger callback A
+      const reqA = http.request({
+        hostname: "127.0.0.1",
+        port: portA,
+        path: `/callback?code=code-A&state=${encodeURIComponent(stateA)}`,
+        method: "GET",
+      });
+      reqA.on("error", () => {});
+      reqA.on("response", (res) => {
+        res.resume();
+      });
+      reqA.end();
+
+      while (!exchangeAStarted) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // 2. Start Login Attempt B (this supersedes Attempt A while A is held at barrier)
+      const loginPromiseB = LauncherAuth.loginWithPortal();
+      const contextB = LauncherAuth.activeLoginContext;
+      expect(contextB).not.toBeNull();
+      expect(contextB).not.toBe(contextA);
+
+      // Attempt A must reject with superseded error
+      await new Promise((r) => setTimeout(r, 30));
+      expect(loginErrA).toBeDefined();
+      expect(loginErrA.message).toContain("superseded");
+
+      while (!contextB.authUrl) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      const portB = parseInt(contextB.authUrl.match(/port=(\d+)/)![1], 10);
+      const stateB = decodeURIComponent(contextB.authUrl.match(/state=([^&]+)/)![1]);
+
+      // Complete Login Attempt B successfully
+      const reqB = http.request({
+        hostname: "127.0.0.1",
+        port: portB,
+        path: `/callback?code=code-B&state=${encodeURIComponent(stateB)}`,
+        method: "GET",
+      });
+      reqB.on("error", () => {});
+      reqB.on("response", (res) => {
+        res.resume();
+      });
+      reqB.end();
+
+      const resB = await loginPromiseB;
+      expect(resB.user.name).toBe("UserB");
+      expect(resB.token).toBe("token-B-active");
+
+      // Verify Attempt B's credentials are published
+      expect(SessionManager.getCredentials()?.token).toBe("token-B-active");
+      expect(SessionManager.getCurrentUser()?.name).toBe("UserB");
+
+      // 3. Now release barrier for Attempt A's late response
+      barrierResolveA!(true);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Attempt A's late response must NOT overwrite Attempt B's credentials!
+      expect(SessionManager.getCredentials()?.token).toBe("token-B-active");
+      expect(SessionManager.getCurrentUser()?.name).toBe("UserB");
+      expect(ConfigManager.get().token).toBe("token-B-active");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
+

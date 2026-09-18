@@ -90,6 +90,8 @@ interface LoginOperationContext {
   readonly epoch: number;
   readonly deadline: number;
   readonly abortController: AbortController;
+  authUrl?: string;
+  callbackPort?: number;
   isTerminal(): boolean;
   terminate(
     reason: "timeout" | "cancelled" | "superseded" | "denied" | "shutdown" | "server_error" | "browser_error" | "error",
@@ -337,7 +339,23 @@ export class LauncherAuth {
             status: "token_issued",
           });
 
+          if (!json?.token || typeof json.token !== "string" || !json.token.trim()) {
+            const err = new Error("Token exchange failed: portal returned invalid token");
+            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(renderErrorHtml("Token exchange failed. Server returned invalid token."));
+            opContext.terminate("error", err);
+            return;
+          }
+
           const user = json.user;
+          if (!user?.id || !user?.name || typeof user.id !== "string" || typeof user.name !== "string" || user.id === "account" || user.id === "unverified-migration") {
+            const err = new Error("Token exchange failed: portal returned invalid user identity");
+            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(renderErrorHtml("Token exchange failed. Server returned invalid user identity."));
+            opContext.terminate("error", err);
+            return;
+          }
+
           if (!user?.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000" || !user?.minecraftUsername) {
             const err = new Error("Minecraft account not bound: Please link your Minecraft Java account on the Lampas Portal dashboard.");
             LauncherLogger.error(`[Auth] User ${user?.name || user?.id} lacks bound Minecraft UUID`);
@@ -365,7 +383,7 @@ export class LauncherAuth {
           SessionManager.establishNewSession(
             portalUrl,
             {
-              token: json.token,
+              token: json.token.trim(),
               refreshToken: json.refreshToken || undefined,
               minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
               portalAccountId: user.id,
@@ -383,7 +401,7 @@ export class LauncherAuth {
           res.end(renderSuccessHtml());
 
           opContext.settleSuccess({
-            token: json.token,
+            token: json.token.trim(),
             user,
           });
         } catch (err: any) {
@@ -412,6 +430,8 @@ export class LauncherAuth {
           const address = server.address() as any;
           const port = address.port;
           const authUrl = `${portalUrl}/auth/launcher?code_challenge=${encodeURIComponent(challenge)}&port=${port}&state=${encodeURIComponent(state)}`;
+          opContext.authUrl = authUrl;
+          opContext.callbackPort = port;
           LauncherLogger.info(`[Auth] Initiated portal login flow in browser at ${portalUrl} (callback port: ${port})`);
           shell.openExternal(authUrl).catch((openErr: any) => {
             LauncherLogger.error(`[Auth] Failed to open external browser: ${openErr.message}`);
@@ -506,7 +526,25 @@ export class LauncherAuth {
           return { valid: false };
         }
 
-        const newToken = json.token || config.token;
+        if (!json?.token || typeof json.token !== "string" || !json.token.trim()) {
+          LauncherLogger.warn("[Auth Refresh] Refresh response omitted valid token string");
+          return { valid: false };
+        }
+        const currentRecord = SessionManager.getCurrentRecord();
+        if (
+          user?.id &&
+          currentRecord?.portalAccountId &&
+          currentRecord.portalAccountId !== "account" &&
+          currentRecord.portalAccountId !== "unverified-migration" &&
+          !currentRecord.portalAccountId.startsWith("config-account-") &&
+          !currentRecord.portalAccountId.startsWith("session-account-") &&
+          user.id !== currentRecord.portalAccountId
+        ) {
+          LauncherLogger.warn(`[Auth Refresh] Account identity mismatch on refresh: expected ${currentRecord.portalAccountId}, got ${user.id}`);
+          return { valid: false };
+        }
+
+        const newToken = json.token.trim();
         const newRefreshToken = json.refreshToken || config.refreshToken;
         const newMcToken = user?.minecraftAccessToken || json.minecraftAccessToken || config.minecraftAccessToken;
 

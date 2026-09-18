@@ -15,6 +15,7 @@ import type {
   UpdateSettingsDto,
   KnownLocationId,
   AuthStorageStatusDto,
+  ClearCredentialsResult,
   LampasApi,
 } from "./types";
 
@@ -22,7 +23,7 @@ const api: LampasApi = {
   auth: {
     login: (): Promise<{ user: RendererUserProfile }> =>
       ipcRenderer.invoke("auth:login"),
-    logout: (): Promise<void> => ipcRenderer.invoke("auth:logout"),
+    logout: (): Promise<ClearCredentialsResult> => ipcRenderer.invoke("auth:logout"),
     verify: (): Promise<{ valid: boolean; user?: RendererUserProfile }> =>
       ipcRenderer.invoke("auth:verify"),
     refresh: (): Promise<{ valid: boolean; user?: RendererUserProfile }> =>

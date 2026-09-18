@@ -277,10 +277,18 @@ export interface UpdateSettingsDto {
   javaArgs?: string;
 }
 
+export interface ClearCredentialsResult {
+  success: boolean;
+  error?: string;
+  deletedTarget: boolean;
+  deletedTemp: boolean;
+}
+
 export interface AuthStorageStatusDto {
   backend: "windows_dpapi" | "linux_keyring" | "session_only";
   sessionOnly: boolean;
   persistenceAvailable: boolean;
+  sessionPersisted?: boolean;
   lastPersistenceError?: string | null;
   lastCleanupError?: string | null;
 }
@@ -288,7 +296,7 @@ export interface AuthStorageStatusDto {
 export interface LampasApi {
   auth: {
     login: () => Promise<{ user: RendererUserProfile }>;
-    logout: () => Promise<void>;
+    logout: () => Promise<ClearCredentialsResult>;
     verify: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
     refresh: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
     getStorageStatus: () => Promise<AuthStorageStatusDto>;

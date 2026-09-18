@@ -159,7 +159,7 @@ export class CredentialStore {
     if (v !== 1) return false;
     if (typeof record.portalUrl !== "string" || !record.portalUrl.trim()) return false;
     const accountId = record.portalAccountId || record.accountId;
-    if (typeof accountId !== "string" || !accountId.trim()) return false;
+    if (typeof accountId !== "string" || !accountId.trim() || accountId === "account" || accountId === "unverified-migration") return false;
     const username = record.portalUsername || record.accountUsername;
     if (typeof username !== "string" || !username.trim()) return false;
     if (typeof record.token !== "string" || !record.token.trim()) return false;
@@ -246,7 +246,19 @@ export class CredentialStore {
       );
 
       try {
-        fs.writeSync(fd, encryptedBuffer);
+        let totalWritten = 0;
+        while (totalWritten < encryptedBuffer.length) {
+          const written = fs.writeSync(
+            fd,
+            encryptedBuffer,
+            totalWritten,
+            encryptedBuffer.length - totalWritten
+          );
+          if (written <= 0) {
+            throw new Error("Zero-progress write encountered during credential persistence");
+          }
+          totalWritten += written;
+        }
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
@@ -259,19 +271,39 @@ export class CredentialStore {
         throw new Error("Temporary credential file verification failed: irregular file or hardlink detected");
       }
 
+      // Check and remove invalidation marker prior to commit.
+      // If the marker cannot be removed, the new record will be rejected on reload;
+      // persistence MUST NOT report success!
+      const markerFile = this.getInvalidationMarkerPath();
+      if (fs.existsSync(markerFile)) {
+        try {
+          fs.unlinkSync(markerFile);
+        } catch (markerErr: any) {
+          try { fs.unlinkSync(uniqueTemp); } catch {}
+          const safeErr = "Failed to clear invalidation marker prior to credential commit";
+          this.lastPersistenceError = safeErr;
+          LauncherLogger.error(`[CredentialStore] ${safeErr}`);
+          return { success: false, backend, sessionOnly: false, error: safeErr };
+        }
+      }
+
       // Atomic rename to destination
       fs.renameSync(uniqueTemp, targetFile);
       try {
         fs.chmodSync(targetFile, 0o600);
       } catch {}
 
-      // Clear any invalidation marker on successful write
-      try {
-        const marker = this.getInvalidationMarkerPath();
-        if (fs.existsSync(marker)) {
-          fs.unlinkSync(marker);
+      // Double-check no marker was recreated during rename
+      if (fs.existsSync(markerFile)) {
+        try {
+          fs.unlinkSync(markerFile);
+        } catch {
+          try { fs.unlinkSync(targetFile); } catch {}
+          const safeErr = "Failed to clear invalidation marker after credential commit";
+          this.lastPersistenceError = safeErr;
+          return { success: false, backend, sessionOnly: false, error: safeErr };
         }
-      } catch {}
+      }
 
       this.lastPersistenceError = null;
       LauncherLogger.info(`[CredentialStore] Credentials protected and persisted via ${backend}`);
@@ -330,33 +362,26 @@ export class CredentialStore {
 
     try {
       const encryptedBuffer = fs.readFileSync(targetFile);
-      if (encryptedBuffer.length === 0) {
-        LauncherLogger.warn("[CredentialStore] Zero-byte credential file found on disk. Purging.");
-        this.clearCredentials();
-        return null;
-      }
-
-      let plainJson: string;
+      let decrypted: string;
       try {
-        plainJson = storage.decryptString(encryptedBuffer);
-      } catch (decryptErr: any) {
-        const sanitized = sanitizeProviderError(decryptErr, "decrypt");
-        LauncherLogger.warn(`[CredentialStore] Decryption failed (${sanitized})`);
+        decrypted = storage.decryptString(encryptedBuffer);
+      } catch (decErr: any) {
+        LauncherLogger.warn(`[CredentialStore] Decryption failed (${sanitizeProviderError(decErr, "decrypt")})`);
         this.clearCredentials();
         return null;
       }
 
       let parsed: any;
       try {
-        parsed = JSON.parse(plainJson);
-      } catch (parseErr: any) {
-        LauncherLogger.warn(`[CredentialStore] Decrypted credentials contained invalid JSON: ${parseErr.message}`);
+        parsed = JSON.parse(decrypted);
+      } catch {
+        LauncherLogger.warn("[CredentialStore] Stored credentials JSON invalid; clearing credentials file.");
         this.clearCredentials();
         return null;
       }
 
       if (!this.validateRecord(parsed)) {
-        LauncherLogger.warn("[CredentialStore] Stored credential record failed schema validation.");
+        LauncherLogger.warn("[CredentialStore] Stored credentials failed schema validation; clearing credentials file.");
         this.clearCredentials();
         return null;
       }
@@ -384,7 +409,7 @@ export class CredentialStore {
 
   /**
    * Cleans up the on-disk credentials file.
-   * Returns explicit deletion outcomes.
+   * Returns explicit deletion outcomes with safe bounded error messages.
    */
   static clearCredentials(): ClearCredentialsResult {
     const targetFile = this.getCredentialsFilePath();
@@ -400,16 +425,16 @@ export class CredentialStore {
         deletedTarget = true;
       }
     } catch (err: any) {
-      error = `Could not delete ${targetFile}: ${err.message}`;
+      error = sanitizeCleanupError(err);
       this.lastCleanupError = error;
-      LauncherLogger.warn(`[CredentialStore] ${error}`);
+      LauncherLogger.warn(`[CredentialStore] Could not delete stored credentials: ${error}`);
       // Attempt overwrite with empty buffer so corrupt bytes cannot decrypt
       try {
         fs.writeFileSync(targetFile, Buffer.alloc(0));
       } catch {}
       // Write durable invalidation marker so restart cannot resurrect old credentials
       try {
-        fs.writeFileSync(markerFile, JSON.stringify({ invalidatedAt: Date.now(), error: err.message }), { mode: 0o600 });
+        fs.writeFileSync(markerFile, JSON.stringify({ invalidatedAt: Date.now(), error }), { mode: 0o600 });
       } catch {}
     }
 
@@ -466,4 +491,16 @@ function sanitizeProviderError(err: any, operation: "encrypt" | "decrypt"): stri
     return "Disk full: unable to persist credentials";
   }
   return `Failed to ${operation} credentials in secure storage provider`;
+}
+
+function sanitizeCleanupError(err: any): string {
+  if (!err) return "Failed to delete stored credentials file";
+  const msg = (err.message || String(err)).toLowerCase();
+  if (msg.includes("busy") || msg.includes("locked") || msg.includes("ebusy")) {
+    return "Failed to delete stored credentials file: resource busy or locked";
+  }
+  if (msg.includes("permission") || msg.includes("eacces") || msg.includes("eperm") || msg.includes("denied")) {
+    return "Failed to delete stored credentials file: permission denied";
+  }
+  return "Failed to delete stored credentials file: disk error";
 }

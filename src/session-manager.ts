@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import { CredentialStore, type StoredCredentialRecord, type SaveCredentialsResult, type ClearCredentialsResult, type StorageBackendType } from "./credential-store";
 import { normalizePortalUrl } from "./portal-policy";
 import { writeAtomicFileSync } from "./file-transfer";
@@ -16,6 +17,7 @@ export interface AuthStorageStatusDto {
   backend: StorageBackendType;
   sessionOnly: boolean;
   persistenceAvailable: boolean;
+  sessionPersisted?: boolean;
   lastPersistenceError?: string | null;
   lastCleanupError?: string | null;
 }
@@ -34,6 +36,7 @@ export class SessionManager {
   private static currentRecord: StoredCredentialRecord | null = null;
   private static currentUser: UserProfile | null = null;
   private static activeLoginEpoch: number = 0;
+  private static isCurrentSessionPersisted: boolean = false;
   private static refreshPromises = new Map<string, Promise<{ valid: boolean; user?: UserProfile; token?: string }>>();
   private static initialized: boolean = false;
   private static lastMigrationOutcome: MigrationOutcome | null = null;
@@ -106,9 +109,22 @@ export class SessionManager {
       const existingMcUuid = this.currentRecord.minecraftUuid;
 
       if (
+        this.currentUser &&
+        this.currentUser.id &&
+        user.id &&
+        this.currentUser.id !== user.id
+      ) {
+        throw new Error(
+          `Cannot relabel credentials: active session belongs to portal user ${this.currentUser.id}, not ${user.id}`
+        );
+      }
+
+      if (
         existingPortalId &&
         existingPortalId !== "account" &&
         existingPortalId !== "unverified-migration" &&
+        !existingPortalId.startsWith("config-account-") &&
+        !existingPortalId.startsWith("session-account-") &&
         user.id &&
         existingPortalId !== user.id
       ) {
@@ -144,6 +160,10 @@ export class SessionManager {
     return CredentialStore.detectStorageBackend() === "session_only";
   }
 
+  static isPersistenceAvailable(): boolean {
+    return CredentialStore.isPersistenceAvailable();
+  }
+
   static getLastPersistenceError(): string | null {
     return CredentialStore.getLastPersistenceError();
   }
@@ -157,10 +177,16 @@ export class SessionManager {
   }
 
   static getStorageStatus(): AuthStorageStatusDto {
+    const backend = CredentialStore.detectStorageBackend();
+    const persistenceAvailable = CredentialStore.isPersistenceAvailable();
+    const hasActiveSession = Boolean(this.currentRecord);
+    const sessionOnly = !persistenceAvailable || (hasActiveSession && !this.isCurrentSessionPersisted);
+
     return {
-      backend: CredentialStore.detectStorageBackend(),
-      sessionOnly: this.isSessionOnlyMode(),
-      persistenceAvailable: CredentialStore.isPersistenceAvailable(),
+      backend,
+      sessionOnly,
+      persistenceAvailable,
+      sessionPersisted: this.isCurrentSessionPersisted,
       lastPersistenceError: this.getLastPersistenceError(),
       lastCleanupError: this.getLastCleanupError(),
     };
@@ -246,117 +272,142 @@ export class SessionManager {
           this.currentUser = {
             id: stored.portalAccountId || stored.accountId,
             name: stored.portalUsername || stored.accountUsername,
-            minecraftUuid: stored.minecraftUuid || stored.accountId,
-            minecraftUsername: stored.minecraftUsername || stored.accountUsername,
+            minecraftUuid: stored.minecraftUuid,
+            minecraftUsername: stored.minecraftUsername || stored.accountUsername || stored.portalUsername,
             isAdmin: false,
             isTech: false,
             roles: [],
             allowedChannels: [],
           };
           protectedLoaded = true;
+          this.isCurrentSessionPersisted = true;
           LauncherLogger.info(`[SessionManager] Restored protected session for ${stored.accountUsername} on ${stored.portalUrl}`);
         } else {
           LauncherLogger.warn(`[SessionManager] Stored credentials origin '${stored.portalUrl}' does not match active portal '${canonicalActivePortal}'. Purging wrong-origin credentials.`);
           CredentialStore.clearCredentials();
+          this.isCurrentSessionPersisted = false;
           this.advanceSessionEpoch();
         }
       } else {
         // File existed but loadCredentials returned null -> decryption failed, invalid JSON, or schema invalid!
         failedProtectedLoad = true;
+        this.isCurrentSessionPersisted = false;
         LauncherLogger.warn("[SessionManager] Protected credential file existed but failed to load/decrypt. Treating as corrupt and purged.");
       }
     }
 
     // 2. ALWAYS inspect config.json for legacy plaintext (never return before cleanup!)
     if (fs.existsSync(configPath)) {
+      let raw: string | null = null;
+      let parsed: any = null;
+
       try {
-        const raw = fs.readFileSync(configPath, "utf-8");
-        const parsed = JSON.parse(raw);
+        raw = fs.readFileSync(configPath, "utf-8");
+        parsed = JSON.parse(raw);
+      } catch (parseErr: any) {
+        parsed = null;
+      }
 
-        if (parsed.token || parsed.refreshToken || parsed.minecraftAccessToken || parsed.sessionPortalUrl) {
-          legacyPlaintextDetected = true;
-          const legacySessionPortal = parsed.sessionPortalUrl ? normalizePortalUrl(parsed.sessionPortalUrl) : null;
+      const hasPlaintextKeys = parsed && typeof parsed === "object"
+        ? Boolean(parsed.token || parsed.refreshToken || parsed.minecraftAccessToken || parsed.sessionPortalUrl)
+        : (raw ? /"(token|refreshToken|minecraftAccessToken|sessionPortalUrl)"\s*:/.test(raw) : false);
 
-          // Case A: Protected record already loaded -> protected record has precedence; scrub legacy plaintext
-          if (protectedLoaded) {
-            LauncherLogger.info("[SessionManager] Both protected record and legacy plaintext existed. Scrubbing legacy plaintext (protected record takes precedence).");
-            const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
-            legacyScrubbed = scrubResult.success;
-            if (!scrubResult.success) outcomeError = scrubResult.error;
+      if (hasPlaintextKeys) {
+        legacyPlaintextDetected = true;
+
+        let legacySessionPortal: string | null = null;
+        if (parsed?.sessionPortalUrl && typeof parsed.sessionPortalUrl === "string") {
+          try {
+            legacySessionPortal = normalizePortalUrl(parsed.sessionPortalUrl);
+          } catch {
+            legacySessionPortal = null;
           }
-          // Case B: Protected record failed to load -> DO NOT silently restore legacy plaintext! Fail closed.
-          else if (failedProtectedLoad) {
-            LauncherLogger.warn("[SessionManager] Protected record load failed; refusing to silently restore legacy plaintext. Scrubbing plaintext and requiring clean reauthentication.");
+        }
+
+        // Case A: Protected record already loaded -> protected record has precedence; scrub legacy plaintext
+        if (protectedLoaded) {
+          LauncherLogger.info("[SessionManager] Both protected record and legacy plaintext existed. Scrubbing legacy plaintext (protected record takes precedence).");
+          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+          legacyScrubbed = scrubResult.success;
+          if (!scrubResult.success) outcomeError = scrubResult.error;
+        }
+        // Case B: Protected record failed to load -> DO NOT silently restore legacy plaintext! Fail closed.
+        else if (failedProtectedLoad) {
+          LauncherLogger.warn("[SessionManager] Protected record load failed; refusing to silently restore legacy plaintext. Scrubbing plaintext and requiring clean reauthentication.");
+          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+          legacyScrubbed = scrubResult.success;
+          if (!scrubResult.success) outcomeError = scrubResult.error;
+          this.advanceSessionEpoch();
+        }
+        // Case C: No protected record file existed -> evaluate legacy migration eligibility
+        else {
+          const rawAccountId = (parsed?.portalAccountId || parsed?.accountId || "").toString().trim();
+          const rawUsername = (parsed?.portalUsername || parsed?.accountUsername || "").toString().trim();
+          const hasTrustedAccountEvidence = Boolean(
+            rawAccountId && rawUsername &&
+            rawAccountId !== "account" && rawAccountId !== "unverified-migration" &&
+            rawUsername !== "player"
+          );
+          const hasValidToken = typeof parsed?.token === "string" && parsed.token.trim().length > 0;
+          const originMatches = legacySessionPortal !== null && legacySessionPortal === canonicalActivePortal;
+
+          if (!hasValidToken || !originMatches || !hasTrustedAccountEvidence) {
+            LauncherLogger.warn("[SessionManager] Ineligible or unverified legacy credentials found in config.json. Scrubbing plaintext from disk and requiring clean reauthentication.");
             const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
             legacyScrubbed = scrubResult.success;
             if (!scrubResult.success) outcomeError = scrubResult.error;
             this.advanceSessionEpoch();
-          }
-          // Case C: No protected record file existed -> evaluate legacy migration eligibility
-          else {
-            const rawAccountId = (parsed.portalAccountId || parsed.accountId || "").toString().trim();
-            const rawUsername = (parsed.portalUsername || parsed.accountUsername || "").toString().trim();
-            const hasTrustedAccountEvidence = Boolean(rawAccountId && rawUsername);
-            const hasValidToken = typeof parsed.token === "string" && parsed.token.trim().length > 0;
-            const originMatches = legacySessionPortal === canonicalActivePortal;
+          } else {
+            // Eligible legacy credentials with verified account evidence
+            const legacyRecord: StoredCredentialRecord = {
+              version: 1,
+              schemaVersion: 1,
+              portalUrl: canonicalActivePortal,
+              portalAccountId: rawAccountId,
+              portalUsername: rawUsername,
+              accountId: rawAccountId,
+              accountUsername: rawUsername,
+              token: parsed.token,
+              refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : undefined,
+              minecraftAccessToken: typeof parsed.minecraftAccessToken === "string" ? parsed.minecraftAccessToken : undefined,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            };
 
-            if (!hasValidToken || !originMatches || !hasTrustedAccountEvidence) {
-              LauncherLogger.warn("[SessionManager] Ineligible or unverified legacy credentials found in config.json. Scrubbing plaintext from disk and requiring clean reauthentication.");
+            if (this.isSessionOnlyMode()) {
+              LauncherLogger.info("[SessionManager] Migrating legacy credentials into session-only memory; scrubbing plaintext from disk.");
+              this.currentRecord = legacyRecord;
+              this.isCurrentSessionPersisted = false;
+              migrated = true;
               const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
               legacyScrubbed = scrubResult.success;
               if (!scrubResult.success) outcomeError = scrubResult.error;
-              this.advanceSessionEpoch();
             } else {
-              // Eligible legacy credentials with verified account evidence
-              const legacyRecord: StoredCredentialRecord = {
-                version: 1,
-                schemaVersion: 1,
-                portalUrl: canonicalActivePortal,
-                portalAccountId: rawAccountId,
-                portalUsername: rawUsername,
-                accountId: rawAccountId,
-                accountUsername: rawUsername,
-                token: parsed.token,
-                refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : undefined,
-                minecraftAccessToken: typeof parsed.minecraftAccessToken === "string" ? parsed.minecraftAccessToken : undefined,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              };
-
-              if (this.isSessionOnlyMode()) {
-                LauncherLogger.info("[SessionManager] Migrating legacy credentials into session-only memory; scrubbing plaintext from disk.");
-                this.currentRecord = legacyRecord;
-                migrated = true;
-                const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
-                legacyScrubbed = scrubResult.success;
-                if (!scrubResult.success) outcomeError = scrubResult.error;
-              } else {
-                const saveResult = CredentialStore.saveCredentials(legacyRecord);
-                if (saveResult.success) {
-                  const verified = CredentialStore.loadCredentials();
-                  if (verified && verified.token === legacyRecord.token) {
-                    this.currentRecord = verified;
-                    migrated = true;
-                    LauncherLogger.info("[SessionManager] Successfully migrated legacy credentials to encrypted store. Scrubbing plaintext config.");
-                  } else {
-                    LauncherLogger.warn("[SessionManager] Migration read-back verification failed. Requiring reauthentication.");
-                    CredentialStore.clearCredentials();
-                    this.advanceSessionEpoch();
-                  }
+              const saveResult = CredentialStore.saveCredentials(legacyRecord);
+              if (saveResult.success) {
+                const verified = CredentialStore.loadCredentials();
+                if (verified && verified.token === legacyRecord.token) {
+                  this.currentRecord = verified;
+                  this.isCurrentSessionPersisted = true;
+                  migrated = true;
+                  LauncherLogger.info("[SessionManager] Successfully migrated legacy credentials to encrypted store. Scrubbing plaintext config.");
                 } else {
-                  LauncherLogger.warn("[SessionManager] Migration encryption failed. Requiring reauthentication.");
+                  LauncherLogger.warn("[SessionManager] Migration read-back verification failed. Requiring reauthentication.");
+                  CredentialStore.clearCredentials();
+                  this.isCurrentSessionPersisted = false;
                   this.advanceSessionEpoch();
                 }
-                const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
-                legacyScrubbed = scrubResult.success;
-                if (!scrubResult.success) outcomeError = scrubResult.error;
+              } else {
+                LauncherLogger.warn("[SessionManager] Migration encryption failed. Requiring reauthentication.");
+                this.isCurrentSessionPersisted = false;
+                this.advanceSessionEpoch();
               }
+              const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+              legacyScrubbed = scrubResult.success;
+              if (!scrubResult.success) outcomeError = scrubResult.error;
             }
           }
         }
-      } catch (err: any) {
-        LauncherLogger.error(`[SessionManager] Error during legacy config inspection: ${err.message}`);
-        outcomeError = err.message;
       }
     }
 
@@ -374,11 +425,14 @@ export class SessionManager {
 
   private static scrubPlaintextFromConfig(configPath: string, parsed: any): { success: boolean; error?: string } {
     try {
-      const scrubbed = { ...parsed };
-      delete scrubbed.token;
-      delete scrubbed.refreshToken;
-      delete scrubbed.minecraftAccessToken;
-      delete scrubbed.sessionPortalUrl;
+      let scrubbed: any = {};
+      if (parsed && typeof parsed === "object") {
+        scrubbed = { ...parsed };
+        delete scrubbed.token;
+        delete scrubbed.refreshToken;
+        delete scrubbed.minecraftAccessToken;
+        delete scrubbed.sessionPortalUrl;
+      }
       writeAtomicFileSync(configPath, JSON.stringify(scrubbed, null, 2), "utf-8");
       LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from config.json on disk.");
       return { success: true };
@@ -409,8 +463,15 @@ export class SessionManager {
     this.refreshPromises.clear();
     const canonicalOrigin = normalizePortalUrl(issuingOrigin);
 
-    const portalAccountId = (user?.id || credentials.portalAccountId || "account").toString().trim();
-    const portalUsername = (user?.name || credentials.portalUsername || "player").toString().trim();
+    const portalAccountId = (user?.id || credentials.portalAccountId || "").toString().trim();
+    const portalUsername = (user?.name || credentials.portalUsername || "").toString().trim();
+    const token = (credentials.token || "").toString().trim();
+
+    // Reject invalid authentication data before publication
+    if (!token || !portalAccountId || !portalUsername || portalAccountId === "account" || portalAccountId === "unverified-migration") {
+      throw new Error("Invalid authentication data: token, portalAccountId, and portalUsername are required and cannot be placeholders");
+    }
+
     const minecraftUuid = user?.minecraftUuid || credentials.minecraftUuid;
     const minecraftUsername = user?.minecraftUsername || credentials.minecraftUsername;
 
@@ -429,7 +490,7 @@ export class SessionManager {
       minecraftUsername,
       accountId: portalAccountId,
       accountUsername: portalUsername,
-      token: credentials.token,
+      token,
       refreshToken: credentials.refreshToken, // Strictly from new login, NEVER inherited!
       minecraftAccessToken: credentials.minecraftAccessToken || user?.minecraftAccessToken,
       createdAt: Date.now(),
@@ -451,6 +512,7 @@ export class SessionManager {
     if (this.sessionEpoch !== writeEpoch) {
       LauncherLogger.warn("[SessionManager] Discarding credential write: session epoch advanced during write. Rolling back disk store.");
       CredentialStore.clearCredentials();
+      this.isCurrentSessionPersisted = false;
       return {
         success: false,
         backend: saveResult.backend,
@@ -459,16 +521,19 @@ export class SessionManager {
       };
     }
 
-    if (!saveResult.success) {
-      // Persistence failed when persistence was expected:
-      // Clear disk credentials immediately to prevent stale record resurrecting
+    if (saveResult.sessionOnly || !saveResult.success) {
+      // Invalidate existing disk credentials independently of currentRecord
       const clearResult = CredentialStore.clearCredentials();
-      if (!clearResult.success) {
-        // Disk cleanup failed: fail login completely because old record would resurrect on restart!
+      if (!clearResult.success && !saveResult.success) {
+        // Disk cleanup failed and persistence failed: fail login completely
         throw new Error(`Persistence failure and could not sanitize disk credentials: ${saveResult.error}`);
       }
-      // Disk was safely sanitized; downgrade this session to in-memory session_only
-      LauncherLogger.warn(`[SessionManager] Persistence failed (${saveResult.error}); operating in session-only mode for this session.`);
+      this.isCurrentSessionPersisted = false;
+      if (!saveResult.success) {
+        LauncherLogger.warn(`[SessionManager] Persistence failed (${saveResult.error}); operating in session-only mode for this session.`);
+      }
+    } else {
+      this.isCurrentSessionPersisted = true;
     }
 
     this.currentRecord = record;
@@ -504,11 +569,18 @@ export class SessionManager {
       throw new Error(`Cannot refresh session: origin mismatch ('${this.currentRecord.portalUrl}' vs '${canonicalOrigin}')`);
     }
 
+    const token = (refreshedTokens.token || "").toString().trim();
+    if (!token) {
+      throw new Error("Cannot refresh session: valid non-empty token is required");
+    }
+
     if (
       user &&
       this.currentRecord.portalAccountId &&
       this.currentRecord.portalAccountId !== "account" &&
       this.currentRecord.portalAccountId !== "unverified-migration" &&
+      !this.currentRecord.portalAccountId.startsWith("config-account-") &&
+      !this.currentRecord.portalAccountId.startsWith("session-account-") &&
       user.id &&
       this.currentRecord.portalAccountId !== user.id
     ) {
@@ -530,7 +602,7 @@ export class SessionManager {
       version: 1,
       schemaVersion: 1,
       portalUrl: canonicalOrigin,
-      token: refreshedTokens.token,
+      token,
       // Retain omitted refresh token ONLY on same-account refresh
       refreshToken: refreshedTokens.refreshToken ?? this.currentRecord.refreshToken,
       minecraftAccessToken: refreshedTokens.minecraftAccessToken ?? user?.minecraftAccessToken ?? this.currentRecord.minecraftAccessToken,
@@ -548,31 +620,37 @@ export class SessionManager {
     }
 
     if (this.sessionEpoch !== writeEpoch) {
-      LauncherLogger.warn("[SessionManager] Aborted refresh write: session epoch advanced before write started.");
+      LauncherLogger.warn("[SessionManager] Aborted token refresh commit: session epoch advanced before write.");
       return {
         success: false,
         backend: CredentialStore.detectStorageBackend(),
         sessionOnly: false,
-        error: "Session epoch invalidated before refresh write",
+        error: "Session epoch invalidated before write",
       };
     }
 
     const saveResult = CredentialStore.saveCredentials(record);
 
     if (this.sessionEpoch !== writeEpoch) {
-      LauncherLogger.warn("[SessionManager] Discarding refresh write: session epoch advanced during write. Rolling back disk store.");
+      LauncherLogger.warn("[SessionManager] Discarding refreshed credentials: epoch advanced during write.");
       CredentialStore.clearCredentials();
+      this.isCurrentSessionPersisted = false;
       return {
         success: false,
         backend: saveResult.backend,
         sessionOnly: false,
-        error: "Session epoch invalidated during refresh write",
+        error: "Session epoch invalidated during write",
       };
     }
 
-    if (!saveResult.success) {
+    if (saveResult.sessionOnly || !saveResult.success) {
       CredentialStore.clearCredentials();
-      LauncherLogger.warn(`[SessionManager] Refresh persistence failed (${saveResult.error}); operating in session-only mode for this session.`);
+      this.isCurrentSessionPersisted = false;
+      if (!saveResult.success) {
+        LauncherLogger.warn(`[SessionManager] Failed to persist refreshed credentials (${saveResult.error}); continuing in session-only mode.`);
+      }
+    } else {
+      this.isCurrentSessionPersisted = true;
     }
 
     this.currentRecord = record;
@@ -605,7 +683,14 @@ export class SessionManager {
       return this.updateSessionFromRefresh(issuingOrigin, credentials, user);
     }
 
-    return this.establishNewSession(issuingOrigin, credentials, user);
+    const tokenHash = crypto.createHash("sha256").update(credentials.token || "").digest("hex").slice(0, 10);
+    const adaptedCreds = {
+      ...credentials,
+      portalAccountId: credentials.portalAccountId || user?.id || `session-account-${tokenHash}`,
+      portalUsername: credentials.portalUsername || user?.name || `SessionUser-${tokenHash.slice(0, 4)}`,
+    };
+
+    return this.establishNewSession(issuingOrigin, adaptedCreds, user);
   }
 
   /**

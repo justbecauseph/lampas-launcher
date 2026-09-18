@@ -671,20 +671,17 @@ if (btnLogin) {
 if (btnLogout) {
   btnLogout.onclick = async () => {
     try {
-      await window.lampas.auth.logout();
+      const logoutResult = await window.lampas.auth.logout();
       currentConfig = await window.lampas.config.get();
       updateUserUI(null);
       latestServerStatus = null;
       renderServerStatus(null);
-      try {
-        const storageStatus = await window.lampas.auth.getStorageStatus();
-        if (storageStatus.lastCleanupError) {
-          showToast(`Logout warning: Persistent cleanup incomplete (${storageStatus.lastCleanupError})`, "warning");
-        } else {
-          showToast("Logged out successfully.", "info");
-        }
-      } catch {
+      if (logoutResult && !logoutResult.success) {
+        showToast(`Logout warning: Persistent cleanup incomplete (${logoutResult.error || "cleanup error"})`, "warning");
+      } else if (logoutResult && logoutResult.success) {
         showToast("Logged out successfully.", "info");
+      } else {
+        showToast("Logged out (session cleared). Persistent cleanup unverified.", "warning");
       }
     } catch (err) {
       showToast(`Logout failed: ${err.message}`, "error");
