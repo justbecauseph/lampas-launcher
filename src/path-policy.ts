@@ -440,7 +440,7 @@ export function checkPhysicalAncestrySync(
     }
 
     if (options.disallowSymlinks && stat.isSymbolicLink()) {
-      throw new PathContainmentError(`Symbolic links are prohibited along path: '${current}'`);
+      throw new PathContainmentError(`Prohibited symbolic link along path: '${current}'`);
     }
 
     if (stat.isSymbolicLink()) {
@@ -525,7 +525,7 @@ export async function checkPhysicalAncestry(
       const stat = await fs.promises.lstat(current);
 
       if (options.disallowSymlinks && stat.isSymbolicLink()) {
-        throw new PathContainmentError(`Symbolic links are prohibited along path: '${current}'`);
+        throw new PathContainmentError(`Prohibited symbolic link along path: '${current}'`);
       }
 
       if (stat.isSymbolicLink()) {

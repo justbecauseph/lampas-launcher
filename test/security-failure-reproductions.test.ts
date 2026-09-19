@@ -62,6 +62,8 @@ let MOVE_RECEIPT_FILENAME: any;
 let writeStagingMarker: any;
 let ClientModManager: any;
 let LauncherSync: any;
+let reconcileRequiredResourcePacks: any;
+let reconcileConfigPatches: any;
 
 class MockSafeStorage {
   available = true;
@@ -121,6 +123,12 @@ beforeAll(async () => {
 
   const syncMod = await import("../src/sync");
   LauncherSync = syncMod.LauncherSync;
+
+  const rpMod = await import("../src/resource-packs");
+  reconcileRequiredResourcePacks = rpMod.reconcileRequiredResourcePacks;
+
+  const cfgPatchMod = await import("../src/config-patches/reconciler");
+  reconcileConfigPatches = cfgPatchMod.reconcileConfigPatches;
 });
 
 beforeEach(() => {
@@ -2511,6 +2519,356 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       try { renameSpy.mockRestore(); } catch {}
       try { fs.unlinkSync(modPath); } catch {}
       try { fs.unlinkSync(newVersionSource); } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment Finding 1: Recovery rejects target aliasing source via symlink or junction and aborts before deleting source", async () => {
+    const srcDir = path.join(gameDir, "alias-src");
+    const dstDir = path.join(gameDir, "alias-dst");
+    const parentDir = path.dirname(gameDir);
+    const opId = "op-gate4-alias-test";
+    const stagingDir = path.resolve(parentDir, `.lampas-moving-${opId}`);
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(srcDir, "important-data.txt"), "PRESERVE-THIS-DATA", "utf-8");
+
+    // 1. validateTarget rejects target that is a symlink to source
+    if (fs.existsSync(dstDir)) fs.rmSync(dstDir, { recursive: true, force: true });
+    try {
+      fs.symlinkSync(srcDir, dstDir, process.platform === "win32" ? "junction" : "dir");
+      const targetValidation = GameDirectoryManager.validateTarget(dstDir, srcDir);
+      expect(targetValidation.valid).toBe(false);
+      expect(targetValidation.reason).toMatch(/symbolic link|Target directory physically aliases/i);
+    } finally {
+      try { fs.unlinkSync(dstDir); } catch {}
+      try { fs.rmdirSync(dstDir); } catch {}
+    }
+
+    // 2. validateMoveJournal rejects target that physically aliases source or is a symlink
+    fs.mkdirSync(dstDir, { recursive: true });
+    try {
+      const journalData = {
+        version: 2,
+        operationId: opId,
+        source: srcDir,
+        target: dstDir,
+        staging: stagingDir,
+        phase: "cleaning",
+      };
+
+      // Create symlink target pointing to source
+      fs.rmdirSync(dstDir);
+      fs.symlinkSync(srcDir, dstDir, process.platform === "win32" ? "junction" : "dir");
+
+      const journalValidation = validateMoveJournal(journalData, srcDir, userDataDir);
+      expect(journalValidation.valid).toBe(false);
+      expect(journalValidation.reason).toMatch(/symbolic link|physically alias/i);
+    } finally {
+      try { fs.unlinkSync(dstDir); } catch {}
+      try { fs.rmdirSync(dstDir); } catch {}
+    }
+
+    // 3. recoverInterruptedMove in cleaning phase aborts and preserves source if target physically aliases source
+    fs.symlinkSync(srcDir, dstDir, process.platform === "win32" ? "junction" : "dir");
+    const validReceipt = {
+      version: 2,
+      operationId: opId,
+      source: srcDir,
+      target: dstDir,
+      staging: stagingDir,
+      fileCount: 1,
+      totalBytes: 18,
+      directories: [],
+      files: [{ relativePath: "important-data.txt", size: 18, sha256: crypto.createHash("sha256").update("PRESERVE-THIS-DATA").digest("hex") }],
+      stagingVerified: true,
+      timestamp: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(srcDir, MOVE_RECEIPT_FILENAME), JSON.stringify(validReceipt, null, 2));
+
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: srcDir,
+        target: dstDir,
+        staging: stagingDir,
+        phase: "cleaning",
+      })
+    );
+
+    ConfigManager.set({ gameDir: srcDir, gameDirConfigured: true });
+
+    try {
+      await GameDirectoryManager.recoverInterruptedMove();
+      // Should quarantine journal because target is symlink
+      expect(fs.existsSync(journalPath)).toBe(false);
+      // Source must be preserved intact!
+      expect(fs.existsSync(srcDir)).toBe(true);
+      expect(fs.readFileSync(path.join(srcDir, "important-data.txt"), "utf-8")).toBe("PRESERVE-THIS-DATA");
+    } finally {
+      try { fs.unlinkSync(dstDir); } catch {}
+      try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch {}
+      try { fs.unlinkSync(journalPath); } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment Finding 2: Recovery rejects duplicate receipt entries, inventory asymmetry, and new source-only empty directory", async () => {
+    const srcDir = path.join(gameDir, "f2-src");
+    const dstDir = path.join(gameDir, "f2-dst");
+    const opId = "op-gate4-finding2";
+    const stagingDir = path.resolve(path.dirname(dstDir), `.lampas-moving-${opId}`);
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.mkdirSync(dstDir, { recursive: true });
+    const content = "HELLO-F2";
+    const hash = crypto.createHash("sha256").update(content).digest("hex");
+    fs.writeFileSync(path.join(srcDir, "data.txt"), content, "utf-8");
+    fs.writeFileSync(path.join(dstDir, "data.txt"), content, "utf-8");
+
+    ConfigManager.set({ gameDir: srcDir, gameDirConfigured: true });
+
+    // Case 2a: Duplicate receipt entry
+    const dupReceipt = {
+      version: 2,
+      operationId: opId,
+      source: srcDir,
+      target: dstDir,
+      staging: stagingDir,
+      fileCount: 2,
+      totalBytes: content.length * 2,
+      directories: [],
+      files: [
+        { relativePath: "data.txt", size: content.length, sha256: hash },
+        { relativePath: "data.txt", size: content.length, sha256: hash },
+      ],
+      stagingVerified: true,
+      timestamp: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(dstDir, MOVE_RECEIPT_FILENAME), JSON.stringify(dupReceipt, null, 2));
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: srcDir,
+        target: dstDir,
+        staging: stagingDir,
+        phase: "cleaning",
+      })
+    );
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /duplicate file entry/i
+    );
+    expect(fs.existsSync(srcDir)).toBe(true);
+
+    // Case 2b: Source directory drift: new empty directory added to source after interruption
+    const validReceipt = {
+      version: 2,
+      operationId: opId,
+      source: srcDir,
+      target: dstDir,
+      staging: stagingDir,
+      fileCount: 1,
+      totalBytes: content.length,
+      directories: [],
+      files: [{ relativePath: "data.txt", size: content.length, sha256: hash }],
+      stagingVerified: true,
+      timestamp: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(dstDir, MOVE_RECEIPT_FILENAME), JSON.stringify(validReceipt, null, 2));
+
+    // Create newly added empty directory in source
+    const newEmptyDir = path.join(srcDir, "saves", "NewEmptyWorld");
+    fs.mkdirSync(newEmptyDir, { recursive: true });
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /source directory structure changed|unexpected directory/i
+    );
+    // Source preserved!
+    expect(fs.existsSync(srcDir)).toBe(true);
+    expect(fs.existsSync(newEmptyDir)).toBe(true);
+
+    // Case 2c: Empty payload explicit representation is accepted
+    fs.rmSync(path.join(srcDir, "data.txt"), { force: true });
+    fs.rmSync(path.join(dstDir, "data.txt"), { force: true });
+    fs.rmSync(newEmptyDir, { recursive: true, force: true });
+    try { fs.rmSync(path.join(srcDir, "saves"), { recursive: true, force: true }); } catch {}
+
+    const emptyReceipt = {
+      version: 2,
+      operationId: opId,
+      source: srcDir,
+      target: dstDir,
+      staging: stagingDir,
+      fileCount: 0,
+      totalBytes: 0,
+      directories: [],
+      files: [],
+      stagingVerified: true,
+      timestamp: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(dstDir, MOVE_RECEIPT_FILENAME), JSON.stringify(emptyReceipt, null, 2));
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: srcDir,
+        target: dstDir,
+        staging: stagingDir,
+        phase: "cleaning",
+      })
+    );
+
+    // Recovery succeeds with valid empty payload
+    await GameDirectoryManager.recoverInterruptedMove();
+    expect(fs.existsSync(journalPath)).toBe(false);
+    expect(ConfigManager.get().gameDir).toBe(dstDir);
+
+    // Cleanup
+    try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(dstDir, { recursive: true, force: true }); } catch {}
+    try { fs.unlinkSync(journalPath); } catch {}
+  });
+
+  test("Gate 4 Amendment Finding 3: Staging directory deletion requires matching marker in all recovery branches", async () => {
+    const parentDir = path.dirname(gameDir);
+    const opId = "op-gate4-staging-marker-branches";
+    const stagingDir = path.resolve(parentDir, `.lampas-moving-${opId}`);
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    // Case 3a: targetExists && !sourceExists (Case 1 in recovery)
+    const dstDir = path.join(parentDir, "dst-case1");
+    const nonExistentSrc = path.join(parentDir, "non-existent-src");
+    fs.mkdirSync(dstDir, { recursive: true });
+    fs.mkdirSync(stagingDir, { recursive: true });
+    const victimFile = path.join(stagingDir, "precious-victim.txt");
+    fs.writeFileSync(victimFile, "DO-NOT-DELETE-VICTIM", "utf-8");
+
+    // Journal points to staging, but staging lacks ownership marker
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: nonExistentSrc,
+        target: dstDir,
+        staging: stagingDir,
+        phase: "preparing",
+      })
+    );
+
+    ConfigManager.set({ gameDir: dstDir, gameDirConfigured: true });
+    await GameDirectoryManager.recoverInterruptedMove();
+
+    // Staging without marker was NOT deleted!
+    expect(fs.existsSync(stagingDir)).toBe(true);
+    expect(fs.existsSync(victimFile)).toBe(true);
+    expect(fs.readFileSync(victimFile, "utf-8")).toBe("DO-NOT-DELETE-VICTIM");
+
+    // Clean up
+    try { fs.rmSync(dstDir, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch {}
+    try { fs.unlinkSync(journalPath); } catch {}
+  });
+
+  test("Gate 4 Amendment Finding 4: Callers strictly enforce ownership and reject link attacks", async () => {
+    // 4a. ClientModManager breaks leaf hardlinks before write
+    const modsDir = path.join(gameDir, "mods");
+    fs.mkdirSync(modsDir, { recursive: true });
+    const victimFile = path.join(gameDir, "victim-options.txt");
+    fs.writeFileSync(victimFile, "ORIGINAL-VICTIM-CONTENT", "utf-8");
+
+    const modDest = path.join(modsDir, "hardlink-test.jar");
+    try {
+      fs.linkSync(victimFile, modDest);
+      const newModSource = path.join(testRoot, "hardlink-test.jar");
+      fs.writeFileSync(newModSource, "NEW-MOD-BYTES", "utf-8");
+
+      ConfigManager.set({
+        gameDir,
+        customClientMods: [
+          { filename: "hardlink-test.jar", enabled: true, addedAt: new Date().toISOString() },
+        ],
+      });
+      ClientModManager.add([newModSource]);
+
+      // Hardlink was broken before write; victim file unchanged!
+      expect(fs.readFileSync(victimFile, "utf-8")).toBe("ORIGINAL-VICTIM-CONTENT");
+      expect(fs.readFileSync(modDest, "utf-8")).toBe("NEW-MOD-BYTES");
+    } finally {
+      try { fs.unlinkSync(modDest); } catch {}
+      try { fs.unlinkSync(victimFile); } catch {}
+    }
+
+    // 4b. reconcileRequiredResourcePacks rejects symlinked options.txt fail-closed
+    const optionsPath = path.join(gameDir, "options.txt");
+    const targetOutside = path.join(testRoot, "outside-secret.txt");
+    fs.writeFileSync(targetOutside, "SECRET-PAYLOAD", "utf-8");
+    try {
+      if (fs.existsSync(optionsPath)) fs.unlinkSync(optionsPath);
+      fs.symlinkSync(targetOutside, optionsPath);
+
+      await expect(
+        reconcileRequiredResourcePacks(gameDir, {
+          required: [{ id: "rp1", filename: "pack.zip", sha256: "" }],
+          previousManaged: [],
+        })
+      ).rejects.toThrow(/symbolic link/i);
+
+      // Victim file outside was NOT overwritten!
+      expect(fs.readFileSync(targetOutside, "utf-8")).toBe("SECRET-PAYLOAD");
+    } finally {
+      try { fs.unlinkSync(optionsPath); } catch {}
+      try { fs.unlinkSync(targetOutside); } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment Finding 5: Consecutive cross-volume moves succeed without move metadata leakage", async () => {
+    const dirA = path.join(testRoot, "move-chain-A");
+    const dirB = path.join(testRoot, "move-chain-B");
+    const dirC = path.join(testRoot, "move-chain-C");
+
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.writeFileSync(path.join(dirA, "payload.txt"), "CHAINED-MOVE-PAYLOAD", "utf-8");
+
+    ConfigManager.set({ gameDir: dirA, gameDirConfigured: true });
+
+    // Force staged copy fallback for moves
+    const origRename = GameDirectoryManager._renameFn;
+    GameDirectoryManager._renameFn = (src: string, dest: string) => {
+      const err: any = new Error("EXDEV: cross-device link not permitted");
+      err.code = "EXDEV";
+      throw err;
+    };
+
+    try {
+      // First cross-volume move: dirA -> dirB
+      const res1 = await GameDirectoryManager.moveInstallation(dirB);
+      expect(res1.success).toBe(true);
+      expect(fs.existsSync(path.join(dirB, "payload.txt"))).toBe(true);
+
+      // Verify metadata files were cleaned from target!
+      expect(fs.existsSync(path.join(dirB, MOVE_RECEIPT_FILENAME))).toBe(false);
+      expect(fs.existsSync(path.join(dirB, ".lampas_staging_marker.json"))).toBe(false);
+
+      // Second cross-volume move from new location: dirB -> dirC
+      const res2 = await GameDirectoryManager.moveInstallation(dirC);
+      expect(res2.success).toBe(true);
+      expect(fs.existsSync(path.join(dirC, "payload.txt"))).toBe(true);
+
+      // Verify metadata files were cleaned from second target as well!
+      expect(fs.existsSync(path.join(dirC, MOVE_RECEIPT_FILENAME))).toBe(false);
+      expect(fs.existsSync(path.join(dirC, ".lampas_staging_marker.json"))).toBe(false);
+    } finally {
+      GameDirectoryManager._renameFn = origRename;
+      try { fs.rmSync(dirA, { recursive: true, force: true }); } catch {}
+      try { fs.rmSync(dirB, { recursive: true, force: true }); } catch {}
+      try { fs.rmSync(dirC, { recursive: true, force: true }); } catch {}
     }
   });
 });

@@ -54,7 +54,7 @@ export class ClientModManager {
     if (!fs.existsSync(modsDir)) {
       fs.mkdirSync(modsDir, { recursive: true });
     }
-    checkPhysicalAncestrySync(config.gameDir, modsDir);
+    checkPhysicalAncestrySync(config.gameDir, modsDir, { enforceOwnership: true, disallowSymlinks: true });
 
     const mods = [...(config.customClientMods || [])];
 
@@ -63,15 +63,25 @@ export class ClientModManager {
       const filename = path.basename(sourcePath);
       const existing = mods.find((mod) => mod.filename.toLowerCase() === filename.toLowerCase());
       const destination = modPath(config.gameDir, filename, true);
-      checkPhysicalAncestrySync(config.gameDir, destination);
+      checkPhysicalAncestrySync(config.gameDir, destination, { enforceOwnership: true, disallowSymlinks: true });
 
       if (fs.existsSync(destination)) {
         const destStat = fs.lstatSync(destination);
-        if (destStat.isSymbolicLink()) {
-          throw new Error(`Cannot overwrite symbolic link at destination mod: ${filename}`);
+        if (
+          destStat.isSymbolicLink() ||
+          destStat.isFIFO() ||
+          destStat.isSocket() ||
+          destStat.isCharacterDevice() ||
+          destStat.isBlockDevice()
+        ) {
+          throw new Error(`Cannot overwrite symbolic link or special file at destination mod: ${filename}`);
         }
         if (!existing && path.resolve(sourcePath) !== path.resolve(destination)) {
           throw new Error(`${filename} already exists in the mods folder and is not a launcher-managed local mod.`);
+        }
+        if (destStat.nlink > 1) {
+          // Break hard link before replacing
+          fs.unlinkSync(destination);
         }
       }
 
@@ -163,8 +173,8 @@ export class ClientModManager {
 
     const source = modPath(config.gameDir, filename, mod.enabled);
     const destination = modPath(config.gameDir, filename, enabled);
-    checkPhysicalAncestrySync(config.gameDir, source);
-    checkPhysicalAncestrySync(config.gameDir, destination);
+    checkPhysicalAncestrySync(config.gameDir, source, { enforceOwnership: true, disallowSymlinks: true });
+    checkPhysicalAncestrySync(config.gameDir, destination, { enforceOwnership: true, disallowSymlinks: true });
     if (!fs.existsSync(source)) throw new Error(`${filename} is missing from the mods folder.`);
     if (fs.existsSync(destination)) throw new Error(`Cannot toggle ${filename}: destination already exists.`);
     fs.renameSync(source, destination);
@@ -181,7 +191,7 @@ export class ClientModManager {
     const mod = mods.find((entry) => entry.filename === filename);
     if (!mod) throw new Error(`Unknown local mod: ${filename}`);
     const target = modPath(config.gameDir, filename, mod.enabled);
-    checkPhysicalAncestrySync(config.gameDir, target);
+    checkPhysicalAncestrySync(config.gameDir, target, { enforceOwnership: true, disallowSymlinks: true });
     fs.rmSync(target, { force: true });
     LauncherLogger.info(`[Client Mods] Removed custom mod: ${filename}`);
     const updated = mods.filter((entry) => entry.filename !== filename);

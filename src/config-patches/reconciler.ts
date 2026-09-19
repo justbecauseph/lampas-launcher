@@ -37,6 +37,21 @@ export function isSafeConfigPatchPath(targetPath: string): boolean {
 }
 
 async function atomicReplaceFile(tempPath: string, destination: string): Promise<void> {
+  if (fs.existsSync(destination)) {
+    try {
+      const stat = await fs.promises.lstat(destination);
+      if (
+        stat.isSymbolicLink() ||
+        stat.isFIFO() ||
+        stat.isSocket() ||
+        stat.isCharacterDevice() ||
+        stat.isBlockDevice() ||
+        stat.nlink > 1
+      ) {
+        await fs.promises.unlink(destination);
+      }
+    } catch {}
+  }
   try {
     await fs.promises.rename(tempPath, destination);
   } catch (error: any) {
@@ -87,7 +102,7 @@ export async function reconcileConfigPatches(
     }
 
     const targetFullPath = resolveAndContainPath(gameDir, patch.path);
-    await checkPhysicalAncestry(gameDir, targetFullPath);
+    await checkPhysicalAncestry(gameDir, targetFullPath, { enforceOwnership: true, disallowSymlinks: true });
 
     for (const op of (patch.operations || [])) {
       if (op && typeof op === "object") {

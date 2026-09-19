@@ -9,7 +9,15 @@ import { GameRunner } from "./game-runner";
 import { LauncherLogger } from "./logger";
 import { writeAtomicFileSync } from "./file-transfer";
 import { runBoundedPool } from "./async-pool";
-import { checkPhysicalAncestrySync, PathContainmentError, resolveAndContainPath } from "./path-policy";
+import {
+  checkPhysicalAncestrySync,
+  getCanonicalDiskPath,
+  isSafeRelativePath,
+  isValidDigestString,
+  normalizePathKey,
+  PathContainmentError,
+  resolveAndContainPath,
+} from "./path-policy";
 import type {
   DirectoryMoveProgress,
   DirectoryMoveResult,
@@ -60,6 +68,67 @@ export function readStagingMarker(stagingDir: string): StagingMarker | null {
     return null;
   } catch {
     return null;
+  }
+}
+
+export async function authorizeAndRemoveStaging(journal: {
+  staging: string;
+  operationId: string;
+  source: string;
+  target: string;
+}): Promise<boolean> {
+  if (!fs.existsSync(journal.staging)) return false;
+
+  try {
+    const stagingStat = await fs.promises.lstat(journal.staging);
+    if (
+      stagingStat.isSymbolicLink() ||
+      stagingStat.isFIFO() ||
+      stagingStat.isSocket() ||
+      stagingStat.isCharacterDevice() ||
+      stagingStat.isBlockDevice()
+    ) {
+      LauncherLogger.error(
+        `Move recovery: staging directory '${journal.staging}' is a symlink or special file. Refusing deletion.`
+      );
+      return false;
+    }
+  } catch (err: any) {
+    LauncherLogger.error(`Move recovery: cannot lstat staging directory '${journal.staging}': ${err.message}`);
+    return false;
+  }
+
+  // Verify staging ownership marker
+  const marker = readStagingMarker(journal.staging);
+  if (
+    !marker ||
+    marker.operationId !== journal.operationId ||
+    marker.source !== journal.source ||
+    marker.target !== journal.target
+  ) {
+    LauncherLogger.warn(
+      `Move recovery: staging directory '${journal.staging}' lacks matching operation ownership marker for operation ${journal.operationId}. Preserving staging directory without deletion.`
+    );
+    return false;
+  }
+
+  // Verify physical ancestry within target or source parent
+  try {
+    const parent = path.dirname(journal.staging);
+    checkPhysicalAncestrySync(parent, journal.staging, { disallowSymlinks: true, enforceOwnership: false });
+  } catch (err: any) {
+    LauncherLogger.error(
+      `Move recovery: staging directory failed physical ancestry check: ${err.message}. Preserving staging directory.`
+    );
+    return false;
+  }
+
+  try {
+    await fs.promises.rm(journal.staging, { recursive: true, force: true });
+    return true;
+  } catch (err: any) {
+    LauncherLogger.warn(`Move recovery: failed to remove staging directory '${journal.staging}': ${err.message}`);
+    return false;
   }
 }
 
@@ -196,6 +265,18 @@ export async function scanDirectoryAsync(dir: string, baseDir: string = dir): Pr
   }
 
   if (fs.existsSync(dir)) {
+    const rootStat = await fs.promises.lstat(dir);
+    if (
+      rootStat.isSymbolicLink() ||
+      rootStat.isFIFO() ||
+      rootStat.isSocket() ||
+      rootStat.isCharacterDevice() ||
+      rootStat.isBlockDevice()
+    ) {
+      throw new Error(
+        `Unsupported file type (symlink or special file) encountered at directory root '${dir}'. Cannot safely move or scan directory.`
+      );
+    }
     await traverse(dir);
   }
 
@@ -208,6 +289,18 @@ export async function scanDirectoryAsync(dir: string, baseDir: string = dir): Pr
 export function scanDirectory(dir: string, baseDir: string = dir): ScannedFile[] {
   let results: ScannedFile[] = [];
   if (!fs.existsSync(dir)) return results;
+  const rootStat = fs.lstatSync(dir);
+  if (
+    rootStat.isSymbolicLink() ||
+    rootStat.isFIFO() ||
+    rootStat.isSocket() ||
+    rootStat.isCharacterDevice() ||
+    rootStat.isBlockDevice()
+  ) {
+    throw new Error(
+      `Unsupported file type (symlink or special file) encountered at directory root '${dir}'. Cannot safely scan directory.`
+    );
+  }
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
@@ -305,12 +398,18 @@ export async function checkSourceDrift(
     return true; // Drift or unreadable
   }
 
-  if (currentInventory.files.length !== originalFiles.length) {
+  const currentPayloadFiles = currentInventory.files.filter(
+    (f) =>
+      f.relativePath !== STAGING_MARKER_FILENAME &&
+      f.relativePath !== MOVE_RECEIPT_FILENAME
+  );
+
+  if (currentPayloadFiles.length !== originalFiles.length) {
     return true;
   }
 
   const originalMap = new Map(originalFiles.map((f) => [f.relativePath, f]));
-  for (const curr of currentInventory.files) {
+  for (const curr of currentPayloadFiles) {
     const orig = originalMap.get(curr.relativePath);
     if (!orig) return true; // new file added
     if (orig.size !== curr.size || Math.abs(orig.mtimeMs - curr.mtimeMs) > 1) {
@@ -419,10 +518,42 @@ export class GameDirectoryManager {
       return { valid: false, reason: "Target directory cannot be a root drive directory." };
     }
 
+    // If target exists on disk, it must not be a symlink or special file
+    if (fs.existsSync(resolvedTarget)) {
+      try {
+        const stat = fs.lstatSync(resolvedTarget);
+        if (
+          stat.isSymbolicLink() ||
+          stat.isFIFO() ||
+          stat.isSocket() ||
+          stat.isCharacterDevice() ||
+          stat.isBlockDevice()
+        ) {
+          return { valid: false, reason: "Target directory cannot be a symbolic link or special file." };
+        }
+        if (!stat.isDirectory()) {
+          return { valid: false, reason: "Target path exists but is not a directory." };
+        }
+      } catch (err: any) {
+        return { valid: false, reason: `Cannot inspect target directory: ${err.message}` };
+      }
+    }
+
+    const canonTarget = getCanonicalDiskPath(resolvedTarget);
+    const parsedCanon = path.parse(canonTarget);
+    if (parsedCanon.root.toLowerCase() === canonTarget.toLowerCase()) {
+      return { valid: false, reason: "Target directory cannot resolve to a root drive directory." };
+    }
+
     // Check relationship with currentPath
     if (currentPath) {
       const resolvedCurrent = path.resolve(currentPath);
-      if (resolvedCurrent.toLowerCase() === resolvedTarget.toLowerCase()) {
+      const isWindows = process.platform === "win32";
+
+      // 1. Lexical comparison
+      const cmpLexCurrent = isWindows ? resolvedCurrent.toLowerCase() : resolvedCurrent;
+      const cmpLexTarget = isWindows ? resolvedTarget.toLowerCase() : resolvedTarget;
+      if (cmpLexCurrent === cmpLexTarget) {
         return { valid: false, reason: "Target directory is the same as the current installation directory." };
       }
 
@@ -433,6 +564,26 @@ export class GameDirectoryManager {
 
       const relToCurrent = path.relative(resolvedTarget, resolvedCurrent);
       if (!relToCurrent.startsWith("..") && !path.isAbsolute(relToCurrent) && relToCurrent !== "") {
+        return { valid: false, reason: "Current installation directory cannot be inside the target directory." };
+      }
+
+      // 2. Physical canonical comparison (handles symlinks, junctions, 8.3 aliases)
+      const canonCurrent = getCanonicalDiskPath(resolvedCurrent);
+      const cmpCanonTarget = isWindows ? canonTarget.toLowerCase() : canonTarget;
+      const cmpCanonCurrent = isWindows ? canonCurrent.toLowerCase() : canonCurrent;
+
+      if (cmpCanonCurrent === cmpCanonTarget) {
+        return { valid: false, reason: "Target directory physically aliases the current installation directory." };
+      }
+
+      const currentPrefix = cmpCanonCurrent.endsWith(path.sep) ? cmpCanonCurrent : cmpCanonCurrent + path.sep;
+      const targetPrefix = cmpCanonTarget.endsWith(path.sep) ? cmpCanonTarget : cmpCanonTarget + path.sep;
+
+      if (cmpCanonTarget.startsWith(currentPrefix)) {
+        return { valid: false, reason: "Target directory cannot be inside the current installation directory." };
+      }
+
+      if (cmpCanonCurrent.startsWith(targetPrefix)) {
         return { valid: false, reason: "Current installation directory cannot be inside the target directory." };
       }
     }
@@ -594,9 +745,17 @@ export class GameDirectoryManager {
       journalData.phase = "copying";
       writeAtomicFileSync(journalPath, JSON.stringify(journalData, null, 2));
 
-      const inventory = await scanDirectoryAsync(source);
-      const totalFiles = inventory.files.length;
-      const totalBytes = inventory.totalBytes;
+      const rawInventory = await scanDirectoryAsync(source);
+      const payloadFiles = rawInventory.files.filter(
+        (f) =>
+          f.relativePath !== STAGING_MARKER_FILENAME &&
+          f.relativePath !== MOVE_RECEIPT_FILENAME
+      );
+      const payloadDirectories = rawInventory.directories.filter(
+        (d) => !path.basename(d).startsWith(".lampas-moving-")
+      );
+      const totalFiles = payloadFiles.length;
+      const totalBytes = payloadFiles.reduce((sum, f) => sum + f.size, 0);
       const sourceHashes = new Map<string, string>();
       let filesCompleted = 0;
       let bytesCompleted = 0;
@@ -611,13 +770,13 @@ export class GameDirectoryManager {
       });
 
       // Recreate all directory structures (including empty directories)
-      for (const dirRel of inventory.directories) {
+      for (const dirRel of payloadDirectories) {
         await fs.promises.mkdir(path.join(staging, dirRel), { recursive: true });
       }
 
       // Copy files with bounded concurrency (concurrency 6)
       await runBoundedPool(
-        inventory.files,
+        payloadFiles,
         async (file) => {
           if (signal?.aborted) {
             throw new Error("Move operation aborted.");
@@ -688,7 +847,7 @@ export class GameDirectoryManager {
       }
 
       // Verify all empty directories exist in staging
-      for (const dirRel of inventory.directories) {
+      for (const dirRel of payloadDirectories) {
         const stagedDirPath = path.join(staging, dirRel);
         if (!fs.existsSync(stagedDirPath)) {
           throw new Error(`Verification failed: missing directory ${dirRel} in staging.`);
@@ -699,7 +858,7 @@ export class GameDirectoryManager {
 
       // Verify destination readback with bounded concurrency (concurrency 4)
       await runBoundedPool(
-        inventory.files,
+        payloadFiles,
         async (file) => {
           if (signal?.aborted) {
             throw new Error("Move operation aborted.");
@@ -721,7 +880,7 @@ export class GameDirectoryManager {
       );
 
       // 4. Check for source drift before finalizing
-      const drifted = await checkSourceDrift(source, inventory.files);
+      const drifted = await checkSourceDrift(source, payloadFiles);
       if (drifted) {
         throw new Error("Source directory modified during move (source drift detected). Operation aborted to preserve data.");
       }
@@ -735,8 +894,8 @@ export class GameDirectoryManager {
         staging,
         fileCount: totalFiles,
         totalBytes,
-        directories: inventory.directories,
-        files: inventory.files.map((f) => ({
+        directories: payloadDirectories,
+        files: payloadFiles.map((f) => ({
           relativePath: f.relativePath,
           size: f.size,
           sha256: sourceHashes.get(f.relativePath) || "",
@@ -797,10 +956,16 @@ export class GameDirectoryManager {
         LauncherLogger.warn(`Failed to remove old game directory after move: ${cleanErr.message}`);
       }
 
-      // 9. Clean receipt from target and remove journal
+      // 9. Clean receipt and staging marker from target and remove journal
+      const targetMarkerPath = path.join(target, STAGING_MARKER_FILENAME);
       try {
         if (fs.existsSync(targetReceiptPath)) {
           await fs.promises.unlink(targetReceiptPath);
+        }
+      } catch {}
+      try {
+        if (fs.existsSync(targetMarkerPath)) {
+          await fs.promises.unlink(targetMarkerPath);
         }
       } catch {}
 
@@ -822,11 +987,7 @@ export class GameDirectoryManager {
       return { success: true, gameDir: target, previousGameDir: source };
     } catch (err: any) {
       if (journalData.phase !== "finalizing" && journalData.phase !== "cleaning") {
-        if (fs.existsSync(staging)) {
-          try {
-            await fs.promises.rm(staging, { recursive: true, force: true });
-          } catch {}
-        }
+        await authorizeAndRemoveStaging(journalData);
         if (fs.existsSync(journalPath)) {
           try {
             await fs.promises.unlink(journalPath);
@@ -872,14 +1033,15 @@ export class GameDirectoryManager {
     if (targetExists && !sourceExists) {
       ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
       if (stagingExists) {
-        try {
-          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
-          await fs.promises.rm(journal.staging, { recursive: true, force: true });
-        } catch {}
+        await authorizeAndRemoveStaging(journal);
       }
       try {
         const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
         if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+      } catch {}
+      try {
+        const markerPath = path.join(journal.target, STAGING_MARKER_FILENAME);
+        if (fs.existsSync(markerPath)) await fs.promises.unlink(markerPath);
       } catch {}
       try {
         await fs.promises.unlink(journalPath);
@@ -914,22 +1076,40 @@ export class GameDirectoryManager {
 
       // Target is 100% verified complete
       ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
+
+      // Before deleting source, verify physical distinctness
       if (sourceExists) {
+        const canonSource = getCanonicalDiskPath(journal.source);
+        const canonTarget = getCanonicalDiskPath(journal.target);
+        const isWindows = process.platform === "win32";
+        const cmpSource = isWindows ? canonSource.toLowerCase() : canonSource;
+        const cmpTarget = isWindows ? canonTarget.toLowerCase() : canonTarget;
+        if (cmpSource === cmpTarget) {
+          throw new Error("Recovery safety violation: target directory physically aliases source directory. Aborting source deletion.");
+        }
+        const sourcePrefix = cmpSource.endsWith(path.sep) ? cmpSource : cmpSource + path.sep;
+        const targetPrefix = cmpTarget.endsWith(path.sep) ? cmpTarget : cmpTarget + path.sep;
+        if (cmpTarget.startsWith(sourcePrefix) || cmpSource.startsWith(targetPrefix)) {
+          throw new Error("Recovery safety violation: target directory and source directory physically nest inside each other. Aborting source deletion.");
+        }
+
         try {
           await fs.promises.rm(journal.source, { recursive: true, force: true });
         } catch (err: any) {
           LauncherLogger.warn(`Move recovery: failed to remove old source directory: ${err.message}`);
         }
       }
+
       if (stagingExists) {
-        try {
-          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
-          await fs.promises.rm(journal.staging, { recursive: true, force: true });
-        } catch {}
+        await authorizeAndRemoveStaging(journal);
       }
       try {
         const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
         if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+      } catch {}
+      try {
+        const markerPath = path.join(journal.target, STAGING_MARKER_FILENAME);
+        if (fs.existsSync(markerPath)) await fs.promises.unlink(markerPath);
       } catch {}
       try {
         await fs.promises.unlink(journalPath);
@@ -947,22 +1127,40 @@ export class GameDirectoryManager {
           await verifyTargetCompleteness(journal.target, receipt, journal.source);
 
           ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
+
+          // Before deleting source, verify physical distinctness
           if (sourceExists) {
+            const canonSource = getCanonicalDiskPath(journal.source);
+            const canonTarget = getCanonicalDiskPath(journal.target);
+            const isWindows = process.platform === "win32";
+            const cmpSource = isWindows ? canonSource.toLowerCase() : canonSource;
+            const cmpTarget = isWindows ? canonTarget.toLowerCase() : canonTarget;
+            if (cmpSource === cmpTarget) {
+              throw new Error("Recovery safety violation: target directory physically aliases source directory. Aborting source deletion.");
+            }
+            const sourcePrefix = cmpSource.endsWith(path.sep) ? cmpSource : cmpSource + path.sep;
+            const targetPrefix = cmpTarget.endsWith(path.sep) ? cmpTarget : cmpTarget + path.sep;
+            if (cmpTarget.startsWith(sourcePrefix) || cmpSource.startsWith(targetPrefix)) {
+              throw new Error("Recovery safety violation: target directory and source directory physically nest inside each other. Aborting source deletion.");
+            }
+
             try {
               await fs.promises.rm(journal.source, { recursive: true, force: true });
             } catch (err: any) {
               LauncherLogger.warn(`Move recovery: failed to remove old source: ${err.message}`);
             }
           }
+
           if (stagingExists) {
-            try {
-              checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
-              await fs.promises.rm(journal.staging, { recursive: true, force: true });
-            } catch {}
+            await authorizeAndRemoveStaging(journal);
           }
           try {
             const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
             if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+          } catch {}
+          try {
+            const markerPath = path.join(journal.target, STAGING_MARKER_FILENAME);
+            if (fs.existsSync(markerPath)) await fs.promises.unlink(markerPath);
           } catch {}
           try {
             await fs.promises.unlink(journalPath);
@@ -994,7 +1192,7 @@ export class GameDirectoryManager {
         await verifyTargetCompleteness(journal.staging, stagingReceipt, journal.source);
 
         try {
-          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
+          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging, { disallowSymlinks: true, enforceOwnership: false });
           await fs.promises.rename(journal.staging, journal.target);
         } catch (renameErr: any) {
           LauncherLogger.error(`Move recovery: failed to promote staging to target: ${renameErr.message}`);
@@ -1011,16 +1209,37 @@ export class GameDirectoryManager {
         }
 
         ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
+
+        // Before deleting source, verify physical distinctness
         if (sourceExists) {
+          const canonSource = getCanonicalDiskPath(journal.source);
+          const canonTarget = getCanonicalDiskPath(journal.target);
+          const isWindows = process.platform === "win32";
+          const cmpSource = isWindows ? canonSource.toLowerCase() : canonSource;
+          const cmpTarget = isWindows ? canonTarget.toLowerCase() : canonTarget;
+          if (cmpSource === cmpTarget) {
+            throw new Error("Recovery safety violation: target directory physically aliases source directory. Aborting source deletion.");
+          }
+          const sourcePrefix = cmpSource.endsWith(path.sep) ? cmpSource : cmpSource + path.sep;
+          const targetPrefix = cmpTarget.endsWith(path.sep) ? cmpTarget : cmpTarget + path.sep;
+          if (cmpTarget.startsWith(sourcePrefix) || cmpSource.startsWith(targetPrefix)) {
+            throw new Error("Recovery safety violation: target directory and source directory physically nest inside each other. Aborting source deletion.");
+          }
+
           try {
             await fs.promises.rm(journal.source, { recursive: true, force: true });
           } catch (err: any) {
             LauncherLogger.warn(`Move recovery: failed to remove old source directory: ${err.message}`);
           }
         }
+
         try {
           const receiptPath = path.join(journal.target, MOVE_RECEIPT_FILENAME);
           if (fs.existsSync(receiptPath)) await fs.promises.unlink(receiptPath);
+        } catch {}
+        try {
+          const markerPath = path.join(journal.target, STAGING_MARKER_FILENAME);
+          if (fs.existsSync(markerPath)) await fs.promises.unlink(markerPath);
         } catch {}
         try {
           await fs.promises.unlink(journalPath);
@@ -1039,24 +1258,7 @@ export class GameDirectoryManager {
     // Case 4: Earlier phases ("preparing", "renaming", "copying", "verifying")
     // Staging was not finalized or verified. Source is preserved intact.
     if (stagingExists) {
-      const marker = readStagingMarker(journal.staging);
-      if (
-        !marker ||
-        marker.operationId !== journal.operationId ||
-        marker.source !== journal.source ||
-        marker.target !== journal.target
-      ) {
-        LauncherLogger.warn(
-          `Move recovery: staging directory '${journal.staging}' lacks matching operation ownership marker for operation ${journal.operationId}. Preserving staging directory without deletion.`
-        );
-      } else {
-        try {
-          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
-          await fs.promises.rm(journal.staging, { recursive: true, force: true });
-        } catch (err: any) {
-          LauncherLogger.warn(`Move recovery: failed to purge staging directory: ${err.message}`);
-        }
-      }
+      await authorizeAndRemoveStaging(journal);
     }
     try {
       await fs.promises.unlink(journalPath);
@@ -1070,14 +1272,92 @@ async function verifyTargetCompleteness(
   receipt: MoveReceipt,
   sourceDir?: string
 ): Promise<void> {
-  // 1. Receipt schema check: must be version 2 with valid files array
+  // 1. Receipt schema and integrity validation (receipt is untrusted until proven valid)
   if (!receipt || typeof receipt !== "object" || receipt.version !== 2 || !Array.isArray(receipt.files)) {
     throw new Error(
       "Recovery aborted: move receipt lacks verified per-file inventory evidence (legacy or incomplete receipt); preserving source."
     );
   }
 
-  // 2. Scan target directory
+  if (!Array.isArray(receipt.directories)) {
+    throw new Error("Recovery aborted: move receipt directories field is missing or not an array; preserving source.");
+  }
+
+  if (typeof receipt.fileCount !== "number" || receipt.fileCount < 0 || !Number.isInteger(receipt.fileCount)) {
+    throw new Error("Recovery aborted: move receipt contains invalid fileCount; preserving source.");
+  }
+
+  if (typeof receipt.totalBytes !== "number" || receipt.totalBytes < 0) {
+    throw new Error("Recovery aborted: move receipt contains invalid totalBytes; preserving source.");
+  }
+
+  if (receipt.files.length !== receipt.fileCount) {
+    throw new Error(
+      `Recovery aborted: move receipt fileCount mismatch (declared ${receipt.fileCount}, found ${receipt.files.length} entries); preserving source.`
+    );
+  }
+
+  // Validate every receipt file entry, check duplicates, validate hash format and totalBytes
+  const receiptFileKeys = new Set<string>();
+  let calculatedReceiptBytes = 0;
+  for (const entry of receipt.files) {
+    if (!entry || typeof entry !== "object") {
+      throw new Error("Recovery aborted: receipt contains malformed file entry; preserving source.");
+    }
+    if (!entry.relativePath || !isSafeRelativePath(entry.relativePath)) {
+      throw new Error(`Recovery aborted: receipt contains unsafe relative file path '${entry.relativePath}'; preserving source.`);
+    }
+    if (typeof entry.size !== "number" || entry.size < 0 || !Number.isInteger(entry.size)) {
+      throw new Error(`Recovery aborted: receipt contains invalid file size for '${entry.relativePath}'; preserving source.`);
+    }
+    if (!isValidDigestString(entry.sha256, "sha256")) {
+      throw new Error(`Recovery aborted: receipt contains invalid sha256 digest for '${entry.relativePath}'; preserving source.`);
+    }
+    const key = normalizePathKey(entry.relativePath);
+    if (receiptFileKeys.has(key)) {
+      throw new Error(`Recovery aborted: receipt contains duplicate file entry '${entry.relativePath}'; preserving source.`);
+    }
+    receiptFileKeys.add(key);
+    calculatedReceiptBytes += entry.size;
+  }
+
+  if (calculatedReceiptBytes !== receipt.totalBytes) {
+    throw new Error(
+      `Recovery aborted: receipt totalBytes mismatch (declared ${receipt.totalBytes}, sum of files ${calculatedReceiptBytes}); preserving source.`
+    );
+  }
+
+  // Validate directory entries in receipt
+  const receiptDirKeys = new Set<string>();
+  for (const dirRel of receipt.directories) {
+    if (!dirRel || !isSafeRelativePath(dirRel)) {
+      throw new Error(`Recovery aborted: receipt contains unsafe directory path '${dirRel}'; preserving source.`);
+    }
+    const key = normalizePathKey(dirRel);
+    if (receiptDirKeys.has(key)) {
+      throw new Error(`Recovery aborted: receipt contains duplicate directory entry '${dirRel}'; preserving source.`);
+    }
+    receiptDirKeys.add(key);
+  }
+
+  // 2. Physical and canonical distinctness check between target and source
+  if (sourceDir && fs.existsSync(sourceDir)) {
+    const canonTarget = getCanonicalDiskPath(targetDir);
+    const canonSource = getCanonicalDiskPath(sourceDir);
+    const isWindows = process.platform === "win32";
+    const cmpTarget = isWindows ? canonTarget.toLowerCase() : canonTarget;
+    const cmpSource = isWindows ? canonSource.toLowerCase() : canonSource;
+    if (cmpTarget === cmpSource) {
+      throw new Error("Recovery safety violation: target directory physically aliases source directory. Aborting recovery.");
+    }
+    const sourcePrefix = cmpSource.endsWith(path.sep) ? cmpSource : cmpSource + path.sep;
+    const targetPrefix = cmpTarget.endsWith(path.sep) ? cmpTarget : cmpTarget + path.sep;
+    if (cmpTarget.startsWith(sourcePrefix) || cmpSource.startsWith(targetPrefix)) {
+      throw new Error("Recovery safety violation: target directory and source directory physically nest inside each other. Aborting recovery.");
+    }
+  }
+
+  // 3. Scan target directory
   let targetInventory: ScannedDirectoryInventory;
   try {
     targetInventory = await scanDirectoryAsync(targetDir);
@@ -1090,7 +1370,6 @@ async function verifyTargetCompleteness(
   const payloadFiles = targetInventory.files.filter(
     (f) =>
       f.relativePath !== MOVE_RECEIPT_FILENAME &&
-      f.relativePath !== ".lampas_move_receipt.json" &&
       f.relativePath !== STAGING_MARKER_FILENAME
   );
   const payloadBytes = payloadFiles.reduce((sum, f) => sum + f.size, 0);
@@ -1109,10 +1388,20 @@ async function verifyTargetCompleteness(
     );
   }
 
-  // Exact per-file check
-  const targetMap = new Map(payloadFiles.map((f) => [f.relativePath, f]));
+  // Build target file map with normalizePathKey
+  const targetMap = new Map<string, ScannedFile>();
+  for (const f of payloadFiles) {
+    const key = normalizePathKey(f.relativePath);
+    if (targetMap.has(key)) {
+      throw new Error(`Recovery aborted: target directory contains duplicate/colliding file '${f.relativePath}'. Source directory has been preserved.`);
+    }
+    targetMap.set(key, f);
+  }
+
+  // Exact bidirectional per-file check
   for (const expected of receipt.files) {
-    const targetFile = targetMap.get(expected.relativePath);
+    const key = normalizePathKey(expected.relativePath);
+    const targetFile = targetMap.get(key);
     if (!targetFile) {
       throw new Error(
         `Recovery aborted: target directory is missing expected file '${expected.relativePath}'. Source directory has been preserved.`
@@ -1131,31 +1420,58 @@ async function verifyTargetCompleteness(
     }
   }
 
-  // Verify all directories (including empty directories)
-  if (Array.isArray(receipt.directories)) {
-    for (const dirRel of receipt.directories) {
-      const fullDir = path.join(targetDir, dirRel);
-      if (!fs.existsSync(fullDir)) {
-        throw new Error(
-          `Recovery aborted: missing expected directory '${dirRel}' in target directory. Source directory has been preserved.`
-        );
-      }
-      try {
-        const stat = fs.statSync(fullDir);
-        if (!stat.isDirectory()) {
-          throw new Error(
-            `Recovery aborted: expected directory path '${dirRel}' in target is not a directory. Source directory has been preserved.`
-          );
-        }
-      } catch (err: any) {
-        throw new Error(
-          `Recovery aborted: cannot inspect directory '${dirRel}' in target: ${err.message}. Source directory has been preserved.`
-        );
-      }
+  for (const targetFile of payloadFiles) {
+    const key = normalizePathKey(targetFile.relativePath);
+    if (!receiptFileKeys.has(key)) {
+      throw new Error(
+        `Recovery aborted: target directory contains unexpected file '${targetFile.relativePath}' not recorded in receipt. Source directory has been preserved.`
+      );
     }
   }
 
-  // 3. Compare against preserved source if source exists on disk
+  // Verify all directories in target
+  const targetDirKeys = new Set<string>();
+  for (const dirRel of targetInventory.directories) {
+    targetDirKeys.add(normalizePathKey(dirRel));
+  }
+
+  for (const expectedDir of receipt.directories) {
+    const fullDir = path.join(targetDir, expectedDir);
+    if (!fs.existsSync(fullDir)) {
+      throw new Error(
+        `Recovery aborted: missing expected directory '${expectedDir}' in target directory. Source directory has been preserved.`
+      );
+    }
+    try {
+      const stat = fs.statSync(fullDir);
+      if (!stat.isDirectory()) {
+        throw new Error(
+          `Recovery aborted: expected directory path '${expectedDir}' in target is not a directory. Source directory has been preserved.`
+        );
+      }
+    } catch (err: any) {
+      throw new Error(
+        `Recovery aborted: cannot inspect directory '${expectedDir}' in target: ${err.message}. Source directory has been preserved.`
+      );
+    }
+  }
+
+  for (const dirRel of receipt.directories) {
+    const key = normalizePathKey(dirRel);
+    if (!targetDirKeys.has(key)) {
+      throw new Error(
+        `Recovery aborted: missing expected directory '${dirRel}' in target directory. Source directory has been preserved.`
+      );
+    }
+  }
+
+  if (targetDirKeys.size !== receiptDirKeys.size) {
+    throw new Error(
+      `Recovery aborted: target directory structure mismatch (expected ${receiptDirKeys.size} directories, found ${targetDirKeys.size}). Source directory has been preserved.`
+    );
+  }
+
+  // 4. Compare against preserved source if source exists on disk
   if (sourceDir && fs.existsSync(sourceDir)) {
     let sourceInventory: ScannedDirectoryInventory;
     try {
@@ -1169,7 +1485,6 @@ async function verifyTargetCompleteness(
     const sourcePayloadFiles = sourceInventory.files.filter(
       (f) =>
         f.relativePath !== MOVE_RECEIPT_FILENAME &&
-        f.relativePath !== ".lampas_move_receipt.json" &&
         f.relativePath !== STAGING_MARKER_FILENAME
     );
 
@@ -1179,9 +1494,18 @@ async function verifyTargetCompleteness(
       );
     }
 
-    const sourceMap = new Map(sourcePayloadFiles.map((f) => [f.relativePath, f]));
+    const sourceMap = new Map<string, ScannedFile>();
+    for (const f of sourcePayloadFiles) {
+      const key = normalizePathKey(f.relativePath);
+      if (sourceMap.has(key)) {
+        throw new Error(`Recovery aborted: source directory contains duplicate/colliding file '${f.relativePath}'. Source directory has been preserved.`);
+      }
+      sourceMap.set(key, f);
+    }
+
     for (const expected of receipt.files) {
-      const srcFile = sourceMap.get(expected.relativePath);
+      const key = normalizePathKey(expected.relativePath);
+      const srcFile = sourceMap.get(key);
       if (!srcFile) {
         throw new Error(
           `Recovery aborted: source directory inventory changed (missing '${expected.relativePath}'). Source directory has been preserved.`
@@ -1200,14 +1524,32 @@ async function verifyTargetCompleteness(
       }
     }
 
-    if (Array.isArray(receipt.directories)) {
-      for (const dirRel of receipt.directories) {
-        const fullDir = path.join(sourceDir, dirRel);
-        if (!fs.existsSync(fullDir)) {
-          throw new Error(
-            `Recovery aborted: directory structure in source changed after interruption (missing '${dirRel}'). Source directory has been preserved.`
-          );
-        }
+    for (const srcFile of sourcePayloadFiles) {
+      const key = normalizePathKey(srcFile.relativePath);
+      if (!receiptFileKeys.has(key)) {
+        throw new Error(
+          `Recovery aborted: source directory contains unexpected file '${srcFile.relativePath}' after interruption. Source directory has been preserved.`
+        );
+      }
+    }
+
+    // Source directory drift check (detects new empty directories added to source!)
+    const sourceDirKeys = new Set<string>();
+    for (const dirRel of sourceInventory.directories) {
+      sourceDirKeys.add(normalizePathKey(dirRel));
+    }
+
+    if (sourceDirKeys.size !== receiptDirKeys.size) {
+      throw new Error(
+        `Recovery aborted: source directory structure changed after interruption (expected ${receiptDirKeys.size} directories, found ${sourceDirKeys.size}). Source directory has been preserved.`
+      );
+    }
+
+    for (const key of sourceDirKeys) {
+      if (!receiptDirKeys.has(key)) {
+        throw new Error(
+          `Recovery aborted: source directory contains unexpected directory after interruption. Source directory has been preserved.`
+        );
       }
     }
   }
@@ -1273,7 +1615,65 @@ export function validateMoveJournal(
   const resolvedConfiguredGame = path.resolve(configuredGameDir);
   const homeDir = path.resolve(os.homedir());
 
-  // Check roots
+  // If roots exist, reject symlinks and special files
+  if (fs.existsSync(resolvedTarget)) {
+    try {
+      const stat = fs.lstatSync(resolvedTarget);
+      if (
+        stat.isSymbolicLink() ||
+        stat.isFIFO() ||
+        stat.isSocket() ||
+        stat.isCharacterDevice() ||
+        stat.isBlockDevice()
+      ) {
+        return { valid: false, reason: "Target directory cannot be a symbolic link or special file" };
+      }
+      if (!stat.isDirectory()) {
+        return { valid: false, reason: "Target path exists but is not a directory" };
+      }
+    } catch (err: any) {
+      return { valid: false, reason: `Cannot inspect target directory: ${err.message}` };
+    }
+  }
+
+  if (fs.existsSync(resolvedSource)) {
+    try {
+      const stat = fs.lstatSync(resolvedSource);
+      if (
+        stat.isSymbolicLink() ||
+        stat.isFIFO() ||
+        stat.isSocket() ||
+        stat.isCharacterDevice() ||
+        stat.isBlockDevice()
+      ) {
+        return { valid: false, reason: "Source directory cannot be a symbolic link or special file" };
+      }
+      if (!stat.isDirectory()) {
+        return { valid: false, reason: "Source path exists but is not a directory" };
+      }
+    } catch (err: any) {
+      return { valid: false, reason: `Cannot inspect source directory: ${err.message}` };
+    }
+  }
+
+  if (fs.existsSync(resolvedStaging)) {
+    try {
+      const stat = fs.lstatSync(resolvedStaging);
+      if (
+        stat.isSymbolicLink() ||
+        stat.isFIFO() ||
+        stat.isSocket() ||
+        stat.isCharacterDevice() ||
+        stat.isBlockDevice()
+      ) {
+        return { valid: false, reason: "Staging directory cannot be a symbolic link or special file" };
+      }
+    } catch (err: any) {
+      return { valid: false, reason: `Cannot inspect staging directory: ${err.message}` };
+    }
+  }
+
+  // Check lexical roots
   const isWindows = process.platform === "win32";
   const sourceParsed = path.parse(resolvedSource);
   const targetParsed = path.parse(resolvedTarget);
@@ -1287,7 +1687,20 @@ export function validateMoveJournal(
     return { valid: false, reason: "Source, target, or staging cannot be a filesystem root directory" };
   }
 
-  // Source and target disjointness
+  // Check canonical roots
+  const canonSource = getCanonicalDiskPath(resolvedSource);
+  const canonTarget = getCanonicalDiskPath(resolvedTarget);
+  const canonStaging = getCanonicalDiskPath(resolvedStaging);
+
+  if (
+    path.parse(canonSource).root.toLowerCase() === canonSource.toLowerCase() ||
+    path.parse(canonTarget).root.toLowerCase() === canonTarget.toLowerCase() ||
+    path.parse(canonStaging).root.toLowerCase() === canonStaging.toLowerCase()
+  ) {
+    return { valid: false, reason: "Source, target, or staging cannot resolve to a filesystem root directory" };
+  }
+
+  // 1. Lexical source and target disjointness
   const cmpSource = isWindows ? resolvedSource.toLowerCase() : resolvedSource;
   const cmpTarget = isWindows ? resolvedTarget.toLowerCase() : resolvedTarget;
   if (cmpSource === cmpTarget) {
@@ -1299,6 +1712,20 @@ export function validateMoveJournal(
 
   if (cmpTarget.startsWith(sourcePrefix) || cmpSource.startsWith(targetPrefix)) {
     return { valid: false, reason: "Source and target directories cannot be nested inside each other" };
+  }
+
+  // 2. Physical canonical source and target disjointness
+  const cmpCanonSource = isWindows ? canonSource.toLowerCase() : canonSource;
+  const cmpCanonTarget = isWindows ? canonTarget.toLowerCase() : canonTarget;
+  if (cmpCanonSource === cmpCanonTarget) {
+    return { valid: false, reason: "Source and target directories physically alias the same directory" };
+  }
+
+  const canonSourcePrefix = cmpCanonSource.endsWith(path.sep) ? cmpCanonSource : cmpCanonSource + path.sep;
+  const canonTargetPrefix = cmpCanonTarget.endsWith(path.sep) ? cmpCanonTarget : cmpCanonTarget + path.sep;
+
+  if (cmpCanonTarget.startsWith(canonSourcePrefix) || cmpCanonSource.startsWith(canonTargetPrefix)) {
+    return { valid: false, reason: "Source and target directories cannot physically nest inside each other" };
   }
 
   // Staging must strictly be within targetParent or sourceParent
@@ -1328,7 +1755,7 @@ export function validateMoveJournal(
 
   // Physical ancestry check
   try {
-    checkPhysicalAncestrySync(stagingParent, resolvedStaging);
+    checkPhysicalAncestrySync(stagingParent, resolvedStaging, { disallowSymlinks: true, enforceOwnership: false });
   } catch (ancestryErr: any) {
     return {
       valid: false,
@@ -1341,7 +1768,20 @@ export function validateMoveJournal(
   const cmpUserData = isWindows ? resolvedUserData.toLowerCase() : resolvedUserData;
   const cmpHome = isWindows ? homeDir.toLowerCase() : homeDir;
 
-  if (cmpStaging === cmpSource || cmpStaging === cmpTarget || cmpStaging === cmpUserData || cmpStaging === cmpHome) {
+  const cmpCanonStaging = isWindows ? canonStaging.toLowerCase() : canonStaging;
+  const cmpCanonUserData = isWindows ? getCanonicalDiskPath(resolvedUserData).toLowerCase() : getCanonicalDiskPath(resolvedUserData);
+  const cmpCanonHome = isWindows ? getCanonicalDiskPath(homeDir).toLowerCase() : getCanonicalDiskPath(homeDir);
+
+  if (
+    cmpStaging === cmpSource ||
+    cmpStaging === cmpTarget ||
+    cmpStaging === cmpUserData ||
+    cmpStaging === cmpHome ||
+    cmpCanonStaging === cmpCanonSource ||
+    cmpCanonStaging === cmpCanonTarget ||
+    cmpCanonStaging === cmpCanonUserData ||
+    cmpCanonStaging === cmpCanonHome
+  ) {
     return { valid: false, reason: "Staging directory collides with critical system/user directory" };
   }
 
