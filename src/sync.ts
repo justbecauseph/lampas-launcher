@@ -45,9 +45,11 @@ import {
   resolveAndContainPath,
   checkPhysicalAncestry,
   checkPhysicalAncestrySync,
+  normalizePathKey,
+  assertSubordinateRoot,
 } from "./path-policy";
 
-export { isSafeRelativePath, isPathProtected, sanitizeInstallationState };
+export { isSafeRelativePath, isPathProtected, sanitizeInstallationState, normalizePathKey, assertSubordinateRoot };
 
 export class LauncherSync {
   static async syncClient(
@@ -172,6 +174,10 @@ export class LauncherSync {
     if (!fs.existsSync(gameDir)) {
       fs.mkdirSync(gameDir, { recursive: true });
     }
+    assertSubordinateRoot(gameDir, stateDir);
+    assertSubordinateRoot(gameDir, cacheDir);
+    assertSubordinateRoot(gameDir, path.join(gameDir, "mods"));
+
     if (!fs.existsSync(cacheDir)) {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
@@ -213,9 +219,10 @@ export class LauncherSync {
       }
     }
 
+    // Index desired files by canonical platform-aware key (case-folding on Windows, case-sensitive on POSIX)
     const desiredFilesMap = new Map<string, any>();
     for (const f of manifestFiles) {
-      desiredFilesMap.set(f.path, f);
+      desiredFilesMap.set(normalizePathKey(f.path), f);
     }
 
     const syncGenerationId = `gen-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
@@ -291,31 +298,60 @@ export class LauncherSync {
 
     const stagedPathsSet = new Set(toDownload.map((f) => f.path));
 
+    // Gather all custom client mod filenames (enabled and disabled)
+    const customModFilenames = new Set(
+      (config.customClientMods || []).flatMap((mod) => [
+        mod.filename.toLowerCase(),
+        mod.filename.toLowerCase() + ".disabled",
+      ])
+    );
+
     // Identify obsolete managed files from previous state AND unmanifested mods on disk
     const toDeleteSet = new Set<string>();
     for (const [prevPath, info] of Object.entries(prevState.files)) {
-      if (info.policy === "MANAGED" && !desiredFilesMap.has(prevPath) && !isPathProtected(prevPath)) {
+      const prevKey = normalizePathKey(prevPath);
+      const prevBasename = path.basename(prevPath).toLowerCase();
+      const isCustomMod =
+        customModFilenames.has(prevBasename) ||
+        customModFilenames.has(prevBasename.replace(/\.disabled$/, ""));
+
+      if (
+        info.policy === "MANAGED" &&
+        !desiredFilesMap.has(prevKey) &&
+        !isPathProtected(prevPath) &&
+        !isCustomMod
+      ) {
         try {
-          resolveAndContainPath(gameDir, prevPath);
+          const fullPath = resolveAndContainPath(gameDir, prevPath);
+          checkPhysicalAncestrySync(gameDir, fullPath, { enforceOwnership: true });
           toDeleteSet.add(prevPath);
         } catch {
-          LauncherLogger.warn(`[Sync] Skipping uncontained obsolete candidate: ${prevPath}`);
+          LauncherLogger.warn(`[Sync] Skipping uncontained/protected obsolete candidate: ${prevPath}`);
         }
       }
     }
 
     // Direct disk reconciliation: preserve explicitly imported local mods.
     const modsDir = path.join(gameDir, "mods");
-    const customModFilenames = new Set((config.customClientMods || []).map((mod) => mod.filename.toLowerCase()));
     if (fs.existsSync(modsDir)) {
       try {
         const diskFiles = fs.readdirSync(modsDir);
         for (const file of diskFiles) {
-          if (file.toLowerCase().endsWith(".jar")) {
+          if (file.toLowerCase().endsWith(".jar") || file.toLowerCase().endsWith(".jar.disabled")) {
             const relModPath = `mods/${file}`;
-            if (!desiredFilesMap.has(relModPath) && !isPathProtected(relModPath) && !customModFilenames.has(file.toLowerCase())) {
+            const modKey = normalizePathKey(relModPath);
+            const isCustom =
+              customModFilenames.has(file.toLowerCase()) ||
+              customModFilenames.has(file.toLowerCase().replace(/\.disabled$/, ""));
+
+            if (
+              !desiredFilesMap.has(modKey) &&
+              !isPathProtected(relModPath) &&
+              !isCustom
+            ) {
               try {
-                resolveAndContainPath(gameDir, relModPath);
+                const fullPath = resolveAndContainPath(gameDir, relModPath);
+                checkPhysicalAncestrySync(gameDir, fullPath, { enforceOwnership: true });
                 toDeleteSet.add(relModPath);
               } catch {
                 LauncherLogger.warn(`[Sync] Skipping uncontained mod candidate: ${relModPath}`);
@@ -329,6 +365,16 @@ export class LauncherSync {
     }
 
     const toDelete = Array.from(toDeleteSet);
+
+    // Integrity check: verify that NO desired physical file appears in obsolete deletion plan
+    for (const delPath of toDelete) {
+      const delKey = normalizePathKey(delPath);
+      if (desiredFilesMap.has(delKey)) {
+        throw new Error(
+          `Integrity violation: desired file '${delPath}' was classified as obsolete and scheduled for deletion.`
+        );
+      }
+    }
 
     LauncherLogger.info(
       `[Sync] Synchronizing client: ${toDownload.length} to download, ${upToDateCount} up-to-date, ${toDelete.length} obsolete to delete.`
@@ -445,7 +491,18 @@ export class LauncherSync {
         validateDigestString(file.hashes.sha256, "sha256");
         const cachePath = path.join(cacheDir, file.hashes.sha256.substring(0, 2), file.hashes.sha256);
         const destPath = resolveAndContainPath(gameDir, file.path);
-        await checkPhysicalAncestry(gameDir, destPath);
+        await checkPhysicalAncestry(gameDir, destPath, { enforceOwnership: true });
+
+        // If destination exists, break pre-existing symlink or hard-link squatting before atomic promotion
+        if (fs.existsSync(destPath)) {
+          try {
+            const lstat = await fs.promises.lstat(destPath);
+            if (lstat.isSymbolicLink() || (lstat.nlink && lstat.nlink > 1)) {
+              await fs.promises.unlink(destPath);
+            }
+          } catch {}
+        }
+
         await copyAtomic(cachePath, destPath);
         LauncherLogger.info(`  ✓ [Replaced] ${file.path}`);
         const outcome = transferOutcomes.get(file.path);
@@ -460,7 +517,7 @@ export class LauncherSync {
     for (const relPath of toDelete) {
       try {
         const fullPath = resolveAndContainPath(gameDir, relPath);
-        checkPhysicalAncestrySync(gameDir, fullPath);
+        checkPhysicalAncestrySync(gameDir, fullPath, { enforceOwnership: true });
         if (fs.existsSync(fullPath)) {
           const lstat = fs.lstatSync(fullPath);
           if (lstat.isSymbolicLink()) {

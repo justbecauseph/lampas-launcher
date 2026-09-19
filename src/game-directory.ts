@@ -34,14 +34,51 @@ export interface ScannedDirectoryInventory {
 }
 
 export const MOVE_RECEIPT_FILENAME = ".lampas_move_receipt.json";
+export const STAGING_MARKER_FILENAME = ".lampas_staging_marker.json";
+
+export interface StagingMarker {
+  operationId: string;
+  source: string;
+  target: string;
+  staging: string;
+  timestamp: string;
+}
+
+export function writeStagingMarker(stagingDir: string, marker: StagingMarker): void {
+  const markerPath = path.join(stagingDir, STAGING_MARKER_FILENAME);
+  writeAtomicFileSync(markerPath, JSON.stringify(marker, null, 2));
+}
+
+export function readStagingMarker(stagingDir: string): StagingMarker | null {
+  try {
+    const markerPath = path.join(stagingDir, STAGING_MARKER_FILENAME);
+    if (!fs.existsSync(markerPath)) return null;
+    const data = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+    if (data && typeof data === "object" && typeof data.operationId === "string") {
+      return data as StagingMarker;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export interface MoveReceiptFileEntry {
+  relativePath: string;
+  size: number;
+  sha256: string;
+}
 
 export interface MoveReceipt {
+  version: 2;
   operationId: string;
   source: string;
   target: string;
   staging: string;
   fileCount: number;
   totalBytes: number;
+  directories: string[];
+  files: MoveReceiptFileEntry[];
   stagingVerified: boolean;
   timestamp: string;
 }
@@ -565,6 +602,13 @@ export class GameDirectoryManager {
       let bytesCompleted = 0;
 
       await fs.promises.mkdir(staging, { recursive: true });
+      writeStagingMarker(staging, {
+        operationId: operationNonce,
+        source,
+        target,
+        staging,
+        timestamp: new Date().toISOString(),
+      });
 
       // Recreate all directory structures (including empty directories)
       for (const dirRel of inventory.directories) {
@@ -636,8 +680,11 @@ export class GameDirectoryManager {
       });
 
       const stagedInventory = await scanDirectoryAsync(staging);
-      if (stagedInventory.files.length !== totalFiles) {
-        throw new Error(`Verification failed: Expected ${totalFiles} files, but staging has ${stagedInventory.files.length} files.`);
+      const stagedPayloadFiles = stagedInventory.files.filter(
+        (f) => f.relativePath !== STAGING_MARKER_FILENAME && f.relativePath !== MOVE_RECEIPT_FILENAME
+      );
+      if (stagedPayloadFiles.length !== totalFiles) {
+        throw new Error(`Verification failed: Expected ${totalFiles} files, but staging has ${stagedPayloadFiles.length} files.`);
       }
 
       // Verify all empty directories exist in staging
@@ -648,7 +695,7 @@ export class GameDirectoryManager {
         }
       }
 
-      const stagedMap = new Map(stagedInventory.files.map((f) => [f.relativePath, f.size]));
+      const stagedMap = new Map(stagedPayloadFiles.map((f) => [f.relativePath, f.size]));
 
       // Verify destination readback with bounded concurrency (concurrency 4)
       await runBoundedPool(
@@ -681,12 +728,19 @@ export class GameDirectoryManager {
 
       // 5. Write receipt marker to staging before updating journal to finalizing
       const receipt: MoveReceipt = {
+        version: 2,
         operationId: operationNonce,
         source,
         target,
         staging,
         fileCount: totalFiles,
         totalBytes,
+        directories: inventory.directories,
+        files: inventory.files.map((f) => ({
+          relativePath: f.relativePath,
+          size: f.size,
+          sha256: sourceHashes.get(f.relativePath) || "",
+        })),
         stagingVerified: true,
         timestamp: new Date().toISOString(),
       };
@@ -855,31 +909,8 @@ export class GameDirectoryManager {
         );
       }
 
-      // Re-establish target completeness before destructive source cleanup
-      let targetInventory: ScannedDirectoryInventory;
-      try {
-        targetInventory = await scanDirectoryAsync(journal.target);
-      } catch (scanErr: any) {
-        LauncherLogger.error(`Move recovery: failed to scan target inventory: ${scanErr.message}`);
-        throw new Error(
-          `Recovery aborted: failed to scan target directory '${journal.target}': ${scanErr.message}. Source directory '${journal.source}' has been preserved.`
-        );
-      }
-
-      // Filter out move receipt file itself from target inventory
-      const payloadFiles = targetInventory.files.filter(
-        (f) => f.relativePath !== MOVE_RECEIPT_FILENAME && f.relativePath !== ".lampas_move_receipt.json"
-      );
-      const payloadBytes = payloadFiles.reduce((sum, f) => sum + f.size, 0);
-
-      if (payloadFiles.length !== receipt.fileCount || payloadBytes !== receipt.totalBytes) {
-        LauncherLogger.error(
-          `Move recovery: target completeness re-verification failed (expected ${receipt.fileCount} files / ${receipt.totalBytes} bytes, found ${payloadFiles.length} files / ${payloadBytes} bytes). Aborting source deletion.`
-        );
-        throw new Error(
-          `Recovery aborted: target completeness re-verification failed for '${journal.target}' (expected ${receipt.fileCount} files / ${receipt.totalBytes} bytes, found ${payloadFiles.length} files / ${payloadBytes} bytes). Source directory '${journal.source}' has been preserved.`
-        );
-      }
+      // Re-establish exact target inventory, hashes, sizes, directory structure, and source consistency
+      await verifyTargetCompleteness(journal.target, receipt, journal.source);
 
       // Target is 100% verified complete
       ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
@@ -912,26 +943,8 @@ export class GameDirectoryManager {
       if (targetExists) {
         const receipt = readMoveReceipt(journal.target, journal.operationId);
         if (receipt && (!journal.source || receipt.source === journal.source)) {
-          // Re-establish target completeness before destructive source cleanup
-          let targetInventory: ScannedDirectoryInventory;
-          try {
-            targetInventory = await scanDirectoryAsync(journal.target);
-          } catch (scanErr: any) {
-            throw new Error(
-              `Recovery aborted: failed to scan target directory '${journal.target}': ${scanErr.message}. Source directory '${journal.source}' has been preserved.`
-            );
-          }
-
-          const payloadFiles = targetInventory.files.filter(
-            (f) => f.relativePath !== MOVE_RECEIPT_FILENAME && f.relativePath !== ".lampas_move_receipt.json"
-          );
-          const payloadBytes = payloadFiles.reduce((sum, f) => sum + f.size, 0);
-
-          if (payloadFiles.length !== receipt.fileCount || payloadBytes !== receipt.totalBytes) {
-            throw new Error(
-              `Recovery aborted: target completeness re-verification failed for '${journal.target}'. Source directory '${journal.source}' has been preserved.`
-            );
-          }
+          // Re-establish exact target inventory, hashes, sizes, directory structure, and source consistency
+          await verifyTargetCompleteness(journal.target, receipt, journal.source);
 
           ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
           if (sourceExists) {
@@ -978,21 +991,7 @@ export class GameDirectoryManager {
           );
         }
 
-        let stagingInventory: ScannedDirectoryInventory;
-        try {
-          stagingInventory = await scanDirectoryAsync(journal.staging);
-        } catch (scanErr: any) {
-          throw new Error(`Recovery aborted: failed to scan staging inventory: ${scanErr.message}`);
-        }
-
-        const stagingPayloadFiles = stagingInventory.files.filter(
-          (f) => f.relativePath !== MOVE_RECEIPT_FILENAME && f.relativePath !== ".lampas_move_receipt.json"
-        );
-        const stagingPayloadBytes = stagingPayloadFiles.reduce((sum, f) => sum + f.size, 0);
-
-        if (stagingPayloadFiles.length !== stagingReceipt.fileCount || stagingPayloadBytes !== stagingReceipt.totalBytes) {
-          throw new Error("Recovery aborted: staging inventory mismatch before promotion; preserving source");
-        }
+        await verifyTargetCompleteness(journal.staging, stagingReceipt, journal.source);
 
         try {
           checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
@@ -1040,17 +1039,177 @@ export class GameDirectoryManager {
     // Case 4: Earlier phases ("preparing", "renaming", "copying", "verifying")
     // Staging was not finalized or verified. Source is preserved intact.
     if (stagingExists) {
-      try {
-        checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
-        await fs.promises.rm(journal.staging, { recursive: true, force: true });
-      } catch (err: any) {
-        LauncherLogger.warn(`Move recovery: failed to purge staging directory: ${err.message}`);
+      const marker = readStagingMarker(journal.staging);
+      if (
+        !marker ||
+        marker.operationId !== journal.operationId ||
+        marker.source !== journal.source ||
+        marker.target !== journal.target
+      ) {
+        LauncherLogger.warn(
+          `Move recovery: staging directory '${journal.staging}' lacks matching operation ownership marker for operation ${journal.operationId}. Preserving staging directory without deletion.`
+        );
+      } else {
+        try {
+          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
+          await fs.promises.rm(journal.staging, { recursive: true, force: true });
+        } catch (err: any) {
+          LauncherLogger.warn(`Move recovery: failed to purge staging directory: ${err.message}`);
+        }
       }
     }
     try {
       await fs.promises.unlink(journalPath);
     } catch {}
     LauncherLogger.info(`Move recovery: discarded incomplete move (${journal.phase}); original source preserved at ${journal.source}`);
+  }
+}
+
+async function verifyTargetCompleteness(
+  targetDir: string,
+  receipt: MoveReceipt,
+  sourceDir?: string
+): Promise<void> {
+  // 1. Receipt schema check: must be version 2 with valid files array
+  if (!receipt || typeof receipt !== "object" || receipt.version !== 2 || !Array.isArray(receipt.files)) {
+    throw new Error(
+      "Recovery aborted: move receipt lacks verified per-file inventory evidence (legacy or incomplete receipt); preserving source."
+    );
+  }
+
+  // 2. Scan target directory
+  let targetInventory: ScannedDirectoryInventory;
+  try {
+    targetInventory = await scanDirectoryAsync(targetDir);
+  } catch (scanErr: any) {
+    throw new Error(
+      `Recovery aborted: failed to scan target directory '${targetDir}': ${scanErr.message}. Source directory has been preserved.`
+    );
+  }
+
+  const payloadFiles = targetInventory.files.filter(
+    (f) =>
+      f.relativePath !== MOVE_RECEIPT_FILENAME &&
+      f.relativePath !== ".lampas_move_receipt.json" &&
+      f.relativePath !== STAGING_MARKER_FILENAME
+  );
+  const payloadBytes = payloadFiles.reduce((sum, f) => sum + f.size, 0);
+
+  // File count check
+  if (payloadFiles.length !== receipt.files.length) {
+    throw new Error(
+      `Recovery aborted: target file count mismatch for '${targetDir}' (expected ${receipt.files.length}, found ${payloadFiles.length}). Source directory has been preserved.`
+    );
+  }
+
+  // Total bytes check
+  if (payloadBytes !== receipt.totalBytes) {
+    throw new Error(
+      `Recovery aborted: target total bytes mismatch for '${targetDir}' (expected ${receipt.totalBytes}, found ${payloadBytes}). Source directory has been preserved.`
+    );
+  }
+
+  // Exact per-file check
+  const targetMap = new Map(payloadFiles.map((f) => [f.relativePath, f]));
+  for (const expected of receipt.files) {
+    const targetFile = targetMap.get(expected.relativePath);
+    if (!targetFile) {
+      throw new Error(
+        `Recovery aborted: target directory is missing expected file '${expected.relativePath}'. Source directory has been preserved.`
+      );
+    }
+    if (targetFile.size !== expected.size) {
+      throw new Error(
+        `Recovery aborted: file size mismatch for '${expected.relativePath}' in target (expected ${expected.size}, found ${targetFile.size}). Source directory has been preserved.`
+      );
+    }
+    const actualHash = await computeFileSha256Async(targetFile.absolutePath);
+    if (actualHash.toLowerCase() !== expected.sha256.toLowerCase()) {
+      throw new Error(
+        `Recovery aborted: file content SHA-256 mismatch for '${expected.relativePath}' in target (expected ${expected.sha256}, actual ${actualHash}). Source directory has been preserved.`
+      );
+    }
+  }
+
+  // Verify all directories (including empty directories)
+  if (Array.isArray(receipt.directories)) {
+    for (const dirRel of receipt.directories) {
+      const fullDir = path.join(targetDir, dirRel);
+      if (!fs.existsSync(fullDir)) {
+        throw new Error(
+          `Recovery aborted: missing expected directory '${dirRel}' in target directory. Source directory has been preserved.`
+        );
+      }
+      try {
+        const stat = fs.statSync(fullDir);
+        if (!stat.isDirectory()) {
+          throw new Error(
+            `Recovery aborted: expected directory path '${dirRel}' in target is not a directory. Source directory has been preserved.`
+          );
+        }
+      } catch (err: any) {
+        throw new Error(
+          `Recovery aborted: cannot inspect directory '${dirRel}' in target: ${err.message}. Source directory has been preserved.`
+        );
+      }
+    }
+  }
+
+  // 3. Compare against preserved source if source exists on disk
+  if (sourceDir && fs.existsSync(sourceDir)) {
+    let sourceInventory: ScannedDirectoryInventory;
+    try {
+      sourceInventory = await scanDirectoryAsync(sourceDir);
+    } catch (scanErr: any) {
+      throw new Error(
+        `Recovery aborted: failed to scan source directory '${sourceDir}': ${scanErr.message}. Source directory has been preserved.`
+      );
+    }
+
+    const sourcePayloadFiles = sourceInventory.files.filter(
+      (f) =>
+        f.relativePath !== MOVE_RECEIPT_FILENAME &&
+        f.relativePath !== ".lampas_move_receipt.json" &&
+        f.relativePath !== STAGING_MARKER_FILENAME
+    );
+
+    if (sourcePayloadFiles.length !== receipt.files.length) {
+      throw new Error(
+        `Recovery aborted: source directory file count changed after interruption (expected ${receipt.files.length}, found ${sourcePayloadFiles.length}). Source directory has been preserved.`
+      );
+    }
+
+    const sourceMap = new Map(sourcePayloadFiles.map((f) => [f.relativePath, f]));
+    for (const expected of receipt.files) {
+      const srcFile = sourceMap.get(expected.relativePath);
+      if (!srcFile) {
+        throw new Error(
+          `Recovery aborted: source directory inventory changed (missing '${expected.relativePath}'). Source directory has been preserved.`
+        );
+      }
+      if (srcFile.size !== expected.size) {
+        throw new Error(
+          `Recovery aborted: source file size changed for '${expected.relativePath}' (expected ${expected.size}, found ${srcFile.size}). Source directory has been preserved.`
+        );
+      }
+      const srcHash = await computeFileSha256Async(srcFile.absolutePath);
+      if (srcHash.toLowerCase() !== expected.sha256.toLowerCase()) {
+        throw new Error(
+          `Recovery aborted: source file content was modified after interruption for '${expected.relativePath}'. Source directory has been preserved.`
+        );
+      }
+    }
+
+    if (Array.isArray(receipt.directories)) {
+      for (const dirRel of receipt.directories) {
+        const fullDir = path.join(sourceDir, dirRel);
+        if (!fs.existsSync(fullDir)) {
+          throw new Error(
+            `Recovery aborted: directory structure in source changed after interruption (missing '${dirRel}'). Source directory has been preserved.`
+          );
+        }
+      }
+    }
   }
 }
 
@@ -1087,10 +1246,12 @@ export function validateMoveJournal(
     return { valid: false, reason: `Invalid move journal phase: ${journal.phase}` };
   }
 
-  if (journal.operationId && typeof journal.operationId === "string") {
-    if (!/^[0-9a-zA-Z_\-]+$/.test(journal.operationId)) {
-      return { valid: false, reason: `Invalid operationId format: ${journal.operationId}` };
-    }
+  if (
+    !journal.operationId ||
+    typeof journal.operationId !== "string" ||
+    !/^[0-9a-zA-Z_-]{8,64}$/.test(journal.operationId)
+  ) {
+    return { valid: false, reason: `Invalid or missing operationId format: ${journal.operationId}` };
   }
 
   if (!journal.source || typeof journal.source !== "string" || !path.isAbsolute(journal.source)) {
@@ -1155,12 +1316,13 @@ export function validateMoveJournal(
     };
   }
 
-  // Staging basename must start with .lampas-moving-
+  // Staging basename must strictly match .lampas-moving-${journal.operationId}
   const stagingBase = path.basename(resolvedStaging);
-  if (!stagingBase.startsWith(".lampas-moving-")) {
+  const expectedStagingName = `.lampas-moving-${journal.operationId}`;
+  if (stagingBase !== expectedStagingName) {
     return {
       valid: false,
-      reason: `Staging directory '${stagingBase}' does not match approved launcher staging prefix '.lampas-moving-'`,
+      reason: `Staging directory '${stagingBase}' does not correspond to journal operationId '${journal.operationId}' (expected '${expectedStagingName}')`,
     };
   }
 
@@ -1183,24 +1345,19 @@ export function validateMoveJournal(
     return { valid: false, reason: "Staging directory collides with critical system/user directory" };
   }
 
-  // Relationship to configured instance (enforced in production environments)
-  if (process.env.NODE_ENV !== "test") {
-    const cmpConfigured = isWindows ? resolvedConfiguredGame.toLowerCase() : resolvedConfiguredGame;
-    const defaultDir = isWindows ? path.resolve(getDefaultGameDir()).toLowerCase() : path.resolve(getDefaultGameDir());
-    if (cmpSource !== cmpConfigured && cmpTarget !== cmpConfigured && cmpSource !== defaultDir && cmpTarget !== defaultDir) {
-      return { valid: false, reason: "Journal source and target are unrelated to current launcher configuration" };
-    }
+  // Relationship to configured instance (always enforced without NODE_ENV bypass)
+  const cmpConfigured = isWindows ? resolvedConfiguredGame.toLowerCase() : resolvedConfiguredGame;
+  const defaultDir = isWindows ? path.resolve(getDefaultGameDir()).toLowerCase() : path.resolve(getDefaultGameDir());
+  if (cmpSource !== cmpConfigured && cmpTarget !== cmpConfigured && cmpSource !== defaultDir && cmpTarget !== defaultDir) {
+    return { valid: false, reason: "Journal source and target are unrelated to current launcher configuration" };
   }
-
-  const effectiveOpId =
-    journal.operationId || stagingBase.slice(".lampas-moving-".length) || "recovered-op";
 
   return {
     valid: true,
     journal: {
       ...journal,
       version: 2,
-      operationId: effectiveOpId,
+      operationId: journal.operationId,
       source: resolvedSource,
       target: resolvedTarget,
       staging: resolvedStaging,

@@ -23,7 +23,7 @@ const { LauncherLogger } = await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager } = await import("../src/client-mods");
 const { GameRunner } = await import("../src/game-runner");
-const { GameDirectoryManager } = await import("../src/game-directory");
+const { GameDirectoryManager, writeStagingMarker } = await import("../src/game-directory");
 const { LauncherSync } = await import("../src/sync");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { hashFile } = await import("../src/file-transfer");
@@ -213,15 +213,25 @@ describe("Phase 0 Characterization — Fast vs Full Sync Verification & Same-Siz
 
 describe("Phase 0 Characterization — Move Recovery Semantics (F01)", () => {
   test("Move recovery handles copying phase by purging abandoned staging directory", async () => {
-    const stagingDir = path.join(testRoot, ".lampas-moving-char-staging");
+    const opId = "op-char-staging-test";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
     fs.mkdirSync(stagingDir, { recursive: true });
+    writeStagingMarker(stagingDir, {
+      operationId: opId,
+      source: gameDir,
+      target: path.join(testRoot, "target"),
+      staging: stagingDir,
+      timestamp: new Date().toISOString(),
+    });
     fs.writeFileSync(path.join(stagingDir, "partial.bin"), "corrupt");
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
-        source: path.join(testRoot, "original"),
+        version: 2,
+        operationId: opId,
+        source: gameDir,
         target: path.join(testRoot, "target"),
         staging: stagingDir,
         phase: "copying",

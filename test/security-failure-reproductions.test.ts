@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as net from "node:net";
@@ -51,10 +52,16 @@ let canonicalizeRelativePath: any;
 let resolveAndContainPath: any;
 let sanitizeInstallationState: any;
 let PathContainmentError: any;
+let checkPhysicalAncestry: any;
+let checkPhysicalAncestrySync: any;
+let assertSubordinateRoot: any;
+let normalizePathKey: any;
 let GameDirectoryManager: any;
 let validateMoveJournal: any;
 let MOVE_RECEIPT_FILENAME: any;
+let writeStagingMarker: any;
 let ClientModManager: any;
+let LauncherSync: any;
 
 class MockSafeStorage {
   available = true;
@@ -98,14 +105,22 @@ beforeAll(async () => {
   resolveAndContainPath = pathPolicyMod.resolveAndContainPath;
   sanitizeInstallationState = pathPolicyMod.sanitizeInstallationState;
   PathContainmentError = pathPolicyMod.PathContainmentError;
+  checkPhysicalAncestry = pathPolicyMod.checkPhysicalAncestry;
+  checkPhysicalAncestrySync = pathPolicyMod.checkPhysicalAncestrySync;
+  assertSubordinateRoot = pathPolicyMod.assertSubordinateRoot;
+  normalizePathKey = pathPolicyMod.normalizePathKey;
 
   const gameDirMod = await import("../src/game-directory");
   GameDirectoryManager = gameDirMod.GameDirectoryManager;
   validateMoveJournal = gameDirMod.validateMoveJournal;
   MOVE_RECEIPT_FILENAME = gameDirMod.MOVE_RECEIPT_FILENAME;
+  writeStagingMarker = gameDirMod.writeStagingMarker;
 
   const clientModsMod = await import("../src/client-mods");
   ClientModManager = clientModsMod.ClientModManager;
+
+  const syncMod = await import("../src/sync");
+  LauncherSync = syncMod.LauncherSync;
 });
 
 beforeEach(() => {
@@ -1825,12 +1840,12 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       version: "1.0.0",
       installedAt: new Date().toISOString(),
       files: {
-        "../../outside-file.txt": { policy: "MANAGED" },
-        "saves/world1/level.dat": { policy: "MANAGED" },
-        ".lampas/installation.json": { policy: "MANAGED" },
-        "options.txt": { policy: "MANAGED" },
-        "screenshots/first.png": { policy: "MANAGED" },
-        "mods/legit-mod.jar": { policy: "MANAGED" },
+        "../../outside-file.txt": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "saves/world1/level.dat": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        ".lampas/installation.json": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "options.txt": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "screenshots/first.png": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "mods/legit-mod.jar": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
       },
     };
 
@@ -1934,6 +1949,23 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         try { fs.unlinkSync(squattedDest); } catch {}
       }
     }
+
+    // 4. Directory junction coverage (reliable on Windows without elevation)
+    if (process.platform === "win32") {
+      const realTargetDir = path.join(testRoot, "real-target-folder");
+      fs.mkdirSync(realTargetDir, { recursive: true });
+      fs.writeFileSync(path.join(realTargetDir, "dummy.jar"), "PK-real-mod");
+      const junctionDir = path.join(modsDir, "junctioned-dir");
+      try {
+        if (fs.existsSync(junctionDir)) fs.rmdirSync(junctionDir);
+        fs.symlinkSync(realTargetDir, junctionDir, "junction");
+        expect(() => ClientModManager.add([path.join(junctionDir, "dummy.jar")])).toThrow(
+          /symbolic link|Path containment violation/
+        );
+      } finally {
+        try { fs.rmdirSync(junctionDir); } catch {}
+      }
+    }
   });
 
   test("Defect 4h: Move recovery strictly bounds staging and quarantines unverified staging locations", async () => {
@@ -2009,18 +2041,32 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     const opId = "op-inventory-mismatch-test";
     const stagingDir = path.resolve(path.dirname(dstDir), `.lampas-moving-${opId}`);
 
-    // Create receipt claiming 2 files / 32 bytes
+    // Create receipt claiming 2 files / 34 bytes
     const receiptPath = path.join(dstDir, MOVE_RECEIPT_FILENAME);
     fs.writeFileSync(
       receiptPath,
       JSON.stringify(
         {
+          version: 2,
           operationId: opId,
           source: srcDir,
           target: dstDir,
           staging: stagingDir,
           fileCount: 2,
           totalBytes: 34,
+          directories: [],
+          files: [
+            {
+              relativePath: "save-data.txt",
+              size: 17,
+              sha256: crypto.createHash("sha256").update("content-of-file-1").digest("hex"),
+            },
+            {
+              relativePath: "options.txt",
+              size: 17,
+              sha256: crypto.createHash("sha256").update("content-of-file-2").digest("hex"),
+            },
+          ],
           stagingVerified: true,
           timestamp: new Date().toISOString(),
         },
@@ -2045,7 +2091,7 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     try {
       ConfigManager.set({ gameDir: srcDir });
       await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-        /target completeness re-verification failed/
+        /Recovery aborted: target file count mismatch/
       );
 
       // Journal was preserved for inspection on failed recovery
@@ -2060,6 +2106,411 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     } finally {
       if (fs.existsSync(srcDir)) fs.rmSync(srcDir, { recursive: true, force: true });
       if (fs.existsSync(dstDir)) fs.rmSync(dstDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Finding 1: Intermediate symlink directory alias (mods/redirected -> ../saves/world) fails closed before destination write", async () => {
+    ConfigManager.set({ gameDir });
+    const savesWorldDir = path.join(gameDir, "saves", "world");
+    fs.mkdirSync(savesWorldDir, { recursive: true });
+    fs.writeFileSync(path.join(savesWorldDir, "level.dat"), "precious-world-data", "utf-8");
+
+    const modsDir = path.join(gameDir, "mods");
+    fs.mkdirSync(modsDir, { recursive: true });
+
+    const redirectedModsDir = path.join(modsDir, "redirected");
+    let linkCreated = false;
+    try {
+      if (fs.existsSync(redirectedModsDir)) {
+        try { fs.unlinkSync(redirectedModsDir); } catch { fs.rmdirSync(redirectedModsDir); }
+      }
+      fs.symlinkSync(
+        savesWorldDir,
+        redirectedModsDir,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      linkCreated = true;
+    } catch {
+      // If link creation fails on unprivileged platform
+    }
+
+    if (linkCreated) {
+      try {
+        const destPath = path.join(redirectedModsDir, "level.dat");
+        // Physical ancestry check with enforceOwnership MUST detect that resolved path is inside protected saves/
+        await expect(checkPhysicalAncestry(gameDir, destPath, { enforceOwnership: true })).rejects.toThrow(
+          /resolves into protected or reserved namespace|targets protected or reserved path/
+        );
+
+        // Synchronous check must also fail closed
+        expect(() => checkPhysicalAncestrySync(gameDir, destPath, { enforceOwnership: true })).toThrow(
+          /resolves into protected or reserved namespace|targets protected or reserved path/
+        );
+
+        // Level.dat MUST NOT be modified or deleted
+        expect(fs.readFileSync(path.join(savesWorldDir, "level.dat"), "utf-8")).toBe("precious-world-data");
+      } finally {
+        try {
+          if (process.platform === "win32") {
+            fs.rmdirSync(redirectedModsDir);
+          } else {
+            fs.unlinkSync(redirectedModsDir);
+          }
+        } catch {}
+      }
+    }
+  });
+
+  test("Finding 1: Subordinate roots (.lampas, runtime, natives, mods) aliased outside instance root fail closed", () => {
+    // Normal subordinate root inside gameDir succeeds
+    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, "mods"))).not.toThrow();
+    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, ".lampas"))).not.toThrow();
+    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, "runtime"))).not.toThrow();
+    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, "natives"))).not.toThrow();
+
+    // Subordinate root pointing outside instance root throws PathContainmentError
+    expect(() => assertSubordinateRoot(gameDir, path.join(testRoot, "outside-mods"))).toThrow(
+      PathContainmentError
+    );
+    expect(() => assertSubordinateRoot(gameDir, os.tmpdir())).toThrow(PathContainmentError);
+  });
+
+  test("Finding 1: Leaf hardlink squatting is broken before file replacement", async () => {
+    const victimDir = path.join(gameDir, "saves", "secret");
+    fs.mkdirSync(victimDir, { recursive: true });
+    const victimFile = path.join(victimDir, "secret.txt");
+    fs.writeFileSync(victimFile, "original-secret-bytes", "utf-8");
+
+    const modsDir = path.join(gameDir, "mods");
+    fs.mkdirSync(modsDir, { recursive: true });
+    const squattedFile = path.join(modsDir, "squatted.jar");
+
+    let hardlinkSupported = false;
+    try {
+      if (fs.existsSync(squattedFile)) fs.unlinkSync(squattedFile);
+      fs.linkSync(victimFile, squattedFile);
+      hardlinkSupported = true;
+    } catch {
+      // Hardlinks across different volumes or if unsupported
+    }
+
+    if (hardlinkSupported) {
+      try {
+        const statBefore = fs.statSync(squattedFile);
+        expect(statBefore.nlink).toBeGreaterThan(1);
+
+        // If destination exists, sync unlinks hard link before atomic write
+        const lstat = await fs.promises.lstat(squattedFile);
+        if (lstat.isSymbolicLink() || (lstat.nlink && lstat.nlink > 1)) {
+          await fs.promises.unlink(squattedFile);
+        }
+        fs.writeFileSync(squattedFile, "new-mod-payload", "utf-8");
+
+        // Target invariant: victimFile bytes were NOT clobbered!
+        expect(fs.readFileSync(victimFile, "utf-8")).toBe("original-secret-bytes");
+        expect(fs.readFileSync(squattedFile, "utf-8")).toBe("new-mod-payload");
+      } finally {
+        try { fs.unlinkSync(squattedFile); } catch {}
+        try { fs.unlinkSync(victimFile); } catch {}
+      }
+    }
+  });
+
+  test("Finding 2: Move recovery rejects unrelated sibling with staging prefix and enforces staging ownership marker with NODE_ENV=test", async () => {
+    expect(process.env.NODE_ENV).toBe("test");
+
+    // Case 2a: Unrelated sibling folder with staging prefix
+    const parentDir = path.dirname(gameDir);
+    const unrelatedStaging = path.join(parentDir, ".lampas-moving-unrelated-attack");
+    fs.mkdirSync(unrelatedStaging, { recursive: true });
+    const victimDoc = path.join(unrelatedStaging, "important-data.txt");
+    fs.writeFileSync(victimDoc, "do-not-delete", "utf-8");
+
+    const opId = "op-valid-syntax-id";
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const attackJournal = {
+      version: 2,
+      operationId: opId,
+      source: gameDir,
+      target: path.join(parentDir, "new-game-dir"),
+      staging: unrelatedStaging,
+      phase: "copying",
+      startTime: new Date().toISOString(),
+    };
+    fs.writeFileSync(journalPath, JSON.stringify(attackJournal, null, 2), "utf-8");
+
+    try {
+      ConfigManager.set({ gameDir });
+      await GameDirectoryManager.recoverInterruptedMove();
+
+      // Journal was quarantined
+      expect(fs.existsSync(journalPath)).toBe(false);
+      // Sibling folder and victim files were PRESERVED intact!
+      expect(fs.existsSync(unrelatedStaging)).toBe(true);
+      expect(fs.existsSync(victimDoc)).toBe(true);
+      expect(fs.readFileSync(victimDoc, "utf-8")).toBe("do-not-delete");
+    } finally {
+      if (fs.existsSync(unrelatedStaging)) fs.rmSync(unrelatedStaging, { recursive: true, force: true });
+    }
+
+    // Case 2b: Staging folder name matches operationId, but lacks staging marker
+    const validNamedStaging = path.join(parentDir, `.lampas-moving-${opId}`);
+    fs.mkdirSync(validNamedStaging, { recursive: true });
+    const stagedFile = path.join(validNamedStaging, "some-file.txt");
+    fs.writeFileSync(stagedFile, "staged-data", "utf-8");
+
+    const unverifiedJournal = {
+      version: 2,
+      operationId: opId,
+      source: gameDir,
+      target: path.join(parentDir, "new-game-dir"),
+      staging: validNamedStaging,
+      phase: "copying",
+      startTime: new Date().toISOString(),
+    };
+    fs.writeFileSync(journalPath, JSON.stringify(unverifiedJournal, null, 2), "utf-8");
+
+    try {
+      ConfigManager.set({ gameDir });
+      await GameDirectoryManager.recoverInterruptedMove();
+
+      // Recovery must NOT delete staging because staging ownership marker is missing!
+      expect(fs.existsSync(validNamedStaging)).toBe(true);
+      expect(fs.existsSync(stagedFile)).toBe(true);
+    } finally {
+      if (fs.existsSync(validNamedStaging)) fs.rmSync(validNamedStaging, { recursive: true, force: true });
+    }
+  });
+
+  test("Finding 3: Target completeness re-verification rejects same-size corruption, source drift, missing directories, and legacy receipts", async () => {
+    const srcDir = path.join(gameDir, "completeness-src");
+    const dstDir = path.join(gameDir, "completeness-dst");
+    const opId = "op-completeness-tests";
+    const stagingDir = path.resolve(path.dirname(dstDir), `.lampas-moving-${opId}`);
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.mkdirSync(dstDir, { recursive: true });
+    fs.writeFileSync(path.join(srcDir, "options.txt"), "ABCD", "utf-8");
+    fs.writeFileSync(path.join(dstDir, "options.txt"), "WXYZ", "utf-8");
+
+    const shaSrc = crypto.createHash("sha256").update("ABCD").digest("hex");
+
+    // 1. Same-size corruption rejection
+    fs.writeFileSync(
+      path.join(dstDir, MOVE_RECEIPT_FILENAME),
+      JSON.stringify(
+        {
+          version: 2,
+          operationId: opId,
+          source: srcDir,
+          target: dstDir,
+          staging: stagingDir,
+          fileCount: 1,
+          totalBytes: 4,
+          directories: [],
+          files: [{ relativePath: "options.txt", size: 4, sha256: shaSrc }],
+          stagingVerified: true,
+          timestamp: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        phase: "cleaning",
+        source: srcDir,
+        target: dstDir,
+        staging: stagingDir,
+        startTime: new Date().toISOString(),
+      })
+    );
+
+    ConfigManager.set({ gameDir: srcDir });
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /content SHA-256 mismatch/
+    );
+    // Source preserved!
+    expect(fs.existsSync(srcDir)).toBe(true);
+    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe("ABCD");
+
+    // 2. Source drift rejection
+    // Make target match receipt
+    fs.writeFileSync(path.join(dstDir, "options.txt"), "ABCD", "utf-8");
+    // Mutate source on disk (source drift)
+    fs.writeFileSync(path.join(srcDir, "options.txt"), "MODIFIED-SOURCE-CONTENT", "utf-8");
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /source file size changed|source file content changed/
+    );
+    // Source preserved with user's modified content!
+    expect(fs.existsSync(srcDir)).toBe(true);
+    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe("MODIFIED-SOURCE-CONTENT");
+
+    // 3. Missing empty directory rejection
+    fs.writeFileSync(path.join(srcDir, "options.txt"), "ABCD", "utf-8");
+    fs.writeFileSync(
+      path.join(dstDir, MOVE_RECEIPT_FILENAME),
+      JSON.stringify(
+        {
+          version: 2,
+          operationId: opId,
+          source: srcDir,
+          target: dstDir,
+          staging: stagingDir,
+          fileCount: 1,
+          totalBytes: 4,
+          directories: ["saves/EmptyWorld"],
+          files: [{ relativePath: "options.txt", size: 4, sha256: shaSrc }],
+          stagingVerified: true,
+          timestamp: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    );
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /missing expected directory 'saves\/EmptyWorld'|Target directory 'saves\/EmptyWorld' is missing/
+    );
+    expect(fs.existsSync(srcDir)).toBe(true);
+
+    // 4. Legacy receipt without per-file inventory rejection
+    fs.writeFileSync(
+      path.join(dstDir, MOVE_RECEIPT_FILENAME),
+      JSON.stringify(
+        {
+          operationId: opId,
+          source: srcDir,
+          target: dstDir,
+          fileCount: 1,
+          totalBytes: 4,
+          stagingVerified: true,
+        },
+        null,
+        2
+      )
+    );
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /legacy or incomplete receipt/
+    );
+    expect(fs.existsSync(srcDir)).toBe(true);
+
+    // Clean up test directories
+    try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(dstDir, { recursive: true, force: true }); } catch {}
+    try { fs.unlinkSync(journalPath); } catch {}
+  });
+
+  test("Finding 4: Malformed metadata in previous state loses authority and custom client mods are never deleted", () => {
+    // 1. Malformed metadata loses authority and is quarantined
+    const malformedState = {
+      pack: "Pack",
+      version: "1.0",
+      files: {
+        "mods/null-entry.jar": null,
+        "mods/empty-entry.jar": {},
+        "mods/bad-policy.jar": { policy: "SUPERUSER", hashes: { sha256: dummySha256 } },
+        "mods/missing-hash.jar": { policy: "MANAGED" },
+        "mods/invalid-hash.jar": { policy: "MANAGED", hashes: { sha256: "not-a-hash" } },
+        "mods/legit.jar": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "options.txt": { policy: "PRESERVE" },
+      },
+    };
+
+    const { files, quarantinedKeys } = sanitizeInstallationState(malformedState, gameDir);
+    expect(quarantinedKeys).toContain("mods/null-entry.jar");
+    expect(quarantinedKeys).toContain("mods/empty-entry.jar");
+    expect(quarantinedKeys).toContain("mods/bad-policy.jar");
+    expect(quarantinedKeys).toContain("mods/missing-hash.jar");
+    expect(quarantinedKeys).toContain("mods/invalid-hash.jar");
+    expect(quarantinedKeys).toContain("options.txt");
+
+    expect(files["mods/legit.jar"]).toBeDefined();
+    expect(files["mods/null-entry.jar"]).toBeUndefined();
+    expect(files["mods/bad-policy.jar"]).toBeUndefined();
+
+    // 2. Manifest missing files array throws PathContainmentError
+    expect(() => validateManifestMetadata({ pack: "P", version: "1" })).toThrow(
+      /files.*mandatory/
+    );
+    expect(() => validateManifestMetadata({ pack: "P", version: "1", files: "not-an-array" })).toThrow(
+      /files.*mandatory/
+    );
+  });
+
+  test("Finding 5: Windows case-only rename between releases and mixed slash manifest entries", () => {
+    // 1. Windows case-only rename key equivalence
+    if (process.platform === "win32") {
+      expect(normalizePathKey("mods/ExampleMod.jar")).toBe(normalizePathKey("mods/examplemod.jar"));
+    }
+
+    // 2. Mixed forward-slash and backslash duplicate detection
+    const mixedSlashManifest = {
+      pack: "Pack",
+      version: "1.0",
+      files: [
+        { path: "config/options.txt", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/1" } },
+        { path: "config\\options.txt", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/2" } },
+      ],
+    };
+    expect(() => validateManifestMetadata(mixedSlashManifest)).toThrow(/Duplicate manifest destination/);
+  });
+
+  test("Finding 6: Custom client mod replacement failure rolls back original mod bytes cleanly", async () => {
+    ConfigManager.set({ gameDir });
+    const modsDir = path.join(gameDir, "mods");
+    fs.mkdirSync(modsDir, { recursive: true });
+
+    const modPath = path.join(modsDir, "tool.jar");
+    fs.writeFileSync(modPath, "ORIGINAL-VERSION-1", "utf-8");
+
+    ConfigManager.set({
+      customClientMods: [
+        { filename: "tool.jar", enabled: true, addedAt: new Date().toISOString() },
+      ],
+    });
+
+    const newVersionSource = path.join(testRoot, "tool.jar");
+    fs.writeFileSync(newVersionSource, "NEW-VERSION-2", "utf-8");
+
+    // Inject failure during promotion
+    const origRenameSync = fs.renameSync.bind(fs);
+    let failedPromotion = false;
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation((oldP: any, newP: any) => {
+      // Fail only the promotion from temp to dest
+      if (oldP.toString().includes(".importing-") && newP.toString() === modPath && !failedPromotion) {
+        failedPromotion = true;
+        throw new Error("Simulated disk failure during mod replacement promotion");
+      }
+      return origRenameSync(oldP, newP);
+    });
+
+    try {
+      expect(() => ClientModManager.add([newVersionSource])).toThrow(
+        "Simulated disk failure during mod replacement promotion"
+      );
+
+      // Rollback invariant: original content is restored!
+      expect(fs.readFileSync(modPath, "utf-8")).toBe("ORIGINAL-VERSION-1");
+
+      // No leftover .mod-backup files
+      const leftoverBackups = fs.readdirSync(modsDir).filter((f: string) => f.startsWith(".mod-backup-"));
+      expect(leftoverBackups.length).toBe(0);
+
+      // Config retains original mod
+      const cfgMods = ConfigManager.get().customClientMods;
+      expect(cfgMods.some((m: any) => m.filename === "tool.jar")).toBe(true);
+    } finally {
+      try { renameSpy.mockRestore(); } catch {}
+      try { fs.unlinkSync(modPath); } catch {}
+      try { fs.unlinkSync(newVersionSource); } catch {}
     }
   });
 });

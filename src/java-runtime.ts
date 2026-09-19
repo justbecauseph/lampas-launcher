@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { ConfigManager } from "./config";
 import { downloadVerified, fetchJsonWithRetry, hashFile } from "./file-transfer";
-import { checkPhysicalAncestry, resolveAndContainPath, validateDigestString } from "./path-policy";
+import { assertSubordinateRoot, checkPhysicalAncestry, resolveAndContainPath, validateDigestString } from "./path-policy";
 
 export class JavaRuntimeManager {
   private static probeCache = new Map<string, number | null>();
@@ -168,6 +168,8 @@ export class JavaRuntimeManager {
     // 5. If not found on machine, download and provision OpenJDK 25 from Mojang runtime CDN
     onLog(`[Java] Java 25 not detected. Provisioning official OpenJDK 25 (java-runtime-epsilon)...`);
     const runtimeDest = path.join(gameDir, "runtime", "java-runtime-epsilon");
+    assertSubordinateRoot(gameDir, path.join(gameDir, "runtime"));
+    assertSubordinateRoot(gameDir, runtimeDest);
     await fs.promises.mkdir(runtimeDest, { recursive: true });
 
     try {
@@ -232,6 +234,16 @@ export class JavaRuntimeManager {
             }
 
             if (!isValid) {
+              // Break pre-existing symlink or hardlink before downloading
+              if (fs.existsSync(targetPath)) {
+                try {
+                  const lstat = await fs.promises.lstat(targetPath);
+                  if (lstat.isSymbolicLink() || (lstat.nlink && lstat.nlink > 1)) {
+                    await fs.promises.unlink(targetPath);
+                  }
+                } catch {}
+              }
+
               await downloadVerified(raw.url, targetPath, {
                 algorithm: "sha1",
                 expectedHash: raw.sha1,

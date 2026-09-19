@@ -158,10 +158,20 @@ export function isSafeRelativePath(relPath: string): boolean {
 }
 
 /**
+ * Normalizes a relative path into a platform-aware key for set/map lookups:
+ * - On Windows: lowercase POSIX path (NTFS case-insensitive)
+ * - On POSIX: case-sensitive POSIX path
+ */
+export function normalizePathKey(relPath: string): string {
+  const canonical = canonicalizeRelativePath(relPath);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+/**
  * Formal Ownership Categories for Game Directory Files
  */
 export type PathOwnershipCategory =
-  | "RESERVED_INTERNAL"     // .lampas, .lampas/* (Launcher state, receipts, release, cache)
+  | "RESERVED_INTERNAL"     // .lampas, .lampas/*, .lampas-moving-* (Launcher state, receipts, release, cache, staging)
   | "PROTECTED_PLAYER_DATA" // saves/*, screenshots/*, logs/*, crash-reports/*, options.txt, servers.dat, usercache.json, hotbar.nbt, realms_persistence.json
   | "MANAGED_PACK_FILES"    // mods/*, config/*, resourcepacks/* (pack-managed content)
   | "UNPROTECTED";
@@ -169,6 +179,7 @@ export type PathOwnershipCategory =
 const RESERVED_INTERNAL_PREFIXES = [
   ".lampas",
   ".lampas/",
+  ".lampas-moving-",
 ];
 
 const PROTECTED_PLAYER_DATA_ITEMS = [
@@ -202,7 +213,7 @@ export function getOwnershipCategory(relPath: string): PathOwnershipCategory {
 
   // 1. Reserved internal launcher namespace
   for (const prefix of RESERVED_INTERNAL_PREFIXES) {
-    if (lower === prefix || lower.startsWith(".lampas/")) {
+    if (lower === prefix || lower.startsWith(".lampas/") || lower.startsWith(".lampas-moving-")) {
       return "RESERVED_INTERNAL";
     }
   }
@@ -225,13 +236,13 @@ export function getOwnershipCategory(relPath: string): PathOwnershipCategory {
 }
 
 /**
- * Checks whether a relative path falls into either RESERVED_INTERNAL (.lampas)
+ * Checks whether a relative path falls into either RESERVED_INTERNAL (.lampas, .lampas-moving-*)
  * or PROTECTED_PLAYER_DATA (saves, screenshots, logs, crash-reports, options.txt, etc.).
  *
  * Invariants:
  * - Normalizes dot-aliases before checking (mods/../saves/world.txt is recognized as protected)
  * - Case-insensitive on Windows and across all platforms for defense-in-depth
- * - Reserves .lampas launcher state directory
+ * - Reserves .lampas and .lampas-moving-* launcher namespaces
  */
 export function isPathProtected(relPath: string): boolean {
   const category = getOwnershipCategory(relPath);
@@ -274,11 +285,56 @@ export function resolveAndContainPath(
 }
 
 /**
- * Synchronously inspects the physical ancestry of a path from baseDir to fullPath.
- * Detects symlink or junction escapes that point outside baseDir, and ensures
- * existing files are regular files (not special files, sockets, FIFOs, devices).
+ * Asserts that a subordinate directory (e.g. .lampas, runtime, natives, mods)
+ * is physically located within the approved instance root (gameDir).
+ * Rejects symlinks, junctions, or links that point outside gameDir or into protected namespaces.
  */
-export function checkPhysicalAncestrySync(baseDir: string, fullPath: string): void {
+export function assertSubordinateRoot(gameDir: string, subDir: string): string {
+  const resolvedGameDir = path.resolve(gameDir);
+  const resolvedSubDir = path.isAbsolute(subDir)
+    ? path.resolve(subDir)
+    : path.resolve(resolvedGameDir, subDir);
+
+  // Lexical containment
+  resolveAndContainPath(resolvedGameDir, resolvedSubDir, { allowEqual: true });
+
+  // If subDir exists, verify physical ancestry
+  if (fs.existsSync(resolvedSubDir)) {
+    checkPhysicalAncestrySync(resolvedGameDir, resolvedSubDir, { enforceOwnership: false });
+    const realSubDir = fs.realpathSync(resolvedSubDir);
+    resolveAndContainPath(resolvedGameDir, realSubDir, { allowEqual: true });
+  } else {
+    // If not yet created, verify its closest existing ancestor
+    let parent = path.dirname(resolvedSubDir);
+    while (parent && !fs.existsSync(parent) && parent !== resolvedGameDir) {
+      parent = path.dirname(parent);
+    }
+    if (fs.existsSync(parent)) {
+      checkPhysicalAncestrySync(resolvedGameDir, parent, { enforceOwnership: false });
+      const realParent = fs.realpathSync(parent);
+      resolveAndContainPath(resolvedGameDir, realParent, { allowEqual: true });
+    }
+  }
+
+  return resolvedSubDir;
+}
+
+export interface PhysicalAncestryOptions {
+  disallowSymlinks?: boolean;
+  enforceOwnership?: boolean;
+}
+
+/**
+ * Synchronously inspects the physical ancestry of a path from baseDir to fullPath.
+ * Detects symlink or junction escapes that point outside baseDir, ensures
+ * existing files are regular files (not special files, sockets, FIFOs, devices),
+ * and if enforceOwnership is true, rejects links or destinations resolving into protected namespaces.
+ */
+export function checkPhysicalAncestrySync(
+  baseDir: string,
+  fullPath: string,
+  options: PhysicalAncestryOptions = {}
+): void {
   const resolvedBase = path.resolve(baseDir);
   const resolvedTarget = path.resolve(fullPath);
 
@@ -305,6 +361,10 @@ export function checkPhysicalAncestrySync(baseDir: string, fullPath: string): vo
       throw new PathContainmentError(`Cannot lstat physical ancestor '${current}': ${err.message}`);
     }
 
+    if (options.disallowSymlinks && stat.isSymbolicLink()) {
+      throw new PathContainmentError(`Symbolic links are prohibited along path: '${current}'`);
+    }
+
     if (stat.isSymbolicLink()) {
       // Follow symlink and verify target remains within baseDir
       let realTarget: string;
@@ -314,6 +374,15 @@ export function checkPhysicalAncestrySync(baseDir: string, fullPath: string): vo
         throw new PathContainmentError(`Cannot resolve symlink target at '${current}': ${err.message}`);
       }
       resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
+
+      if (options.enforceOwnership) {
+        const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+        if (isPathProtected(relToRoot)) {
+          throw new PathContainmentError(
+            `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`
+          );
+        }
+      }
     }
 
     if (
@@ -327,12 +396,38 @@ export function checkPhysicalAncestrySync(baseDir: string, fullPath: string): vo
       );
     }
   }
+
+  // If enforceOwnership is true, inspect the resolved realpath of the target or its closest existing ancestor
+  if (options.enforceOwnership) {
+    let checkPath = resolvedTarget;
+    while (checkPath && !fs.existsSync(checkPath) && checkPath !== resolvedBase) {
+      checkPath = path.dirname(checkPath);
+    }
+    if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
+      try {
+        const realTarget = fs.realpathSync(checkPath);
+        resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
+        const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+        if (isPathProtected(relToRoot)) {
+          throw new PathContainmentError(
+            `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`
+          );
+        }
+      } catch (err: any) {
+        if (err instanceof PathContainmentError) throw err;
+      }
+    }
+  }
 }
 
 /**
  * Asynchronously inspects the physical ancestry of a path from baseDir to fullPath.
  */
-export async function checkPhysicalAncestry(baseDir: string, fullPath: string): Promise<void> {
+export async function checkPhysicalAncestry(
+  baseDir: string,
+  fullPath: string,
+  options: PhysicalAncestryOptions = {}
+): Promise<void> {
   const resolvedBase = path.resolve(baseDir);
   const resolvedTarget = path.resolve(fullPath);
 
@@ -348,9 +443,23 @@ export async function checkPhysicalAncestry(baseDir: string, fullPath: string): 
     current = path.join(current, part);
     try {
       const stat = await fs.promises.lstat(current);
+
+      if (options.disallowSymlinks && stat.isSymbolicLink()) {
+        throw new PathContainmentError(`Symbolic links are prohibited along path: '${current}'`);
+      }
+
       if (stat.isSymbolicLink()) {
         const realTarget = await fs.promises.realpath(current);
         resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
+
+        if (options.enforceOwnership) {
+          const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+          if (isPathProtected(relToRoot)) {
+            throw new PathContainmentError(
+              `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`
+            );
+          }
+        }
       }
       if (
         stat.isFIFO() ||
@@ -372,14 +481,36 @@ export async function checkPhysicalAncestry(baseDir: string, fullPath: string): 
       throw new PathContainmentError(`Cannot inspect physical ancestry at '${current}': ${err.message}`);
     }
   }
+
+  if (options.enforceOwnership) {
+    let checkPath = resolvedTarget;
+    while (checkPath && !fs.existsSync(checkPath) && checkPath !== resolvedBase) {
+      checkPath = path.dirname(checkPath);
+    }
+    if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
+      try {
+        const realTarget = await fs.promises.realpath(checkPath);
+        resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
+        const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+        if (isPathProtected(relToRoot)) {
+          throw new PathContainmentError(
+            `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`
+          );
+        }
+      } catch (err: any) {
+        if (err instanceof PathContainmentError) throw err;
+      }
+    }
+  }
 }
 
 /**
  * Validates manifest metadata and file definitions before any mutation or download:
- * - Enforces protocol limit
- * - Validates relative paths: safe relative path, no protected namespace targets
+ * - Enforces mandatory 'files' array
+ * - Canonicalizes relative paths in-place
+ * - Rejects protected namespace targets
  * - Validates SHA-256 digest format
- * - Validates positive sizes
+ * - Validates positive integer sizes
  * - Detects duplicate or case-equivalent destinations
  * - Validates config patches: uniqueness, safety, no collision with whole-file paths
  */
@@ -389,57 +520,56 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
   }
 
   const files = manifest.files;
-  if (files !== undefined && !Array.isArray(files)) {
-    throw new PathContainmentError("Invalid manifest: 'files' must be an array.");
+  if (!files || !Array.isArray(files)) {
+    throw new PathContainmentError("Invalid manifest: 'files' array is mandatory.");
   }
 
   const destinationMap = new Map<string, any>();
   const isWindows = process.platform === "win32";
 
-  if (Array.isArray(files)) {
-    for (const file of files) {
-      if (!file || typeof file !== "object") {
-        throw new PathContainmentError("Invalid file entry in manifest: expected object.");
-      }
+  for (const file of files) {
+    if (!file || typeof file !== "object") {
+      throw new PathContainmentError("Invalid file entry in manifest: expected object.");
+    }
 
-      if (typeof file.path !== "string" || !file.path) {
-        throw new PathContainmentError("Manifest file entry is missing 'path'.");
-      }
+    if (typeof file.path !== "string" || !file.path) {
+      throw new PathContainmentError("Manifest file entry is missing 'path'.");
+    }
 
-      // 1. Canonicalize relative path
-      let canonicalPath: string;
-      try {
-        canonicalPath = canonicalizeRelativePath(file.path);
-      } catch (err: any) {
-        throw new PathContainmentError(`Unsafe relative path in manifest: '${file.path}': ${err.message}`);
-      }
+    // 1. Canonicalize relative path and update file.path in-place to normalized canonical path
+    let canonicalPath: string;
+    try {
+      canonicalPath = canonicalizeRelativePath(file.path);
+      file.path = canonicalPath;
+    } catch (err: any) {
+      throw new PathContainmentError(`Unsafe relative path in manifest: '${file.path}': ${err.message}`);
+    }
 
-      // 2. Reject attempts to target protected namespaces or launcher internal state
-      if (isPathProtected(canonicalPath)) {
-        throw new PathContainmentError(
-          `Manifest file '${file.path}' targets protected or reserved namespace '${canonicalPath}'. Pack files cannot overwrite user data or launcher state.`
-        );
-      }
+    // 2. Reject attempts to target protected namespaces or launcher internal state
+    if (isPathProtected(canonicalPath)) {
+      throw new PathContainmentError(
+        `Manifest file '${file.path}' targets protected or reserved namespace '${canonicalPath}'. Pack files cannot overwrite user data or launcher state.`
+      );
+    }
 
-      // 3. Detect duplicate or case-equivalent destinations
-      const lookupKey = isWindows ? canonicalPath.toLowerCase() : canonicalPath;
-      if (destinationMap.has(lookupKey)) {
-        throw new PathContainmentError(
-          `Duplicate manifest destination detected: '${canonicalPath}' conflicts with '${destinationMap.get(lookupKey).path}'`
-        );
-      }
-      destinationMap.set(lookupKey, file);
+    // 3. Detect duplicate or case-equivalent destinations
+    const lookupKey = normalizePathKey(canonicalPath);
+    if (destinationMap.has(lookupKey)) {
+      throw new PathContainmentError(
+        `Duplicate manifest destination detected: '${canonicalPath}' conflicts with '${destinationMap.get(lookupKey).path}'`
+      );
+    }
+    destinationMap.set(lookupKey, file);
 
-      // 4. Validate SHA-256 digest format
-      if (!file.hashes || typeof file.hashes !== "object" || !file.hashes.sha256) {
-        throw new PathContainmentError(`Manifest file '${file.path}' is missing SHA-256 hash.`);
-      }
-      validateDigestString(file.hashes.sha256, "sha256");
+    // 4. Validate SHA-256 digest format
+    if (!file.hashes || typeof file.hashes !== "object" || !file.hashes.sha256) {
+      throw new PathContainmentError(`Manifest file '${file.path}' is missing SHA-256 hash.`);
+    }
+    validateDigestString(file.hashes.sha256, "sha256");
 
-      // 5. Validate size
-      if (typeof file.size !== "number" || file.size < 0 || !Number.isSafeInteger(file.size)) {
-        throw new PathContainmentError(`Manifest file '${file.path}' has invalid size: ${file.size}`);
-      }
+    // 5. Validate size
+    if (typeof file.size !== "number" || file.size < 0 || !Number.isSafeInteger(file.size)) {
+      throw new PathContainmentError(`Manifest file '${file.path}' has invalid size: ${file.size}`);
     }
   }
 
@@ -479,6 +609,8 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
       let canonicalPatchPath: string;
       try {
         canonicalPatchPath = canonicalizeRelativePath(patchPathRaw);
+        if (patch.path) patch.path = canonicalPatchPath;
+        if (patch.file) patch.file = canonicalPatchPath;
       } catch (err: any) {
         throw new PathContainmentError(`Unsafe config patch path in '${patch.id}': ${err.message}`);
       }
@@ -490,7 +622,7 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
       }
 
       // Check collision between whole-file management and config patches
-      const patchKey = isWindows ? canonicalPatchPath.toLowerCase() : canonicalPatchPath;
+      const patchKey = normalizePathKey(canonicalPatchPath);
       if (destinationMap.has(patchKey)) {
         throw new PathContainmentError(
           `Conflict: file '${canonicalPatchPath}' is managed both as a whole file and by config patch '${patch.id}'.`
@@ -503,8 +635,9 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
 
 /**
  * Strictly sanitizes and validates previous installation state.
- * Any key in `prevState.files` that fails containment, attempts traversal, or targets
- * protected namespaces is stripped so it cannot trigger deletion of arbitrary files.
+ * Any key in `prevState.files` that fails containment, attempts traversal, targets
+ * protected namespaces, or lacks valid metadata loses authority and is quarantined
+ * so it cannot trigger deletion of arbitrary files.
  */
 export function sanitizeInstallationState(
   rawState: any,
@@ -518,33 +651,65 @@ export function sanitizeInstallationState(
   }
 
   for (const [key, info] of Object.entries(rawState.files)) {
-    // 1. Must be a safe relative path
+    // 1. Drop non-objects, null, undefined
+    if (!info || typeof info !== "object") {
+      quarantinedKeys.push(key);
+      continue;
+    }
+
+    const fileObj = info as Record<string, any>;
+
+    // 2. Must be a safe relative path
     if (!isSafeRelativePath(key)) {
       quarantinedKeys.push(key);
       continue;
     }
 
-    // 2. Must not resolve into protected player data or reserved launcher internal state
-    if (isPathProtected(key)) {
-      quarantinedKeys.push(key);
-      continue;
-    }
-
-    // 3. Must resolve strictly inside gameDir
+    // 3. Canonicalize key
+    let canonicalKey: string;
     try {
-      resolveAndContainPath(gameDir, key);
+      canonicalKey = canonicalizeRelativePath(key);
     } catch {
       quarantinedKeys.push(key);
       continue;
     }
 
-    // 4. Must have valid policy
-    const fileObj = info && typeof info === "object" ? (info as any) : {};
-    resultFiles[key] = {
+    // 4. Must not resolve into protected player data or reserved launcher internal state
+    if (isPathProtected(canonicalKey)) {
+      quarantinedKeys.push(key);
+      continue;
+    }
+
+    // 5. Must resolve strictly inside gameDir
+    try {
+      resolveAndContainPath(gameDir, canonicalKey);
+    } catch {
+      quarantinedKeys.push(key);
+      continue;
+    }
+
+    // 6. Must have an explicit, recognized policy. NEVER default unknown/missing to MANAGED!
+    if (fileObj.policy !== "MANAGED" && fileObj.policy !== "PRESERVE") {
+      quarantinedKeys.push(key);
+      continue;
+    }
+
+    // 7. If MANAGED, validate SHA-256 hash
+    if (fileObj.policy === "MANAGED") {
+      const sha256 = fileObj.sha256 || (fileObj.hashes && fileObj.hashes.sha256);
+      if (!sha256 || typeof sha256 !== "string" || !isValidDigestString(sha256, "sha256")) {
+        quarantinedKeys.push(key);
+        continue;
+      }
+    }
+
+    resultFiles[canonicalKey] = {
       ...fileObj,
-      policy: fileObj.policy === "PRESERVE" ? "PRESERVE" : "MANAGED",
+      path: canonicalKey,
+      policy: fileObj.policy,
     };
   }
 
   return { files: resultFiles, quarantinedKeys };
 }
+

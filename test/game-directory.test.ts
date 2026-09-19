@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,7 +18,7 @@ mock.module("electron", () => ({
 }));
 
 const { ConfigManager, getDefaultGameDir, getUserDataDir } = await import("../src/config");
-const { GameDirectoryManager } = await import("../src/game-directory");
+const { GameDirectoryManager, writeStagingMarker } = await import("../src/game-directory");
 const { GameRunner } = await import("../src/game-runner");
 const { OperationCoordinator } = await import("../src/operations");
 
@@ -385,6 +386,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   test("startup recovery detects same-filesystem rename crash before config update and finalizes config", async () => {
     const oldSource = path.join(testRoot, "direct-rename-crashed-source");
     const newTarget = path.join(testRoot, "direct-rename-crashed-target");
+    const opId = "op-rename-crashed";
 
     // Source was already renamed to target on disk
     fs.mkdirSync(newTarget, { recursive: true });
@@ -394,9 +396,11 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
+        version: 2,
+        operationId: opId,
         source: oldSource,
         target: newTarget,
-        staging: path.join(testRoot, ".lampas-moving-rename"),
+        staging: path.join(testRoot, `.lampas-moving-${opId}`),
         phase: "renaming",
       })
     );
@@ -411,16 +415,31 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   });
 
   test("startup recovery cleans up abandoned staging directory from interrupted copy", async () => {
-    const stagingDir = path.join(testRoot, ".lampas-moving-test123");
+    const opId = "op-clean-staging";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
+    const sourceDir = path.join(testRoot, "original-source");
+    const targetDir = path.join(testRoot, "intended-target");
+
     fs.mkdirSync(stagingDir, { recursive: true });
+    writeStagingMarker(stagingDir, {
+      operationId: opId,
+      source: sourceDir,
+      target: targetDir,
+      staging: stagingDir,
+      timestamp: new Date().toISOString(),
+    });
     fs.writeFileSync(path.join(stagingDir, "half-copied.txt"), "partial");
+
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
-        source: path.join(testRoot, "original-source"),
-        target: path.join(testRoot, "intended-target"),
+        version: 2,
+        operationId: opId,
+        source: sourceDir,
+        target: targetDir,
         staging: stagingDir,
         phase: "copying",
       })
@@ -437,35 +456,43 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   test("startup recovery finishes source deletion if move was interrupted during cleaning phase", async () => {
     const oldSource = path.join(testRoot, "leftover-source");
     const newTarget = path.join(testRoot, "finished-target");
+    const opId = "clean-test-op";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
 
     fs.mkdirSync(oldSource, { recursive: true });
-    fs.writeFileSync(path.join(oldSource, "old.txt"), "old");
+    fs.writeFileSync(path.join(oldSource, "options.txt"), "new-options");
 
     fs.mkdirSync(newTarget, { recursive: true });
     fs.writeFileSync(path.join(newTarget, "options.txt"), "new-options");
+    const sha256 = crypto.createHash("sha256").update("new-options").digest("hex");
     fs.writeFileSync(
       path.join(newTarget, ".lampas_move_receipt.json"),
       JSON.stringify({
-        operationId: "clean-test-op",
+        version: 2,
+        operationId: opId,
         source: oldSource,
         target: newTarget,
-        staging: path.join(testRoot, ".lampas-moving-old"),
+        staging: stagingDir,
         fileCount: 1,
         totalBytes: 11,
+        directories: [],
+        files: [{ relativePath: "options.txt", size: 11, sha256 }],
         stagingVerified: true,
         timestamp: new Date().toISOString(),
       })
     );
+
+    ConfigManager.set({ gameDir: oldSource, gameDirConfigured: true });
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
         version: 2,
-        operationId: "clean-test-op",
+        operationId: opId,
         source: oldSource,
         target: newTarget,
-        staging: path.join(testRoot, ".lampas-moving-old"),
+        staging: stagingDir,
         phase: "cleaning",
       })
     );
@@ -665,18 +692,28 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   test("Phase 5: startup recovery from verifying phase discards staging and preserves source", async () => {
     const sourceDir = path.join(testRoot, "verifying-crashed-source");
     const targetDir = path.join(testRoot, "verifying-crashed-target");
-    const stagingDir = path.join(testRoot, ".lampas-moving-verifying-crash");
+    const opId = "op-verifying-crash";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
 
     fs.mkdirSync(sourceDir, { recursive: true });
     fs.writeFileSync(path.join(sourceDir, "save.txt"), "original");
 
     fs.mkdirSync(stagingDir, { recursive: true });
+    writeStagingMarker(stagingDir, {
+      operationId: opId,
+      source: sourceDir,
+      target: targetDir,
+      staging: stagingDir,
+      timestamp: new Date().toISOString(),
+    });
     fs.writeFileSync(path.join(stagingDir, "save.txt"), "staged");
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
+        version: 2,
+        operationId: opId,
         source: sourceDir,
         target: targetDir,
         staging: stagingDir,
@@ -698,22 +735,27 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   test("Phase 5: startup recovery from finalizing phase completes promotion if staging was verified", async () => {
     const sourceDir = path.join(testRoot, "finalizing-verified-source");
     const targetDir = path.join(testRoot, "finalizing-verified-target");
-    const stagingDir = path.join(testRoot, ".lampas-moving-finalizing-verified");
+    const opId = "op-finalizing-verified";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
 
     fs.mkdirSync(sourceDir, { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "save.txt"), "original");
+    fs.writeFileSync(path.join(sourceDir, "save.txt"), "verified-content");
 
     fs.mkdirSync(stagingDir, { recursive: true });
     fs.writeFileSync(path.join(stagingDir, "save.txt"), "verified-content");
+    const sha256 = crypto.createHash("sha256").update("verified-content").digest("hex");
     fs.writeFileSync(
       path.join(stagingDir, ".lampas_move_receipt.json"),
       JSON.stringify({
-        operationId: "test-op",
+        version: 2,
+        operationId: opId,
         source: sourceDir,
         target: targetDir,
         staging: stagingDir,
         fileCount: 1,
         totalBytes: 16,
+        directories: [],
+        files: [{ relativePath: "save.txt", size: 16, sha256 }],
         stagingVerified: true,
         timestamp: new Date().toISOString(),
       })
@@ -724,7 +766,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       journalPath,
       JSON.stringify({
         version: 2,
-        operationId: "test-op",
+        operationId: opId,
         source: sourceDir,
         target: targetDir,
         staging: stagingDir,
@@ -798,6 +840,8 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   test("Phase 7: recovery aborts, preserves source, and leaves journal if target is missing during cleaning phase", async () => {
     const sourceDir = path.join(testRoot, "missing-target-clean-source");
     const targetDir = path.join(testRoot, "missing-target-clean-dest");
+    const opId = "clean-missing-target-op";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
     const journalPath = path.join(userDataDir, "directory-move.json");
 
     fs.mkdirSync(sourceDir, { recursive: true });
@@ -807,10 +851,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       journalPath,
       JSON.stringify({
         version: 2,
-        operationId: "clean-missing-target-op",
+        operationId: opId,
         source: sourceDir,
         target: targetDir,
-        staging: path.join(testRoot, ".lampas-moving-missing-target"),
+        staging: stagingDir,
         phase: "cleaning",
       })
     );
@@ -832,6 +876,8 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   test("Phase 7: recovery aborts and preserves source if target exists but lacks valid move receipt during cleaning phase", async () => {
     const sourceDir = path.join(testRoot, "unverified-clean-source");
     const targetDir = path.join(testRoot, "unverified-clean-dest");
+    const opId = "unverified-clean-op";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
     const journalPath = path.join(userDataDir, "directory-move.json");
 
     fs.mkdirSync(sourceDir, { recursive: true });
@@ -840,20 +886,22 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     fs.mkdirSync(targetDir, { recursive: true });
     fs.writeFileSync(path.join(targetDir, "unrelated.txt"), "unrelated-file");
 
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
         version: 2,
-        operationId: "unverified-clean-op",
+        operationId: opId,
         source: sourceDir,
         target: targetDir,
-        staging: path.join(testRoot, ".lampas-moving-unverified"),
+        staging: stagingDir,
         phase: "cleaning",
       })
     );
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /Recovery aborted: target directory .* does not contain a verified move receipt/
+      /Recovery aborted: target directory .* does not contain a verified move receipt|Recovery aborted: move receipt lacks verified per-file inventory evidence/
     );
 
     // Source is preserved
@@ -864,7 +912,8 @@ describe("GameDirectoryManager & Installation Relocation", () => {
   test("Phase 7: recovery aborts and preserves source if target already exists without move receipt during finalizing phase", async () => {
     const sourceDir = path.join(testRoot, "unverified-fin-source");
     const targetDir = path.join(testRoot, "unverified-fin-dest");
-    const stagingDir = path.join(testRoot, ".lampas-moving-unverified-fin");
+    const opId = "unverified-fin-op";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
     const journalPath = path.join(userDataDir, "directory-move.json");
 
     fs.mkdirSync(sourceDir, { recursive: true });
@@ -877,11 +926,13 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     fs.mkdirSync(stagingDir, { recursive: true });
     fs.writeFileSync(path.join(stagingDir, "player.dat"), "staged-data");
 
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
         version: 2,
-        operationId: "unverified-fin-op",
+        operationId: opId,
         source: sourceDir,
         target: targetDir,
         staging: stagingDir,

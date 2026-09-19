@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { unzip } from "fflate";
-import { downloadVerified, hashFile } from "./file-transfer";
-import { resolveAndContainPath, validateDigestString } from "./path-policy";
+import { copyAtomic, downloadVerified, hashFile } from "./file-transfer";
+import { assertSubordinateRoot, checkPhysicalAncestrySync, resolveAndContainPath, validateDigestString } from "./path-policy";
 import {
   FabricMetaResolver,
   type FabricMetaResolverOptions,
@@ -125,6 +125,12 @@ export class MinecraftBootstrap {
     const nativesDir = path.join(gameDir, "natives");
     const versionsDir = path.join(gameDir, "versions", runtime.minecraft);
     const cacheDir = path.join(gameDir, ".lampas", "cache");
+
+    assertSubordinateRoot(gameDir, librariesDir);
+    assertSubordinateRoot(gameDir, assetsDir);
+    assertSubordinateRoot(gameDir, nativesDir);
+    assertSubordinateRoot(gameDir, versionsDir);
+    assertSubordinateRoot(gameDir, cacheDir);
 
     await fs.promises.mkdir(librariesDir, { recursive: true });
     await fs.promises.mkdir(assetsDir, { recursive: true });
@@ -265,6 +271,10 @@ export class MinecraftBootstrap {
   ): Promise<void> {
     const nativesDir = path.join(gameDir, "natives");
     const markerDir = path.join(gameDir, ".lampas");
+
+    assertSubordinateRoot(gameDir, nativesDir);
+    assertSubordinateRoot(gameDir, markerDir);
+
     const nativeMarker = path.join(
       markerDir,
       `natives-${minecraftVersion}-${process.platform}-${process.arch}.json`
@@ -339,8 +349,20 @@ export class MinecraftBootstrap {
         await fs.promises.mkdir(nativesDir, { recursive: true });
         for (const filename of extractedFiles) {
           const src = path.join(stagingDir, filename);
-          const dst = path.join(nativesDir, filename);
-          await fs.promises.copyFile(src, dst);
+          const dst = resolveAndContainPath(nativesDir, filename);
+          checkPhysicalAncestrySync(nativesDir, dst);
+
+          // Break pre-existing symlink or hard-link squatting before copying
+          if (fs.existsSync(dst)) {
+            try {
+              const lstat = await fs.promises.lstat(dst);
+              if (lstat.isSymbolicLink() || (lstat.nlink && lstat.nlink > 1)) {
+                await fs.promises.unlink(dst);
+              }
+            } catch {}
+          }
+
+          await copyAtomic(src, dst);
         }
 
         await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);

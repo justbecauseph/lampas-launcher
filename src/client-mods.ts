@@ -17,6 +17,21 @@ function assertJar(sourcePath: string): void {
   if (fs.lstatSync(sourcePath).isSymbolicLink()) {
     throw new Error("Cannot import symbolic link as client mod.");
   }
+
+  // Check intermediate parents for symlink or junction
+  let current = path.dirname(path.resolve(sourcePath));
+  const root = path.parse(current).root;
+  while (current && current !== root) {
+    if (fs.existsSync(current)) {
+      const lstat = fs.lstatSync(current);
+      if (lstat.isSymbolicLink()) {
+        throw new Error(`Cannot import from symbolic link or junction path: ${sourcePath}`);
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
 }
 
 function modPath(gameDir: string, filename: string, enabled: boolean): string {
@@ -66,6 +81,7 @@ export class ClientModManager {
         `.importing-${Date.now()}-${Math.random().toString(16).slice(2)}.jar`
       );
 
+      let backupPath: string | null = null;
       try {
         fs.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
         const tempStat = fs.lstatSync(tempPath);
@@ -73,10 +89,43 @@ export class ClientModManager {
           throw new Error("Temporary import staging resolved to a symbolic link.");
         }
 
+        // If destination exists, create a recoverable backup before promotion
         if (fs.existsSync(destination)) {
-          fs.rmSync(destination, { force: true });
+          backupPath = path.join(
+            modsDir,
+            `.mod-backup-${Date.now()}-${Math.random().toString(16).slice(2)}.bak`
+          );
+          fs.renameSync(destination, backupPath);
         }
-        fs.renameSync(tempPath, destination);
+
+        try {
+          fs.renameSync(tempPath, destination);
+        } catch (renameErr) {
+          // Promotion failed: rollback original file from backup!
+          if (backupPath && fs.existsSync(backupPath)) {
+            const activeBackup = backupPath;
+            try {
+              fs.renameSync(activeBackup, destination);
+              backupPath = null;
+            } catch (rollbackErr: any) {
+              LauncherLogger.error(
+                `[Client Mods] Critical: automatic rollback failed for '${filename}'. Original preserved at '${activeBackup}': ${rollbackErr.message}`
+              );
+              throw new Error(
+                `Failed to replace mod '${filename}' and automatic rollback failed. Original mod is preserved at '${path.basename(activeBackup)}'.`
+              );
+            }
+          }
+          throw renameErr;
+        }
+
+        // Promotion succeeded: remove the backup cleanly
+        if (backupPath && fs.existsSync(backupPath)) {
+          try {
+            fs.unlinkSync(backupPath);
+            backupPath = null;
+          } catch {}
+        }
       } catch (importErr: any) {
         if (fs.existsSync(tempPath)) {
           try { fs.unlinkSync(tempPath); } catch {}
