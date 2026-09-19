@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { ConfigManager } from "./config";
 import { downloadVerified, fetchJsonWithRetry, hashFile } from "./file-transfer";
+import { checkPhysicalAncestry, resolveAndContainPath, validateDigestString } from "./path-policy";
 
 export class JavaRuntimeManager {
   private static probeCache = new Map<string, number | null>();
@@ -200,7 +201,9 @@ export class JavaRuntimeManager {
           const item = entries[nextFile++];
           if (!item) break;
           const [relPath, fileInfo] = item;
-          const targetPath = path.join(runtimeDest, relPath);
+          const targetPath = resolveAndContainPath(runtimeDest, relPath);
+          await checkPhysicalAncestry(runtimeDest, targetPath);
+
           if (fileInfo.type === "directory") {
             await fs.promises.mkdir(targetPath, { recursive: true });
             completed++;
@@ -211,6 +214,9 @@ export class JavaRuntimeManager {
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
 
             const raw = fileInfo.downloads.raw;
+            if (raw.sha1) {
+              validateDigestString(raw.sha1, "sha1");
+            }
             let isValid = false;
             if (fs.existsSync(targetPath)) {
               try {

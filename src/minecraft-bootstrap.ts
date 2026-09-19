@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { unzip } from "fflate";
 import { downloadVerified, hashFile } from "./file-transfer";
+import { resolveAndContainPath, validateDigestString } from "./path-policy";
 import {
   FabricMetaResolver,
   type FabricMetaResolverOptions,
@@ -322,7 +323,7 @@ export class MinecraftBootstrap {
             ) {
               const fileBytes = unzipped[filename];
               const baseName = path.basename(filename);
-              const dest = path.join(stagingDir, baseName);
+              const dest = resolveAndContainPath(stagingDir, baseName);
               await fs.promises.writeFile(dest, Buffer.from(fileBytes));
               extractedFiles.push(baseName);
             }
@@ -435,15 +436,16 @@ export class MinecraftBootstrap {
       if (!item || typeof item.hash !== "string" || item.size === undefined) {
         continue;
       }
-      const existing = uniqueObjectsByHash.get(item.hash);
+      const validHash = validateDigestString(item.hash, "sha1");
+      const existing = uniqueObjectsByHash.get(validHash);
       if (existing) {
         if (existing.size !== item.size) {
           throw new Error(
-            `Inconsistent asset metadata for hash '${item.hash}': mapped with size ${existing.size} and ${item.size}`
+            `Inconsistent asset metadata for hash '${validHash}': mapped with size ${existing.size} and ${item.size}`
           );
         }
       } else {
-        uniqueObjectsByHash.set(item.hash, item);
+        uniqueObjectsByHash.set(validHash, { hash: validHash, size: item.size });
       }
     }
 
@@ -457,8 +459,7 @@ export class MinecraftBootstrap {
     const missing: Array<{ hash: string; size: number; destFile: string }> = [];
     for (const item of uniqueEntries) {
       const prefix = item.hash.substring(0, 2);
-      const destDir = path.join(assetObjectsDir, prefix);
-      const destFile = path.join(destDir, item.hash);
+      const destFile = resolveAndContainPath(assetObjectsDir, path.join(prefix, item.hash));
 
       if (fs.existsSync(destFile)) {
         try {

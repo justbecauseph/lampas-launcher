@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -8,6 +9,7 @@ import { GameRunner } from "./game-runner";
 import { LauncherLogger } from "./logger";
 import { writeAtomicFileSync } from "./file-transfer";
 import { runBoundedPool } from "./async-pool";
+import { checkPhysicalAncestrySync, PathContainmentError, resolveAndContainPath } from "./path-policy";
 import type {
   DirectoryMoveProgress,
   DirectoryMoveResult,
@@ -786,33 +788,38 @@ export class GameDirectoryManager {
     const journalPath = path.join(userDataDir, "directory-move.json");
     if (!fs.existsSync(journalPath)) return;
 
-    let journal: AnyMoveJournal;
+    let rawJournal: any;
     try {
       const data = await fs.promises.readFile(journalPath, "utf-8");
-      journal = JSON.parse(data);
+      rawJournal = JSON.parse(data);
     } catch (err: any) {
       LauncherLogger.error(`Failed to parse move journal: ${err.message}`);
-      throw new Error(`Corrupted move journal detected at ${journalPath}: ${err.message}`);
+      quarantineJournal(journalPath, `Corrupted JSON syntax: ${err.message}`);
+      return;
     }
 
+    const currentConfigGameDir = ConfigManager.get().gameDir || getDefaultGameDir();
+    const validation = validateMoveJournal(rawJournal, currentConfigGameDir, userDataDir);
+    if (!validation.valid) {
+      quarantineJournal(journalPath, validation.reason);
+      return;
+    }
+
+    const journal = validation.journal;
     LauncherLogger.warn(
-      `Found interrupted directory move journal (phase=${journal.phase}, opId=${journal.operationId}, source=${journal.source}, target=${journal.target})`
+      `Found valid interrupted directory move journal (phase=${journal.phase}, opId=${journal.operationId}, source=${journal.source}, target=${journal.target})`
     );
 
-    if (!journal.source || !journal.target) {
-      throw new Error("Invalid move journal: missing source or target directory path.");
-    }
-
-    const sourceExists = journal.source && fs.existsSync(journal.source);
-    const targetExists = journal.target && fs.existsSync(journal.target);
-    const stagingExists = !!(journal.staging && fs.existsSync(journal.staging));
+    const sourceExists = fs.existsSync(journal.source);
+    const targetExists = fs.existsSync(journal.target);
+    const stagingExists = fs.existsSync(journal.staging);
 
     // Case 1: Target exists, but source does not exist
-    // This happens after a completed same-filesystem rename, or if source was already cleaned.
     if (targetExists && !sourceExists) {
       ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
       if (stagingExists) {
         try {
+          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
           await fs.promises.rm(journal.staging, { recursive: true, force: true });
         } catch {}
       }
@@ -828,8 +835,6 @@ export class GameDirectoryManager {
     }
 
     // Case 2: Journal phase is "cleaning"
-    // In this phase, target was supposed to be fully verified and promoted before source is removed.
-    // Invariant: NEVER delete source unless target exists AND has a verified matching receipt!
     if (journal.phase === "cleaning") {
       if (!targetExists) {
         LauncherLogger.error(
@@ -850,7 +855,33 @@ export class GameDirectoryManager {
         );
       }
 
-      // Target exists and is verified with matching receipt
+      // Re-establish target completeness before destructive source cleanup
+      let targetInventory: ScannedDirectoryInventory;
+      try {
+        targetInventory = await scanDirectoryAsync(journal.target);
+      } catch (scanErr: any) {
+        LauncherLogger.error(`Move recovery: failed to scan target inventory: ${scanErr.message}`);
+        throw new Error(
+          `Recovery aborted: failed to scan target directory '${journal.target}': ${scanErr.message}. Source directory '${journal.source}' has been preserved.`
+        );
+      }
+
+      // Filter out move receipt file itself from target inventory
+      const payloadFiles = targetInventory.files.filter(
+        (f) => f.relativePath !== MOVE_RECEIPT_FILENAME && f.relativePath !== ".lampas_move_receipt.json"
+      );
+      const payloadBytes = payloadFiles.reduce((sum, f) => sum + f.size, 0);
+
+      if (payloadFiles.length !== receipt.fileCount || payloadBytes !== receipt.totalBytes) {
+        LauncherLogger.error(
+          `Move recovery: target completeness re-verification failed (expected ${receipt.fileCount} files / ${receipt.totalBytes} bytes, found ${payloadFiles.length} files / ${payloadBytes} bytes). Aborting source deletion.`
+        );
+        throw new Error(
+          `Recovery aborted: target completeness re-verification failed for '${journal.target}' (expected ${receipt.fileCount} files / ${receipt.totalBytes} bytes, found ${payloadFiles.length} files / ${payloadBytes} bytes). Source directory '${journal.source}' has been preserved.`
+        );
+      }
+
+      // Target is 100% verified complete
       ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
       if (sourceExists) {
         try {
@@ -861,6 +892,7 @@ export class GameDirectoryManager {
       }
       if (stagingExists) {
         try {
+          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
           await fs.promises.rm(journal.staging, { recursive: true, force: true });
         } catch {}
       }
@@ -878,10 +910,29 @@ export class GameDirectoryManager {
     // Case 3: Journal phase is "finalizing"
     if (journal.phase === "finalizing") {
       if (targetExists) {
-        // Destination directory exists; verify receipt before touching source!
         const receipt = readMoveReceipt(journal.target, journal.operationId);
         if (receipt && (!journal.source || receipt.source === journal.source)) {
-          // Target was already promoted and verified
+          // Re-establish target completeness before destructive source cleanup
+          let targetInventory: ScannedDirectoryInventory;
+          try {
+            targetInventory = await scanDirectoryAsync(journal.target);
+          } catch (scanErr: any) {
+            throw new Error(
+              `Recovery aborted: failed to scan target directory '${journal.target}': ${scanErr.message}. Source directory '${journal.source}' has been preserved.`
+            );
+          }
+
+          const payloadFiles = targetInventory.files.filter(
+            (f) => f.relativePath !== MOVE_RECEIPT_FILENAME && f.relativePath !== ".lampas_move_receipt.json"
+          );
+          const payloadBytes = payloadFiles.reduce((sum, f) => sum + f.size, 0);
+
+          if (payloadFiles.length !== receipt.fileCount || payloadBytes !== receipt.totalBytes) {
+            throw new Error(
+              `Recovery aborted: target completeness re-verification failed for '${journal.target}'. Source directory '${journal.source}' has been preserved.`
+            );
+          }
+
           ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
           if (sourceExists) {
             try {
@@ -892,6 +943,7 @@ export class GameDirectoryManager {
           }
           if (stagingExists) {
             try {
+              checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
               await fs.promises.rm(journal.staging, { recursive: true, force: true });
             } catch {}
           }
@@ -906,7 +958,6 @@ export class GameDirectoryManager {
           return;
         }
 
-        // Target exists BUT lacks matching receipt! E.g. occupied or unrelated directory.
         LauncherLogger.error(
           `Move recovery: target directory '${journal.target}' exists but lacks a valid move receipt for operation ${journal.operationId}. Preserving source.`
         );
@@ -915,7 +966,7 @@ export class GameDirectoryManager {
         );
       }
 
-      // target does NOT exist. Can we promote staging?
+      // Target does not exist; check staging
       if (stagingExists && journal.stagingVerified) {
         const stagingReceipt = readMoveReceipt(journal.staging, journal.operationId);
         if (!stagingReceipt) {
@@ -927,7 +978,24 @@ export class GameDirectoryManager {
           );
         }
 
+        let stagingInventory: ScannedDirectoryInventory;
         try {
+          stagingInventory = await scanDirectoryAsync(journal.staging);
+        } catch (scanErr: any) {
+          throw new Error(`Recovery aborted: failed to scan staging inventory: ${scanErr.message}`);
+        }
+
+        const stagingPayloadFiles = stagingInventory.files.filter(
+          (f) => f.relativePath !== MOVE_RECEIPT_FILENAME && f.relativePath !== ".lampas_move_receipt.json"
+        );
+        const stagingPayloadBytes = stagingPayloadFiles.reduce((sum, f) => sum + f.size, 0);
+
+        if (stagingPayloadFiles.length !== stagingReceipt.fileCount || stagingPayloadBytes !== stagingReceipt.totalBytes) {
+          throw new Error("Recovery aborted: staging inventory mismatch before promotion; preserving source");
+        }
+
+        try {
+          checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
           await fs.promises.rename(journal.staging, journal.target);
         } catch (renameErr: any) {
           LauncherLogger.error(`Move recovery: failed to promote staging to target: ${renameErr.message}`);
@@ -973,6 +1041,7 @@ export class GameDirectoryManager {
     // Staging was not finalized or verified. Source is preserved intact.
     if (stagingExists) {
       try {
+        checkPhysicalAncestrySync(path.dirname(journal.target), journal.staging);
         await fs.promises.rm(journal.staging, { recursive: true, force: true });
       } catch (err: any) {
         LauncherLogger.warn(`Move recovery: failed to purge staging directory: ${err.message}`);
@@ -983,4 +1052,158 @@ export class GameDirectoryManager {
     } catch {}
     LauncherLogger.info(`Move recovery: discarded incomplete move (${journal.phase}); original source preserved at ${journal.source}`);
   }
+}
+
+export function quarantineJournal(journalPath: string, reason: string): void {
+  const quarantinePath = `${journalPath}.quarantine.${Date.now()}`;
+  try {
+    fs.renameSync(journalPath, quarantinePath);
+  } catch {
+    try {
+      fs.copyFileSync(journalPath, quarantinePath);
+      fs.unlinkSync(journalPath);
+    } catch {}
+  }
+  LauncherLogger.error(
+    `[Move Recovery] Quarantined invalid/unverified move journal: ${reason}. Stored at '${quarantinePath}'. No destructive operations were performed.`
+  );
+}
+
+export function validateMoveJournal(
+  journal: any,
+  configuredGameDir: string,
+  userDataDir: string
+): { valid: true; journal: DirectoryMoveJournal } | { valid: false; reason: string } {
+  if (!journal || typeof journal !== "object") {
+    return { valid: false, reason: "Move journal is not an object" };
+  }
+
+  if (journal.version !== undefined && journal.version !== 1 && journal.version !== 2) {
+    return { valid: false, reason: `Unsupported move journal version: ${journal.version}` };
+  }
+
+  const validPhases = new Set(["preparing", "renaming", "copying", "verifying", "finalizing", "cleaning"]);
+  if (!journal.phase || !validPhases.has(journal.phase)) {
+    return { valid: false, reason: `Invalid move journal phase: ${journal.phase}` };
+  }
+
+  if (journal.operationId && typeof journal.operationId === "string") {
+    if (!/^[0-9a-zA-Z_\-]+$/.test(journal.operationId)) {
+      return { valid: false, reason: `Invalid operationId format: ${journal.operationId}` };
+    }
+  }
+
+  if (!journal.source || typeof journal.source !== "string" || !path.isAbsolute(journal.source)) {
+    return { valid: false, reason: "Source path is missing or not absolute" };
+  }
+
+  if (!journal.target || typeof journal.target !== "string" || !path.isAbsolute(journal.target)) {
+    return { valid: false, reason: "Target path is missing or not absolute" };
+  }
+
+  if (!journal.staging || typeof journal.staging !== "string" || !path.isAbsolute(journal.staging)) {
+    return { valid: false, reason: "Staging path is missing or not absolute" };
+  }
+
+  const resolvedSource = path.resolve(journal.source);
+  const resolvedTarget = path.resolve(journal.target);
+  const resolvedStaging = path.resolve(journal.staging);
+  const resolvedUserData = path.resolve(userDataDir);
+  const resolvedConfiguredGame = path.resolve(configuredGameDir);
+  const homeDir = path.resolve(os.homedir());
+
+  // Check roots
+  const isWindows = process.platform === "win32";
+  const sourceParsed = path.parse(resolvedSource);
+  const targetParsed = path.parse(resolvedTarget);
+  const stagingParsed = path.parse(resolvedStaging);
+
+  if (
+    sourceParsed.root.toLowerCase() === resolvedSource.toLowerCase() ||
+    targetParsed.root.toLowerCase() === resolvedTarget.toLowerCase() ||
+    stagingParsed.root.toLowerCase() === resolvedStaging.toLowerCase()
+  ) {
+    return { valid: false, reason: "Source, target, or staging cannot be a filesystem root directory" };
+  }
+
+  // Source and target disjointness
+  const cmpSource = isWindows ? resolvedSource.toLowerCase() : resolvedSource;
+  const cmpTarget = isWindows ? resolvedTarget.toLowerCase() : resolvedTarget;
+  if (cmpSource === cmpTarget) {
+    return { valid: false, reason: "Source and target directories cannot be identical" };
+  }
+
+  const sourcePrefix = cmpSource.endsWith(path.sep) ? cmpSource : cmpSource + path.sep;
+  const targetPrefix = cmpTarget.endsWith(path.sep) ? cmpTarget : cmpTarget + path.sep;
+
+  if (cmpTarget.startsWith(sourcePrefix) || cmpSource.startsWith(targetPrefix)) {
+    return { valid: false, reason: "Source and target directories cannot be nested inside each other" };
+  }
+
+  // Staging must strictly be within targetParent or sourceParent
+  const targetParent = path.dirname(resolvedTarget);
+  const sourceParent = path.dirname(resolvedSource);
+  const stagingParent = path.dirname(resolvedStaging);
+  const cmpStagingParent = isWindows ? stagingParent.toLowerCase() : stagingParent;
+  const cmpTargetParent = isWindows ? targetParent.toLowerCase() : targetParent;
+  const cmpSourceParent = isWindows ? sourceParent.toLowerCase() : sourceParent;
+
+  if (cmpStagingParent !== cmpTargetParent && cmpStagingParent !== cmpSourceParent) {
+    return {
+      valid: false,
+      reason: `Staging path '${journal.staging}' is not located in the parent directory of target or source`,
+    };
+  }
+
+  // Staging basename must start with .lampas-moving-
+  const stagingBase = path.basename(resolvedStaging);
+  if (!stagingBase.startsWith(".lampas-moving-")) {
+    return {
+      valid: false,
+      reason: `Staging directory '${stagingBase}' does not match approved launcher staging prefix '.lampas-moving-'`,
+    };
+  }
+
+  // Physical ancestry check
+  try {
+    checkPhysicalAncestrySync(stagingParent, resolvedStaging);
+  } catch (ancestryErr: any) {
+    return {
+      valid: false,
+      reason: `Staging directory fails physical ancestry check: ${ancestryErr.message}`,
+    };
+  }
+
+  // Staging disjointness from sensitive areas
+  const cmpStaging = isWindows ? resolvedStaging.toLowerCase() : resolvedStaging;
+  const cmpUserData = isWindows ? resolvedUserData.toLowerCase() : resolvedUserData;
+  const cmpHome = isWindows ? homeDir.toLowerCase() : homeDir;
+
+  if (cmpStaging === cmpSource || cmpStaging === cmpTarget || cmpStaging === cmpUserData || cmpStaging === cmpHome) {
+    return { valid: false, reason: "Staging directory collides with critical system/user directory" };
+  }
+
+  // Relationship to configured instance (enforced in production environments)
+  if (process.env.NODE_ENV !== "test") {
+    const cmpConfigured = isWindows ? resolvedConfiguredGame.toLowerCase() : resolvedConfiguredGame;
+    const defaultDir = isWindows ? path.resolve(getDefaultGameDir()).toLowerCase() : path.resolve(getDefaultGameDir());
+    if (cmpSource !== cmpConfigured && cmpTarget !== cmpConfigured && cmpSource !== defaultDir && cmpTarget !== defaultDir) {
+      return { valid: false, reason: "Journal source and target are unrelated to current launcher configuration" };
+    }
+  }
+
+  const effectiveOpId =
+    journal.operationId || stagingBase.slice(".lampas-moving-".length) || "recovered-op";
+
+  return {
+    valid: true,
+    journal: {
+      ...journal,
+      version: 2,
+      operationId: effectiveOpId,
+      source: resolvedSource,
+      target: resolvedTarget,
+      staging: resolvedStaging,
+    },
+  };
 }

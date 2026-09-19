@@ -45,6 +45,16 @@ let CredentialStore: any;
 let SessionManager: any;
 let PortalPolicy: any;
 let isValidMinecraftUuid: any;
+let validateDigestString: any;
+let validateManifestMetadata: any;
+let canonicalizeRelativePath: any;
+let resolveAndContainPath: any;
+let sanitizeInstallationState: any;
+let PathContainmentError: any;
+let GameDirectoryManager: any;
+let validateMoveJournal: any;
+let MOVE_RECEIPT_FILENAME: any;
+let ClientModManager: any;
 
 class MockSafeStorage {
   available = true;
@@ -80,6 +90,22 @@ beforeAll(async () => {
   const sessMod = await import("../src/session-manager");
   SessionManager = sessMod.SessionManager;
   isValidMinecraftUuid = sessMod.isValidMinecraftUuid;
+
+  const pathPolicyMod = await import("../src/path-policy");
+  validateDigestString = pathPolicyMod.validateDigestString;
+  validateManifestMetadata = pathPolicyMod.validateManifestMetadata;
+  canonicalizeRelativePath = pathPolicyMod.canonicalizeRelativePath;
+  resolveAndContainPath = pathPolicyMod.resolveAndContainPath;
+  sanitizeInstallationState = pathPolicyMod.sanitizeInstallationState;
+  PathContainmentError = pathPolicyMod.PathContainmentError;
+
+  const gameDirMod = await import("../src/game-directory");
+  GameDirectoryManager = gameDirMod.GameDirectoryManager;
+  validateMoveJournal = gameDirMod.validateMoveJournal;
+  MOVE_RECEIPT_FILENAME = gameDirMod.MOVE_RECEIPT_FILENAME;
+
+  const clientModsMod = await import("../src/client-mods");
+  ClientModManager = clientModsMod.ClientModManager;
 });
 
 beforeEach(() => {
@@ -87,6 +113,7 @@ beforeEach(() => {
   CredentialStore?.resetForTesting();
   SessionManager?.resetForTesting();
   ConfigManager?.resetForTesting();
+  GameDirectoryManager?.resetForTesting();
   CredentialStore?.setSafeStorageMockForTesting(new MockSafeStorage() as any);
   CredentialStore?.setCustomUserDataDirForTesting(userDataDir);
 });
@@ -1671,6 +1698,369 @@ describe("Phase 3 Failure Path Reproductions", () => {
       portalUsername: "user-1",
       minecraftUuid: "garbage",
     })).toBe(false);
+  });
+});
+
+describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
+  const dummySha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+  test("Defect 4a: Manifest traversal vectors (leading .., embedded .., absolute, UNC) are rejected during preflight", () => {
+    const maliciousPaths = [
+      "../outside.jar",
+      "../../outside.jar",
+      "mods/../../outside.jar",
+      "mods/subdir/../../../root.txt",
+      "/etc/passwd",
+      "C:\\Windows\\system32\\cmd.exe",
+      "\\\\server\\share\\evil.jar",
+      "mods/foo/../bar/../../outside.jar",
+    ];
+
+    for (const malPath of maliciousPaths) {
+      expect(() => canonicalizeRelativePath(malPath)).toThrow(PathContainmentError);
+
+      const maliciousManifest = {
+        pack: "AttackPack",
+        version: "1.0.0",
+        files: [
+          {
+            path: malPath,
+            hashes: { sha256: dummySha256 },
+            size: 100,
+            download: { url: "/blob/1" },
+            policy: "MANAGED",
+          },
+        ],
+      };
+      expect(() => validateManifestMetadata(maliciousManifest)).toThrow(PathContainmentError);
+    }
+  });
+
+  test("Defect 4b: Windows DOS reserved device names and Alternate Data Streams are rejected", () => {
+    const dosNames = [
+      "CON",
+      "PRN",
+      "AUX",
+      "NUL",
+      "COM1",
+      "COM9",
+      "LPT1",
+      "LPT9",
+      "con.txt",
+      "aux.json",
+      "nul.jar",
+      "mods/nul",
+      "config/com1.json",
+      "data.txt:hidden_stream",
+      "mods/normal.jar:zone.identifier",
+    ];
+
+    for (const name of dosNames) {
+      expect(() => canonicalizeRelativePath(name)).toThrow(PathContainmentError);
+
+      const manifest = {
+        pack: "DosDevicePack",
+        version: "1.0.0",
+        files: [
+          {
+            path: name,
+            hashes: { sha256: dummySha256 },
+            size: 50,
+            download: { url: "/blob/dos" },
+            policy: "MANAGED",
+          },
+        ],
+      };
+      expect(() => validateManifestMetadata(manifest)).toThrow(PathContainmentError);
+    }
+  });
+
+  test("Defect 4c: Duplicate and case-equivalent destination collisions fail closed", () => {
+    // Exact duplicate paths
+    const exactDupManifest = {
+      pack: "DupPack",
+      version: "1.0.0",
+      files: [
+        { path: "mods/example.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/1" } },
+        { path: "mods/example.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/2" } },
+      ],
+    };
+    expect(() => validateManifestMetadata(exactDupManifest)).toThrow(/Duplicate manifest destination/);
+
+    // Case-equivalent collision on Windows (e.g. mods/Mod.jar vs mods/mod.jar)
+    if (process.platform === "win32") {
+      const caseDupManifest = {
+        pack: "CaseDupPack",
+        version: "1.0.0",
+        files: [
+          { path: "mods/ImportantMod.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/1" } },
+          { path: "mods/importantmod.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/2" } },
+        ],
+      };
+      expect(() => validateManifestMetadata(caseDupManifest)).toThrow(/Duplicate manifest destination/);
+    }
+  });
+
+  test("Defect 4d: Malformed or non-canonical cryptographic digest strings fail validation", () => {
+    // SHA-256 validation
+    expect(validateDigestString(dummySha256, "sha256")).toBe(dummySha256);
+    expect(() => validateDigestString("abc", "sha256")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("a".repeat(63), "sha256")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("a".repeat(65), "sha256")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("g".repeat(64), "sha256")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("../" + "a".repeat(61), "sha256")).toThrow(PathContainmentError);
+    expect(() => validateDigestString(12345 as any, "sha256")).toThrow(PathContainmentError);
+
+    // SHA-1 validation
+    const dummySha1 = "0123456789abcdef0123456789abcdef01234567";
+    expect(validateDigestString(dummySha1, "sha1")).toBe(dummySha1);
+    expect(() => validateDigestString("a".repeat(39), "sha1")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("a".repeat(41), "sha1")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("z".repeat(40), "sha1")).toThrow(PathContainmentError);
+  });
+
+  test("Defect 4e: Corrupted prevState.files with traversal and protected keys are quarantined", () => {
+    const rawState = {
+      pack: "CorruptStatePack",
+      version: "1.0.0",
+      installedAt: new Date().toISOString(),
+      files: {
+        "../../outside-file.txt": { policy: "MANAGED" },
+        "saves/world1/level.dat": { policy: "MANAGED" },
+        ".lampas/installation.json": { policy: "MANAGED" },
+        "options.txt": { policy: "MANAGED" },
+        "screenshots/first.png": { policy: "MANAGED" },
+        "mods/legit-mod.jar": { policy: "MANAGED" },
+      },
+    };
+
+    const { files, quarantinedKeys } = sanitizeInstallationState(rawState, gameDir);
+
+    expect(quarantinedKeys).toContain("../../outside-file.txt");
+    expect(quarantinedKeys).toContain("saves/world1/level.dat");
+    expect(quarantinedKeys).toContain(".lampas/installation.json");
+    expect(quarantinedKeys).toContain("options.txt");
+    expect(quarantinedKeys).toContain("screenshots/first.png");
+
+    expect(files["mods/legit-mod.jar"]).toBeDefined();
+    expect(files["../../outside-file.txt"]).toBeUndefined();
+    expect(files["saves/world1/level.dat"]).toBeUndefined();
+    expect(files[".lampas/installation.json"]).toBeUndefined();
+    expect(files["options.txt"]).toBeUndefined();
+  });
+
+  test("Defect 4f: Collision between whole-file management and config patch is rejected", () => {
+    const collidingManifest = {
+      pack: "CollidingPack",
+      version: "1.0.0",
+      files: [
+        {
+          path: "config/fabric_loader.json",
+          hashes: { sha256: dummySha256 },
+          size: 100,
+          download: { url: "/b/loader" },
+          policy: "MANAGED",
+        },
+      ],
+    };
+
+    const releaseData = {
+      configPatches: [
+        {
+          id: "patch-colliding-loader",
+          file: "config/fabric_loader.json",
+          operations: [],
+        },
+      ],
+    };
+
+    expect(() => validateManifestMetadata(collidingManifest, releaseData)).toThrow(
+      /is managed both as a whole file and by config patch/
+    );
+
+    // Config patch targeting protected namespace
+    const protectedPatchRelease = {
+      configPatches: [
+        {
+          id: "patch-saves",
+          file: "saves/world/level.json",
+          operations: [],
+        },
+      ],
+    };
+    expect(() => validateManifestMetadata({ pack: "P", version: "1", files: [] }, protectedPatchRelease)).toThrow(
+      /targets protected namespace/
+    );
+  });
+
+  test("Defect 4g: Client mod management rejects non-jar extensions, symlink inputs, and symlink destination squatting", () => {
+    ConfigManager.set({ gameDir });
+    const modsDir = path.join(gameDir, "mods");
+    fs.mkdirSync(modsDir, { recursive: true });
+
+    // 1. Non-jar rejected
+    const exeFile = path.join(testRoot, "payload.exe");
+    fs.writeFileSync(exeFile, "MZ-fake-exe");
+    expect(() => ClientModManager.add([exeFile])).toThrow(/Only local \.jar files/);
+
+    // 2. Symlink mod source rejected
+    const realJar = path.join(testRoot, "real-source.jar");
+    fs.writeFileSync(realJar, "PK-fake-jar");
+    const symlinkSource = path.join(testRoot, "symlink-source.jar");
+
+    let symlinkSupported = false;
+    try {
+      if (fs.existsSync(symlinkSource)) fs.unlinkSync(symlinkSource);
+      fs.symlinkSync(realJar, symlinkSource);
+      symlinkSupported = true;
+    } catch {
+      // Symlinks may require elevated privileges on Windows without Developer Mode
+    }
+
+    if (symlinkSupported) {
+      expect(() => ClientModManager.add([symlinkSource])).toThrow(/symbolic link/);
+
+      // 3. Symlink at destination in mods folder rejected
+      const squattedDest = path.join(modsDir, "squatted.jar");
+      try {
+        if (fs.existsSync(squattedDest)) fs.unlinkSync(squattedDest);
+        fs.symlinkSync(realJar, squattedDest);
+        const newModJar = path.join(testRoot, "squatted.jar");
+        fs.writeFileSync(newModJar, "PK-new-jar");
+        expect(() => ClientModManager.add([newModJar])).toThrow(
+          /symbolic link|Path containment violation/
+        );
+      } finally {
+        try { fs.unlinkSync(squattedDest); } catch {}
+      }
+    }
+  });
+
+  test("Defect 4h: Move recovery strictly bounds staging and quarantines unverified staging locations", async () => {
+    const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-staging-4h-"));
+    const outsideVictimFile = path.join(outsideVictimDir, "secret-user-data.txt");
+    fs.writeFileSync(outsideVictimFile, "vital-user-data", "utf-8");
+
+    // Case 1: Staging set to filesystem root
+    const rootJournal = {
+      version: 2,
+      operationId: "op-root-staging",
+      phase: "preparing",
+      source: gameDir,
+      target: path.join(testRoot, "new-game-root-dst"),
+      staging: process.platform === "win32" ? "C:\\" : "/",
+      startTime: new Date().toISOString(),
+    };
+    const validationRoot = validateMoveJournal(rootJournal, gameDir, userDataDir);
+    expect(validationRoot.valid).toBe(false);
+    expect(validationRoot.reason).toContain("root directory");
+
+    // Case 2: Staging set to arbitrary victim folder
+    const victimJournal = {
+      version: 2,
+      operationId: "op-victim-staging",
+      phase: "preparing",
+      source: gameDir,
+      target: path.join(testRoot, "new-game-victim-dst"),
+      staging: outsideVictimDir,
+      startTime: new Date().toISOString(),
+    };
+    const validationVictim = validateMoveJournal(victimJournal, gameDir, userDataDir);
+    expect(validationVictim.valid).toBe(false);
+    expect(validationVictim.reason).toMatch(/is not located in the parent directory|does not match approved launcher staging/);
+
+    // Case 3: recoverInterruptedMove preserves outside staging directory and quarantines journal
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    fs.writeFileSync(journalPath, JSON.stringify(victimJournal, null, 2), "utf-8");
+
+    try {
+      ConfigManager.set({ gameDir });
+      await GameDirectoryManager.recoverInterruptedMove();
+
+      expect(fs.existsSync(journalPath)).toBe(false);
+      expect(fs.existsSync(outsideVictimFile)).toBe(true);
+      expect(fs.existsSync(outsideVictimDir)).toBe(true);
+      expect(fs.readFileSync(outsideVictimFile, "utf-8")).toBe("vital-user-data");
+
+      const quarantined = fs.readdirSync(userDataDir).filter((f: string) => f.startsWith("directory-move.json.quarantine."));
+      expect(quarantined.length).toBeGreaterThan(0);
+    } finally {
+      if (fs.existsSync(outsideVictimDir)) {
+        fs.rmSync(outsideVictimDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("Defect 4i: Move recovery preserves source directory when target completeness inventory mismatches receipt", async () => {
+    const srcDir = path.join(gameDir, "src-mismatch");
+    const dstDir = path.join(gameDir, "dst-mismatch");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.mkdirSync(dstDir, { recursive: true });
+
+    const sourceFile1 = path.join(srcDir, "save-data.txt");
+    const sourceFile2 = path.join(srcDir, "options.txt");
+    fs.writeFileSync(sourceFile1, "content-of-file-1", "utf-8");
+    fs.writeFileSync(sourceFile2, "content-of-file-2", "utf-8");
+
+    // Only create 1 file in dstDir so inventory mismatches (1 file vs 2 files expected)
+    const dstFile1 = path.join(dstDir, "save-data.txt");
+    fs.writeFileSync(dstFile1, "content-of-file-1", "utf-8");
+
+    const opId = "op-inventory-mismatch-test";
+    const stagingDir = path.resolve(path.dirname(dstDir), `.lampas-moving-${opId}`);
+
+    // Create receipt claiming 2 files / 32 bytes
+    const receiptPath = path.join(dstDir, MOVE_RECEIPT_FILENAME);
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify(
+        {
+          operationId: opId,
+          source: srcDir,
+          target: dstDir,
+          staging: stagingDir,
+          fileCount: 2,
+          totalBytes: 34,
+          stagingVerified: true,
+          timestamp: new Date().toISOString(),
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const cleaningJournal = {
+      version: 2,
+      operationId: opId,
+      phase: "cleaning",
+      source: srcDir,
+      target: dstDir,
+      staging: stagingDir,
+      startTime: new Date().toISOString(),
+    };
+    fs.writeFileSync(journalPath, JSON.stringify(cleaningJournal, null, 2), "utf-8");
+
+    try {
+      ConfigManager.set({ gameDir: srcDir });
+      await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+        /target completeness re-verification failed/
+      );
+
+      // Journal was preserved for inspection on failed recovery
+      expect(fs.existsSync(journalPath)).toBe(true);
+
+      // Target invariant: SOURCE DIRECTORY AND DATA REMAIN INTACT!
+      expect(fs.existsSync(srcDir)).toBe(true);
+      expect(fs.existsSync(sourceFile1)).toBe(true);
+      expect(fs.existsSync(sourceFile2)).toBe(true);
+      expect(fs.readFileSync(sourceFile1, "utf-8")).toBe("content-of-file-1");
+      expect(fs.readFileSync(sourceFile2, "utf-8")).toBe("content-of-file-2");
+    } finally {
+      if (fs.existsSync(srcDir)) fs.rmSync(srcDir, { recursive: true, force: true });
+      if (fs.existsSync(dstDir)) fs.rmSync(dstDir, { recursive: true, force: true });
+    }
   });
 });
 

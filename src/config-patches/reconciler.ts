@@ -17,26 +17,23 @@ export interface ReconcileResult {
   deferredCount: number;
 }
 
+import {
+  canonicalizeRelativePath,
+  isPathProtected,
+  resolveAndContainPath,
+  checkPhysicalAncestry,
+} from "../path-policy";
+
 export function isSafeConfigPatchPath(targetPath: string): boolean {
   if (!targetPath || typeof targetPath !== "string") return false;
-  const normalized = path.normalize(targetPath).replace(/\\/g, "/");
-
-  if (
-    normalized.startsWith("../") ||
-    normalized === ".." ||
-    path.isAbsolute(normalized) ||
-    /^[a-zA-Z]:/.test(normalized) ||
-    normalized.startsWith("/") ||
-    normalized.startsWith("//")
-  ) {
+  try {
+    const canonical = canonicalizeRelativePath(targetPath);
+    if (isPathProtected(canonical)) return false;
+    if (canonical === ".lampas" || canonical.startsWith(".lampas/")) return false;
+    return true;
+  } catch {
     return false;
   }
-
-  if (normalized === ".lampas" || normalized.startsWith(".lampas/")) {
-    return false;
-  }
-
-  return true;
 }
 
 async function atomicReplaceFile(tempPath: string, destination: string): Promise<void> {
@@ -89,7 +86,22 @@ export async function reconcileConfigPatches(
       }
     }
 
-    const targetFullPath = path.join(gameDir, patch.path);
+    const targetFullPath = resolveAndContainPath(gameDir, patch.path);
+    await checkPhysicalAncestry(gameDir, targetFullPath);
+
+    for (const op of (patch.operations || [])) {
+      if (op && typeof op === "object") {
+        const key = (op as any).key;
+        const opPath = (op as any).path;
+        if (
+          key === "__proto__" || key === "constructor" || key === "prototype" ||
+          (typeof opPath === "string" && (opPath.includes("__proto__") || opPath.includes("constructor") || opPath.includes("prototype")))
+        ) {
+          throw new Error(`[Config Patch] ✗ ${patch.id}: Prototype-sensitive operation rejected.`);
+        }
+      }
+    }
+
     const fileExists = fs.existsSync(targetFullPath);
 
     if (!fileExists) {

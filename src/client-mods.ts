@@ -5,6 +5,8 @@ import { LauncherLogger } from "./logger";
 import { OperationCoordinator } from "./operations";
 import type { CustomClientMod } from "./types";
 
+import { checkPhysicalAncestrySync, resolveAndContainPath } from "./path-policy";
+
 function assertJar(sourcePath: string): void {
   if (!path.isAbsolute(sourcePath) || path.extname(sourcePath).toLowerCase() !== ".jar") {
     throw new Error("Only local .jar files can be added as client mods.");
@@ -12,13 +14,17 @@ function assertJar(sourcePath: string): void {
   if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
     throw new Error(`Mod file not found: ${sourcePath}`);
   }
+  if (fs.lstatSync(sourcePath).isSymbolicLink()) {
+    throw new Error("Cannot import symbolic link as client mod.");
+  }
 }
 
 function modPath(gameDir: string, filename: string, enabled: boolean): string {
   if (filename !== path.basename(filename) || path.extname(filename).toLowerCase() !== ".jar") {
     throw new Error("Invalid local mod filename.");
   }
-  return path.join(gameDir, "mods", enabled ? filename : `${filename}.disabled`);
+  const relPath = path.join("mods", enabled ? filename : `${filename}.disabled`);
+  return resolveAndContainPath(gameDir, relPath);
 }
 
 export class ClientModManager {
@@ -29,8 +35,12 @@ export class ClientModManager {
   static add(sourcePaths: string[]): CustomClientMod[] {
     OperationCoordinator.assertCanMutate("Cannot modify client mods while an operation or Minecraft is running.");
     const config = ConfigManager.get();
-    const modsDir = path.join(config.gameDir, "mods");
-    fs.mkdirSync(modsDir, { recursive: true });
+    const modsDir = resolveAndContainPath(config.gameDir, "mods");
+    if (!fs.existsSync(modsDir)) {
+      fs.mkdirSync(modsDir, { recursive: true });
+    }
+    checkPhysicalAncestrySync(config.gameDir, modsDir);
+
     const mods = [...(config.customClientMods || [])];
 
     for (const sourcePath of sourcePaths) {
@@ -38,16 +48,47 @@ export class ClientModManager {
       const filename = path.basename(sourcePath);
       const existing = mods.find((mod) => mod.filename.toLowerCase() === filename.toLowerCase());
       const destination = modPath(config.gameDir, filename, true);
-      if (fs.existsSync(destination) && !existing && path.resolve(sourcePath) !== path.resolve(destination)) {
-        throw new Error(`${filename} already exists in the mods folder and is not a launcher-managed local mod.`);
+      checkPhysicalAncestrySync(config.gameDir, destination);
+
+      if (fs.existsSync(destination)) {
+        const destStat = fs.lstatSync(destination);
+        if (destStat.isSymbolicLink()) {
+          throw new Error(`Cannot overwrite symbolic link at destination mod: ${filename}`);
+        }
+        if (!existing && path.resolve(sourcePath) !== path.resolve(destination)) {
+          throw new Error(`${filename} already exists in the mods folder and is not a launcher-managed local mod.`);
+        }
       }
 
-      const tempPath = `${destination}.importing`;
-      fs.copyFileSync(sourcePath, tempPath);
-      fs.rmSync(destination, { force: true });
-      fs.renameSync(tempPath, destination);
+      // Safe exclusive staging with unpredictable random temporary name
+      const tempPath = path.join(
+        modsDir,
+        `.importing-${Date.now()}-${Math.random().toString(16).slice(2)}.jar`
+      );
+
+      try {
+        fs.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+        const tempStat = fs.lstatSync(tempPath);
+        if (tempStat.isSymbolicLink()) {
+          throw new Error("Temporary import staging resolved to a symbolic link.");
+        }
+
+        if (fs.existsSync(destination)) {
+          fs.rmSync(destination, { force: true });
+        }
+        fs.renameSync(tempPath, destination);
+      } catch (importErr: any) {
+        if (fs.existsSync(tempPath)) {
+          try { fs.unlinkSync(tempPath); } catch {}
+        }
+        throw importErr;
+      }
+
       if (existing) {
-        fs.rmSync(modPath(config.gameDir, filename, false), { force: true });
+        const disabledPath = modPath(config.gameDir, filename, false);
+        if (fs.existsSync(disabledPath)) {
+          fs.rmSync(disabledPath, { force: true });
+        }
         existing.enabled = true;
         existing.addedAt = new Date().toISOString();
         existing.size = fs.statSync(destination).size;
@@ -73,6 +114,8 @@ export class ClientModManager {
 
     const source = modPath(config.gameDir, filename, mod.enabled);
     const destination = modPath(config.gameDir, filename, enabled);
+    checkPhysicalAncestrySync(config.gameDir, source);
+    checkPhysicalAncestrySync(config.gameDir, destination);
     if (!fs.existsSync(source)) throw new Error(`${filename} is missing from the mods folder.`);
     if (fs.existsSync(destination)) throw new Error(`Cannot toggle ${filename}: destination already exists.`);
     fs.renameSync(source, destination);
@@ -88,7 +131,9 @@ export class ClientModManager {
     const mods = [...(config.customClientMods || [])];
     const mod = mods.find((entry) => entry.filename === filename);
     if (!mod) throw new Error(`Unknown local mod: ${filename}`);
-    fs.rmSync(modPath(config.gameDir, filename, mod.enabled), { force: true });
+    const target = modPath(config.gameDir, filename, mod.enabled);
+    checkPhysicalAncestrySync(config.gameDir, target);
+    fs.rmSync(target, { force: true });
     LauncherLogger.info(`[Client Mods] Removed custom mod: ${filename}`);
     const updated = mods.filter((entry) => entry.filename !== filename);
     ConfigManager.set({ customClientMods: updated });

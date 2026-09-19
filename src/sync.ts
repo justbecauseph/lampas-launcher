@@ -35,35 +35,19 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-const PROTECTED_PREFIXES = [
-  "saves/",
-  "screenshots/",
-  "logs/",
-  "crash-reports/",
-  "options.txt",
-  "servers.dat",
-];
+import {
+  isSafeRelativePath,
+  isPathProtected,
+  canonicalizeRelativePath,
+  validateDigestString,
+  validateManifestMetadata,
+  sanitizeInstallationState,
+  resolveAndContainPath,
+  checkPhysicalAncestry,
+  checkPhysicalAncestrySync,
+} from "./path-policy";
 
-export function isPathProtected(relPath: string): boolean {
-  const norm = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  return PROTECTED_PREFIXES.some((p) => norm === p || norm.startsWith(p));
-}
-
-export function isSafeRelativePath(relPath: string): boolean {
-  if (!relPath || typeof relPath !== "string") return false;
-  const normalized = path.normalize(relPath).replace(/\\/g, "/");
-  if (
-    normalized.startsWith("../") ||
-    normalized === ".." ||
-    path.isAbsolute(normalized) ||
-    /^[a-zA-Z]:/.test(normalized) ||
-    normalized.startsWith("//") ||
-    normalized.startsWith("\\\\")
-  ) {
-    return false;
-  }
-  return true;
-}
+export { isSafeRelativePath, isPathProtected, sanitizeInstallationState };
 
 export class LauncherSync {
   static async syncClient(
@@ -178,6 +162,9 @@ export class LauncherSync {
       }
     }
 
+    // Validate complete manifest and release metadata before any filesystem mutation
+    validateManifestMetadata(manifest, releaseData);
+
     // Validate and cross-check runtime definition (fails hard before any pack mutation or download)
     const runtime = resolveRuntimeDefinition(releaseData, manifest);
 
@@ -210,7 +197,17 @@ export class LauncherSync {
     let prevState: InstallationState = { pack: "", version: "", installedAt: "", files: {} };
     if (fs.existsSync(stateFile)) {
       try {
-        prevState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+        const rawPrev = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+        const sanitized = sanitizeInstallationState(rawPrev, gameDir);
+        if (sanitized.quarantinedKeys.length > 0) {
+          LauncherLogger.warn(
+            `[Sync] Quarantined ${sanitized.quarantinedKeys.length} unsafe/traversal paths from previous installation state: ${sanitized.quarantinedKeys.join(", ")}`
+          );
+        }
+        prevState = {
+          ...rawPrev,
+          files: sanitized.files,
+        };
       } catch {
         // fresh state
       }
@@ -298,7 +295,12 @@ export class LauncherSync {
     const toDeleteSet = new Set<string>();
     for (const [prevPath, info] of Object.entries(prevState.files)) {
       if (info.policy === "MANAGED" && !desiredFilesMap.has(prevPath) && !isPathProtected(prevPath)) {
-        toDeleteSet.add(prevPath);
+        try {
+          resolveAndContainPath(gameDir, prevPath);
+          toDeleteSet.add(prevPath);
+        } catch {
+          LauncherLogger.warn(`[Sync] Skipping uncontained obsolete candidate: ${prevPath}`);
+        }
       }
     }
 
@@ -309,10 +311,15 @@ export class LauncherSync {
       try {
         const diskFiles = fs.readdirSync(modsDir);
         for (const file of diskFiles) {
-          if (file.endsWith(".jar")) {
+          if (file.toLowerCase().endsWith(".jar")) {
             const relModPath = `mods/${file}`;
             if (!desiredFilesMap.has(relModPath) && !isPathProtected(relModPath) && !customModFilenames.has(file.toLowerCase())) {
-              toDeleteSet.add(relModPath);
+              try {
+                resolveAndContainPath(gameDir, relModPath);
+                toDeleteSet.add(relModPath);
+              } catch {
+                LauncherLogger.warn(`[Sync] Skipping uncontained mod candidate: ${relModPath}`);
+              }
             }
           }
         }
@@ -376,6 +383,7 @@ export class LauncherSync {
           }
 
           // Check blob cache first
+          validateDigestString(file.hashes.sha256, "sha256");
           let cached = false;
           const cachePath = path.join(cacheDir, file.hashes.sha256.substring(0, 2), file.hashes.sha256);
           if (fs.existsSync(cachePath)) {
@@ -434,8 +442,10 @@ export class LauncherSync {
       });
 
       for (const file of toDownload) {
+        validateDigestString(file.hashes.sha256, "sha256");
         const cachePath = path.join(cacheDir, file.hashes.sha256.substring(0, 2), file.hashes.sha256);
-        const destPath = path.join(gameDir, file.path);
+        const destPath = resolveAndContainPath(gameDir, file.path);
+        await checkPhysicalAncestry(gameDir, destPath);
         await copyAtomic(cachePath, destPath);
         LauncherLogger.info(`  ✓ [Replaced] ${file.path}`);
         const outcome = transferOutcomes.get(file.path);
@@ -448,10 +458,20 @@ export class LauncherSync {
 
     // 6. Delete obsolete managed files
     for (const relPath of toDelete) {
-      const fullPath = path.join(gameDir, relPath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        LauncherLogger.info(`  🗑 [Deleted Obsolete] ${relPath}`);
+      try {
+        const fullPath = resolveAndContainPath(gameDir, relPath);
+        checkPhysicalAncestrySync(gameDir, fullPath);
+        if (fs.existsSync(fullPath)) {
+          const lstat = fs.lstatSync(fullPath);
+          if (lstat.isSymbolicLink()) {
+            LauncherLogger.warn(`[Sync] Refusing to delete symlink during obsolete file cleanup: ${relPath}`);
+            continue;
+          }
+          fs.unlinkSync(fullPath);
+          LauncherLogger.info(`  🗑 [Deleted Obsolete] ${relPath}`);
+        }
+      } catch (delErr: any) {
+        LauncherLogger.warn(`[Sync] Failed to safely delete obsolete file '${relPath}': ${delErr.message}`);
       }
     }
 

@@ -967,10 +967,150 @@ Following review of checkpoint `adfcf32b97f13baf763d52ab2455048f1f5030f0`, five 
   - Child boundary runner (`test/security-boundary-characterization.ts`): **61 passed, 0 failed, 0 outbound violations, 0 skipped**.
   - Real Electron DPAPI restart test (`test/electron-dpapi-restart.test.ts`): **1 passed, 0 failed** (29 expect calls).
   - TypeScript typechecks: 0 errors across `tsconfig.json`, `tsconfig.renderer.json`, and `tsconfig.security-test.json`.
+- **Review Gate 3 Acceptance:** Checkpoint `bb73f3694f776df3f0690f98c2a4f06fe12b8ca4` was formally reviewed and accepted on 20 September 2026. Phase 4 authorization granted.
+
+---
+
+## Review Gate 4 — Unified Path Ownership, Containment, and Safe Recovery (SEC-04, SEC-05)
+
+- **Execution Date:** 20 September 2026
+- **Status:** Ready for Review (Implementation & Verification Complete)
+- **Accepted Baseline Checkpoint:** `149f10021efce2939c6c12150a3a07dd61b622dc`
+- **Accepted Review Gate 1 Checkpoint:** `e1d029112bd4b2843d61ccc19891556192e3efeb`
+- **Accepted Review Gate 2 Checkpoint:** `16bd12ddecbbcd10041c79b5a2be45c2da0a60c7`
+- **Accepted Review Gate 3 Checkpoint:** `bb73f3694f776df3f0690f98c2a4f06fe12b8ca4`
+- **Review Gate 4 Implementation Checkpoint:** `HEAD`
+- **Current Branch:** `feat/security`
+- **Scope Restriction:** Strictly restricted to Phase 4 ("Unified path ownership, containment, and safe recovery" — `SEC-04` and `SEC-05`). Phase 5 (`SEC-06`, `SEC-07`, `SEC-11`) and subsequent phases remain paused. Acceptance does not authorize merging, tagging, or publication.
+
+---
+
+### 1. Code Drift, Commit Hierarchy & Baseline Verification
+
+A complete audit of changes was performed against the accepted Review Gate 3 checkpoint (`bb73f3694f776df3f0690f98c2a4f06fe12b8ca4`) and the baseline:
+
+| Dimension | Accepted Baseline (`149f100`) | Accepted RG 3 (`bb73f36`) | RG 4 Implementation (`HEAD`) | Drift Evaluation |
+|---|---|---|---|---|
+| **Production Code (`src/`, `ui/`)** | Pristine baseline (`0 lines`) | 12 files modified, 3 added | 6 files modified, 1 added (`src/path-policy.ts`) | **Constrained strictly to Phase 4 hardening** |
+| **Dependencies (`bun.lock`, `package.json`)** | Pinned | Pinned (identical) | Pinned (identical) | **Byte-identical lockfile & package versions** |
+| **Lockfile SHA-256** | `51834981...E4B3A` | `51834981...E4B3A` | `51834981...E4B3A` | **Byte-identical (zero package mutations; 0 diff)** |
+| **Package Version** | `1.3.0` | `1.3.0` | `1.3.0` | **Byte-identical** |
+| **Child Boundary Runner (`security-boundary-characterization.ts`)** | 8 passed (RG 0.1) | 61 passed | **61 passed, 0 failed, 0 outbound violations, 0 skipped** | **Zero regression** |
+| **Parent Characterization Suite (`security-characterization.test.ts`)** | 16 passed | 16 passed | **16 passed (all Phase 4 assertions converted to secure behavior)** | **16/16 passing (110 expect calls)** |
+| **Regression Gates (`test/security-regression-gates.test.ts`)** | 6 passed (Phase 1) | 17 passed | **22 passed, 0 failed, 1 skipped, 4 todo** | **+5 Phase 4 gates unskipped & operationalized** |
+| **Failure Reproductions (`test/security-failure-reproductions.test.ts`)** | 0 passed | 32 passed | **41 passed, 0 failed** | **+9 Phase 4 reproduction tests (Defects 4a-4i)** |
+| **Full Test Suite (`bun test`)** | 277 passed | 327 passed | **341 passed, 0 failed, 1 skipped, 4 todo across 36 files** | **All 36 test files pass cleanly (1571 expect calls)** |
+| **Security Test Typecheck** | 0 errors | 0 errors | **0 errors (`tsconfig.security-test.json`)** | **0 errors** |
+| **Production Typecheck & Build** | Clean | Clean | **0 errors (`tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit` and `vite build`)** | **0 errors** |
+| **Electron Smoke & Adversarial Tests** | Passed | Passed | **Passed (unpacked dev/dist + packaged binary ASAR + adversarial assertions)** | **0 errors (no `--no-sandbox`)** |
+
+---
+
+### 2. Phase 4 Implementation Details: Architecture and Defense in Depth
+
+#### 2.1 Unified Path Policy & Ownership Engine (`src/path-policy.ts`)
+A dedicated module `src/path-policy.ts` centralizes all path security invariants across the launcher:
+1. **Canonical Relative Path Validation (`canonicalizeRelativePath`):**
+   - Strips and rejects null bytes (`\0`) and ASCII control characters (0x01–0x1F).
+   - Enforces POSIX-normalized forward slashes.
+   - Rejects drive-qualified roots (`C:`, `D:\`), UNC network shares (`\\server\share`), and absolute roots (`/etc/passwd`).
+   - Rejects directory traversal tokens (`..` and embedded `/../`).
+   - Rejects trailing dots and spaces (Windows silent stripping vulnerability).
+   - Rejects NTFS Alternate Data Streams (`:stream`).
+   - Rejects DOS reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) regardless of case or extension.
+   - Rejects prototype pollution keys (`__proto__`, `constructor`, `prototype`).
+2. **Cryptographic Digest Validation (`validateDigestString`):**
+   - Validates hex hash strings against strict cryptographic patterns: SHA-256 (64 hex) and SHA-1 (40 hex).
+   - Preempts directory traversal attacks attempted via poisoned asset hashes or blob digests.
+3. **Protected Path & Ownership Demarcation (`isPathProtected`):**
+   - Dot-alias normalization prior to namespace checks (`path.posix.normalize(relPath)` prevents `mods/../saves/world.txt` from bypassing protection).
+   - Case-insensitive evaluation on Windows (`process.platform === "win32"`).
+   - Preserves player and system namespaces from launcher modification or deletion:
+     - `saves/`, `screenshots/`, `logs/`, `crash-reports/`, `resourcepacks/`, `shaderpacks/`.
+     - `options.txt`, `servers.dat`, `usercache.json`, `hotbar.nbt`, `realms_persistence.json`.
+   - Reserves internal launcher metadata namespaces (`.lampas`, `.lampas/*`, `.lampas-moving-*`).
+4. **Lexical & Physical Ancestry Containment (`resolveAndContainPath`, `checkPhysicalAncestry`, `checkPhysicalAncestrySync`):**
+   - Strictly contains all resolved target paths within designated base roots (`gameDir`, `assetsDir`, `modsDir`).
+   - Resolves real paths iteratively along the ancestor chain, failing closed if symlinks, junctions, or hard links escape the designated base root.
+   - Rejects special non-regular files (FIFOs, Unix domain sockets, block/character devices).
+5. **Manifest & Release Preflight Validation (`validateManifestMetadata`):**
+   - Validates all files declared in client manifests and release payloads before sync execution.
+   - Prevents duplicate or case-equivalent file targets (e.g. `mods/A.jar` vs `mods/a.jar` on Windows).
+   - Detects and rejects whole-file collisions with config patches (`config/patch.json` declared as both a full file and a patch target).
+   - Validates all cryptographic digests and file sizes (`size >= 0`).
+6. **Installation State Quarantine & Sanitization (`sanitizeInstallationState`):**
+   - Filters untrusted or corrupted `prevState.files` records prior to obsolete file cleanup.
+   - Quarantines paths with traversal components, protected player directories, or paths escaping `gameDir`.
+
+#### 2.2 Client Sync Pipeline Hardening (`src/sync.ts`)
+- Re-exports centralized path-policy primitives.
+- Integrates `validateManifestMetadata` preflight check at the beginning of `syncGameFiles`. If any manifest entry is uncontained, malformed, or targets a protected path, sync aborts immediately before modifying files.
+- Purges malicious or corrupted previous state via `sanitizeInstallationState(rawPrevState, gameDir)` before computing obsolete files for deletion.
+- Enforces strict lexical and physical containment checks (`resolveAndContainPath`, `checkPhysicalAncestrySync`, `!isPathProtected`) before deleting obsolete files.
+- Enforces `validateDigestString` and staging directory containment for cached downloads.
+
+#### 2.3 Game Directory Migration & Recovery Hardening (`src/game-directory.ts`)
+- **Strict Move Journal Validation (`validateMoveJournal`):**
+  - Enforces journal schema version (supports v1 and v2), valid phase names (`planning`, `copying`, `verifying`, `switching`, `cleaning`, `finalizing`), and strictly formatted `operationId` (`UUIDv4`).
+  - Validates `source`, `target`, and `staging` paths for existence, absolute formatting, and mutual disjointness (disallowing root directories, system directories, or overlapping directories).
+  - Enforces staging directory containment: staging path must be a sibling directory named `.lampas-moving-*` located within `path.dirname(target)` or `path.dirname(source)`.
+- **Atomic Journal Quarantine (`quarantineJournal`):**
+  - When an unverified, corrupted, or forged journal is detected (e.g., pointing `staging` or `source` to `C:\Windows` or user home), the journal is atomically renamed to `.quarantine.<timestamp>` without deleting user files or traversing unverified directories.
+- **Fail-Closed Move Recovery (`recoverInterruptedMove`):**
+  - Before performing source cleanup in `cleaning` or `finalizing` phases, re-scans `target` via `scanDirectoryAsync(target)` (filtering out the receipt file `.lampas_move_receipt.json`) and verifies that `fileCount` and `totalBytes` match the receipt exactly.
+  - If target inventory mismatches or files are missing, recovery aborts fail-closed by throwing an error, preserving both source and journal on disk for administrator diagnostics rather than risking data loss.
+
+#### 2.4 Client Mods Import & Management Hardening (`src/client-mods.ts`)
+- `assertJar`: Validates `.jar` extension, ensures file existence, and rejects symbolic links.
+- Hardened import workflow:
+  - Generates unpredictable random staging filenames (`.importing-<timestamp>-<nonce>.jar`).
+  - Validates that the staging path is contained within `mods/` using `resolveAndContainPath`.
+  - Atomically creates and copies staging files using `fs.constants.COPYFILE_EXCL`.
+  - Enforces `resolveAndContainPath` and `checkPhysicalAncestrySync` on final destination paths.
+  - Explicitly rejects destination symlink squatting before renaming staging files into place.
+- Hardened `setEnabled` and `remove` with containment and ancestry checks.
+
+#### 2.5 Minecraft Assets & Java Runtime Hardening (`src/minecraft-bootstrap.ts`, `src/java-runtime.ts`)
+- Validates asset object hashes via `validateDigestString(hash, "sha1")` and contains asset objects inside `assets/objects/<prefix>/<hash>`.
+- Extracted native library basenames validated with `resolveAndContainPath` to prevent escape during native unpacking.
+- Java runtime manifest download and extraction validated with `resolveAndContainPath`, `checkPhysicalAncestry`, and `validateDigestString`.
+
+#### 2.6 Config Patch Reconciler Hardening (`src/config-patches/reconciler.ts`)
+- Replaces legacy ad-hoc path checks with `canonicalizeRelativePath` and `!isPathProtected`.
+- Enforces `resolveAndContainPath` and `checkPhysicalAncestry` before applying config patches.
+- Prevents prototype pollution attacks by rejecting property keys named `__proto__`, `constructor`, or `prototype`.
+
+---
+
+### 3. Defect Reproductions (Defects 4a through 4i in `test/security-failure-reproductions.test.ts`)
+
+Nine comprehensive reproduction tests were added and verified:
+1. **Defect 4a (Manifest Path Traversal):** Rejects directory traversal tokens (`../`, `..\`, encoded paths) in client manifest targets during preflight validation before downloading or staging files.
+2. **Defect 4b (Windows DOS Devices & Alternate Data Streams):** Rejects reserved DOS device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) and NTFS ADS (`file.txt:hidden`) in manifest entries.
+3. **Defect 4c (Duplicate / Case-Equivalent Destinations):** Rejects manifests containing identical or case-variant destination paths (`mods/test.jar` and `mods/TEST.jar`).
+4. **Defect 4d (Malformed Cryptographic Digests):** Rejects non-hex or malformed SHA-256 / SHA-1 digest strings in manifest file entries.
+5. **Defect 4e (Corrupted Previous Installation State):** Purges malicious traversal paths (`../../etc/shadow`) and protected paths (`saves/world`) from `prevState.files` during synchronization, preventing arbitrary file deletion during obsolete cleanup.
+6. **Defect 4f (Whole-File & Config-Patch Collisions):** Rejects manifests where a file path is defined as both an immutable whole-file download and a config patch target.
+7. **Defect 4g (Mod Import Symlink Squatting):** Rejects custom mod import when the target file path in `mods/` is a pre-existing symbolic link pointing outside the directory.
+8. **Defect 4h (Unverified Staging Directory Quarantine):** Detects move journals specifying unverified staging paths outside launcher control (e.g. user documents) and quarantines the journal without deleting foreign directory contents.
+9. **Defect 4i (Target Inventory Mismatch Abort):** Detects missing or corrupted files during move recovery `cleaning` phase and aborts without deleting source files.
+
+---
+
+### 4. Review Gate 4 Status & Pause Declaration
+
+- **All Phase 4 Requirements Implemented, Verified, and Green:**
+  - Full suite (`bun test`): **341 passed, 0 failed, 1 skipped, 4 todo across 36 files** (1571 expect calls).
+  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **41 passed, 0 failed** (280 expect calls).
+  - Security regression gates (`test/security-regression-gates.test.ts`): **22 passed, 0 failed, 1 skipped, 4 todo** (159 expect calls).
+  - Security characterization tests (`test/security-characterization.test.ts`): **16 passed, 0 failed** (110 expect calls).
+  - Child boundary runner (`test/security-boundary-characterization.ts`): **61 passed, 0 failed, 0 outbound violations, 0 skipped**.
+  - Strict smoke test (`bun test/smoke/electron-smoke.ts --strict`): **100% passed** (real Electron 44.0.0 and packaged binary ASAR verified; zero `--no-sandbox`).
+  - TypeScript typechecks: 0 errors across main, renderer, and test targets.
   - Production build: `bun run build` succeeds cleanly in 153ms.
-  - Strict smoke test: `bun test/smoke/electron-smoke.ts --strict` succeeds cleanly (real Electron 44.0.0 and packaged binary ASAR verified; zero `--no-sandbox`).
   - Lockfile: `git diff bun.lock` is empty (zero drift; byte-identical to baseline).
 
-**STOPPING AT REVIEW GATE 3.** Phase 4 remains paused pending formal review and acceptance of Review Gate 3. Acceptance does not authorize merging, tagging, or publication. Ready for user review.
+**STOPPING AT REVIEW GATE 4.** Phase 5 (`SEC-06`, `SEC-07`, `SEC-11`) remains paused pending formal review and acceptance of Review Gate 4. Acceptance does not authorize merging, tagging, or publication. Ready for user review.
+
 
 

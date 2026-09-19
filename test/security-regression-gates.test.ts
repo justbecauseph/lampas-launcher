@@ -39,6 +39,9 @@ let normalizePortalUrl: any;
 let validateWebUrl: any;
 let LauncherAuth: any;
 let isPathProtected: any;
+let LauncherSync: any;
+let PathContainmentError: any;
+let GameDirectoryManager: any;
 let LauncherLogger: any;
 let LauncherLoggerService: any;
 
@@ -66,6 +69,13 @@ beforeAll(async () => {
 
   const syncMod = await import("../src/sync");
   isPathProtected = syncMod.isPathProtected;
+  LauncherSync = syncMod.LauncherSync;
+
+  const pathPolicyMod = await import("../src/path-policy");
+  PathContainmentError = pathPolicyMod.PathContainmentError;
+
+  const gameDirMod = await import("../src/game-directory");
+  GameDirectoryManager = gameDirMod.GameDirectoryManager;
 
   const loggerMod = await import("../src/logger");
   LauncherLogger = loggerMod.LauncherLogger;
@@ -88,6 +98,7 @@ beforeEach(() => {
   CredentialStore?.resetForTesting();
   SessionManager?.resetForTesting();
   ConfigManager?.resetForTesting();
+  GameDirectoryManager?.resetForTesting();
 });
 
 afterAll(async () => {
@@ -711,26 +722,110 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
 });
 
 describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recovery (SEC-04, SEC-05)", () => {
-  test.skip("[Phase 4 Gate] Path helper: isPathProtected normalizes dot-aliases before checking protected namespaces", () => {
+  test("[Phase 4 Gate] Path helper: isPathProtected normalizes dot-aliases before checking protected namespaces", () => {
     // Target invariant: Dot-alias traversal 'mods/../saves/world.txt' must resolve into protected
     // 'saves/' namespace and return true (protected).
     expect(isPathProtected("mods/../saves/world.txt")).toBe(true);
   });
 
-  test.skip("[Phase 4 Gate] Path helper: isPathProtected performs case-insensitive comparison on Windows", () => {
+  test("[Phase 4 Gate] Path helper: isPathProtected performs case-insensitive comparison on Windows", () => {
     // Target invariant: On Windows, case variations of protected namespaces ('Saves/', 'SAVES/')
     // must be recognized as protected.
     expect(isPathProtected("SAVES/world.txt")).toBe(true);
     expect(isPathProtected("Saves/world.txt")).toBe(true);
   });
 
-  test.skip("[Phase 4 Gate] Path helper: isPathProtected reserves internal launcher namespaces (.lampas)", () => {
+  test("[Phase 4 Gate] Path helper: isPathProtected reserves internal launcher namespaces (.lampas)", () => {
     // Target invariant: The launcher internal state directory (.lampas/) must be protected.
     expect(isPathProtected(".lampas/installation.json")).toBe(true);
   });
 
-  test.todo("[Phase 4 Gate] Operation-level: Client sync pipeline blocks unauthorized file mutations in protected paths");
-  test.todo("[Phase 4 Gate] Operation-level: Move recovery rejects unverified staging paths outside approved launcher staging");
+  test("[Phase 4 Gate] Operation-level: Client sync pipeline blocks unauthorized file mutations in protected paths", async () => {
+    // 1. Mock portal serving malicious manifest attempting mutation of protected path 'saves/stolen-world.txt'
+    const mockHash = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/channels/stable") {
+          return Response.json({ version: "2.5.0" });
+        }
+        if (url.pathname === "/api/v1/releases/2.5.0") {
+          return Response.json({ version: "2.5.0" });
+        }
+        if (url.pathname === "/api/v1/releases/2.5.0/client-manifest") {
+          return Response.json({
+            pack: "Lampas Malicious Pack",
+            version: "2.5.0",
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
+            files: [
+              {
+                path: "saves/stolen-world.txt",
+                hashes: { sha256: mockHash },
+                size: 10,
+                download: { url: `/api/v1/blobs/${mockHash}` },
+                policy: "MANAGED",
+              },
+            ],
+            mods: [],
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+
+    try {
+      ConfigManager.set({ gameDir, selectedChannel: "stable" });
+      ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "gate-token-123" });
+
+      await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
+        /targets protected or reserved namespace/
+      );
+
+      // Verify negative invariant: protected path was never written to on disk
+      expect(fs.existsSync(path.join(gameDir, "saves", "stolen-world.txt"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("[Phase 4 Gate] Operation-level: Move recovery rejects unverified staging paths outside approved launcher staging", async () => {
+    const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-staging-"));
+    const outsideVictimFile = path.join(outsideVictimDir, "important-user-document.txt");
+    fs.writeFileSync(outsideVictimFile, "vital-user-data-do-not-delete", "utf-8");
+
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const unverifiedJournal = {
+      version: 2,
+      operationId: "op-unverified-recovery-test",
+      phase: "preparing",
+      source: path.join(gameDir, "source-dir"),
+      target: path.join(gameDir, "target-dir"),
+      staging: outsideVictimDir,
+      startTime: new Date().toISOString(),
+    };
+    fs.writeFileSync(journalPath, JSON.stringify(unverifiedJournal, null, 2), "utf-8");
+
+    try {
+      ConfigManager.set({ gameDir });
+      await GameDirectoryManager.recoverInterruptedMove();
+
+      // Journal must be quarantined, not executed
+      expect(fs.existsSync(journalPath)).toBe(false);
+      const quarantined = fs.readdirSync(userDataDir).filter((f: string) => f.startsWith("directory-move.json.quarantine."));
+      expect(quarantined.length).toBeGreaterThan(0);
+
+      // Target invariant: victim directory and data outside launcher staging remain intact
+      expect(fs.existsSync(outsideVictimDir)).toBe(true);
+      expect(fs.existsSync(outsideVictimFile)).toBe(true);
+      expect(fs.readFileSync(outsideVictimFile, "utf-8")).toBe("vital-user-data-do-not-delete");
+    } finally {
+      if (fs.existsSync(outsideVictimDir)) {
+        fs.rmSync(outsideVictimDir, { recursive: true, force: true });
+      }
+    }
+  });
 });
 
 describe("Phase 5 Regression Gate — Integrity Checks Fail Closed & Fallback Policy (SEC-06, SEC-07, SEC-11)", () => {

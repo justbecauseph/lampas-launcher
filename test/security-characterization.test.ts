@@ -23,7 +23,7 @@ mock.module("electron", () => ({
 // Load modules under test
 const { LauncherLogger, LauncherLoggerService } = await import("../src/logger");
 const { ConfigManager, normalizePortalUrl, PortalPolicy } = await import("../src/config");
-const { isPathProtected, isSafeRelativePath } = await import("../src/sync");
+const { isPathProtected, isSafeRelativePath, sanitizeInstallationState } = await import("../src/sync");
 const { GameDirectoryManager } = await import("../src/game-directory");
 const { FabricMetaResolver } = await import("../src/fabric-meta");
 const { downloadVerified } = await import("../src/file-transfer");
@@ -178,38 +178,43 @@ describe("Phase 3 Security Verification — SEC-03: Plaintext Credential Separat
   });
 });
 
-describe("Phase 0 Security Characterization — SEC-04: Path Containment & Ownership Inconsistencies", () => {
-  test("isSafeRelativePath and isPathProtected have inconsistent dot-alias handling", () => {
+describe("Phase 4 Security Verification — SEC-04: Path Containment & Ownership Enforcement", () => {
+  test("isSafeRelativePath and isPathProtected consistently reject and protect dot-alias traversal", () => {
     const candidate = "mods/../saves/world-data.txt";
-    expect(isSafeRelativePath(candidate)).toBe(true);
-    expect(isPathProtected(candidate)).toBe(false);
+    // Traversal components are rejected by isSafeRelativePath
+    expect(isSafeRelativePath(candidate)).toBe(false);
+    // Dot-aliases are normalized and recognized as protected
+    expect(isPathProtected(candidate)).toBe(true);
   });
 
-  test("isPathProtected fails on Windows uppercase path variants", () => {
+  test("isPathProtected enforces case-insensitive protection for protected paths", () => {
     expect(isPathProtected("saves/level.dat")).toBe(true);
-    expect(isPathProtected("Saves/level.dat")).toBe(false);
-    expect(isPathProtected("SAVES/level.dat")).toBe(false);
-    expect(isPathProtected("Screenshots/1.png")).toBe(false);
-    expect(isPathProtected("Logs/latest.log")).toBe(false);
+    expect(isPathProtected("Saves/level.dat")).toBe(true);
+    expect(isPathProtected("SAVES/level.dat")).toBe(true);
+    expect(isPathProtected("Screenshots/1.png")).toBe(true);
+    expect(isPathProtected("Logs/latest.log")).toBe(true);
   });
 
-  test("Internal launcher state directory (.lampas) is not protected from pack manifest paths", () => {
+  test("Internal launcher state directory (.lampas) is protected from pack mutations", () => {
     const internalPath = ".lampas/installation.json";
     expect(isSafeRelativePath(internalPath)).toBe(true);
-    expect(isPathProtected(internalPath)).toBe(false);
+    expect(isPathProtected(internalPath)).toBe(true);
   });
 
-  test("Previous state obsolete deletion resolves unvalidated traversal keys outside gameDir", () => {
+  test("Previous state obsolete deletion sanitizes unvalidated traversal keys outside gameDir", () => {
     const outsideSentinelDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-outside-sentinel-"));
     const outsideSentinelFile = path.join(outsideSentinelDir, "important-data.txt");
     fs.writeFileSync(outsideSentinelFile, "sentinel-payload");
 
     try {
       const relTraversal = path.relative(gameDir, outsideSentinelFile);
-      expect(isPathProtected(relTraversal)).toBe(false);
-
-      const resolved = path.join(gameDir, relTraversal);
-      expect(path.resolve(resolved)).toBe(path.resolve(outsideSentinelFile));
+      // Traversal key is quarantined by sanitizeInstallationState
+      const sanitized = sanitizeInstallationState(
+        { files: { [relTraversal]: { policy: "MANAGED" } } },
+        gameDir
+      );
+      expect(sanitized.quarantinedKeys).toContain(relTraversal);
+      expect(sanitized.files[relTraversal]).toBeUndefined();
     } finally {
       if (fs.existsSync(outsideSentinelDir)) {
         fs.rmSync(outsideSentinelDir, { recursive: true, force: true });
@@ -218,18 +223,19 @@ describe("Phase 0 Security Characterization — SEC-04: Path Containment & Owner
   });
 });
 
-describe("Phase 0 Security Characterization — SEC-05: Move Recovery Recursive Deletion of Staging", () => {
-  test("recoverInterruptedMove recursively deletes arbitrary unvalidated staging path in 'preparing' phase", async () => {
+describe("Phase 4 Security Verification — SEC-05: Move Recovery Staging Containment & Safe Recovery", () => {
+  test("recoverInterruptedMove quarantines unvalidated staging path and preserves outside directories", async () => {
     const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-dir-"));
     const victimFile = path.join(outsideVictimDir, "important-user-document.txt");
     fs.writeFileSync(victimFile, "do-not-delete-this-data", "utf-8");
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     const maliciousJournal = {
-      opId: "op-corrupt-staging",
+      version: 2,
+      operationId: "op-corrupt-staging",
       phase: "preparing",
-      source: path.join(gameDir, "nonexistent-src"),
-      target: path.join(gameDir, "nonexistent-dst"),
+      source: gameDir,
+      target: path.join(path.dirname(gameDir), "new-game-dir"),
       staging: outsideVictimDir,
       startTime: new Date().toISOString(),
     };
@@ -238,7 +244,14 @@ describe("Phase 0 Security Characterization — SEC-05: Move Recovery Recursive 
     try {
       expect(fs.existsSync(victimFile)).toBe(true);
       await GameDirectoryManager.recoverInterruptedMove();
-      expect(fs.existsSync(outsideVictimDir)).toBe(false);
+      // Target invariant: outside victim directory and file are preserved intact
+      expect(fs.existsSync(victimFile)).toBe(true);
+      expect(fs.existsSync(outsideVictimDir)).toBe(true);
+
+      // Journal was quarantined
+      expect(fs.existsSync(journalPath)).toBe(false);
+      const quarantined = fs.readdirSync(userDataDir).filter((f: string) => f.startsWith("directory-move.json.quarantine."));
+      expect(quarantined.length).toBeGreaterThan(0);
     } finally {
       if (fs.existsSync(outsideVictimDir)) {
         fs.rmSync(outsideVictimDir, { recursive: true, force: true });
