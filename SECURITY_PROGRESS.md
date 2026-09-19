@@ -1109,6 +1109,7 @@ All 6 findings from Review Gate 4 review have been addressed and verified:
 1. **Finding 1 (High — Physical Containment & Ownership):**
    - `checkPhysicalAncestry` and `checkPhysicalAncestrySync` equipped with `enforceOwnership: true` to inspect realpath against `isPathProtected`, detecting symlink directory aliases like `mods/redirected -> ../saves/world`.
    - Subordinate roots (`.lampas`, `runtime`, `natives`, `mods`, etc.) validated via `assertSubordinateRoot`.
+   - Canonical disk path normalization (`getCanonicalDiskPath`) ensures Windows 8.3 short-name aliases (e.g. `RUNNER~1` vs `runneradmin`) resolve to consistent realpaths, preventing false-positive containment rejections.
    - Leaf hardlink squatting: unlinks pre-existing hardlinks (`nlink > 1`) and symlinks before copying/writing files in sync, bootstrap, and runtime.
 2. **Finding 2 (High — Move Staging Ownership & Test Bypass):**
    - Removed `process.env.NODE_ENV !== "test"` bypass.

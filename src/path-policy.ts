@@ -250,6 +250,43 @@ export function isPathProtected(relPath: string): boolean {
 }
 
 /**
+ * Safely resolves the canonical realpath of a directory or path,
+ * falling back to resolving the nearest existing ancestor if the path itself does not exist.
+ * This guarantees consistent resolution of 8.3 short paths (e.g. RUNNER~1 vs runneradmin)
+ * and symlinks on Windows and UNIX platforms.
+ */
+export function getCanonicalDiskPath(targetPath: string): string {
+  const resolved = path.resolve(targetPath);
+  if (fs.existsSync(resolved)) {
+    try {
+      return fs.realpathSync(resolved);
+    } catch {
+      return resolved;
+    }
+  }
+
+  // Walk up to find nearest existing ancestor
+  let ancestor = resolved;
+  const missingParts: string[] = [];
+  while (ancestor) {
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break;
+    missingParts.unshift(path.basename(ancestor));
+    ancestor = parent;
+    if (fs.existsSync(ancestor)) {
+      try {
+        const realAncestor = fs.realpathSync(ancestor);
+        return path.join(realAncestor, ...missingParts);
+      } catch {
+        return resolved;
+      }
+    }
+  }
+
+  return resolved;
+}
+
+/**
  * Resolves a path relative to a base directory and verifies that it is strictly contained within baseDir.
  * Returns the resolved canonical absolute path.
  */
@@ -276,6 +313,22 @@ export function resolveAndContainPath(
 
   const basePrefix = compBase.endsWith(path.sep) ? compBase : compBase + path.sep;
   if (!compTarget.startsWith(basePrefix)) {
+    // On Windows, paths can differ by 8.3 short name (e.g. RUNNER~1 vs runneradmin).
+    // If initial prefix match fails, compare canonical disk paths.
+    if (isWindows) {
+      const canonBase = getCanonicalDiskPath(resolvedBase).toLowerCase();
+      const canonTarget = getCanonicalDiskPath(resolvedTarget).toLowerCase();
+      const canonPrefix = canonBase.endsWith(path.sep) ? canonBase : canonBase + path.sep;
+
+      if (canonTarget === canonBase) {
+        if (options.allowEqual) return resolvedTarget;
+        throw new PathContainmentError(`Target path cannot be identical to base directory: '${targetRelOrAbs}'`);
+      }
+      if (canonTarget.startsWith(canonPrefix)) {
+        return resolvedTarget;
+      }
+    }
+
     throw new PathContainmentError(
       `Path containment violation: '${targetRelOrAbs}' resolves outside base directory '${baseDir}'`
     );
@@ -298,11 +351,13 @@ export function assertSubordinateRoot(gameDir: string, subDir: string): string {
   // Lexical containment
   resolveAndContainPath(resolvedGameDir, resolvedSubDir, { allowEqual: true });
 
+  const canonGameDir = getCanonicalDiskPath(resolvedGameDir);
+
   // If subDir exists, verify physical ancestry
   if (fs.existsSync(resolvedSubDir)) {
     checkPhysicalAncestrySync(resolvedGameDir, resolvedSubDir, { enforceOwnership: false });
-    const realSubDir = fs.realpathSync(resolvedSubDir);
-    resolveAndContainPath(resolvedGameDir, realSubDir, { allowEqual: true });
+    const realSubDir = getCanonicalDiskPath(resolvedSubDir);
+    resolveAndContainPath(canonGameDir, realSubDir, { allowEqual: true });
   } else {
     // If not yet created, verify its closest existing ancestor
     let parent = path.dirname(resolvedSubDir);
@@ -311,8 +366,8 @@ export function assertSubordinateRoot(gameDir: string, subDir: string): string {
     }
     if (fs.existsSync(parent)) {
       checkPhysicalAncestrySync(resolvedGameDir, parent, { enforceOwnership: false });
-      const realParent = fs.realpathSync(parent);
-      resolveAndContainPath(resolvedGameDir, realParent, { allowEqual: true });
+      const realParent = getCanonicalDiskPath(parent);
+      resolveAndContainPath(canonGameDir, realParent, { allowEqual: true });
     }
   }
 
@@ -344,6 +399,8 @@ export function checkPhysicalAncestrySync(
   const rel = path.relative(resolvedBase, resolvedTarget);
   if (!rel || rel === ".") return;
 
+  const canonBase = getCanonicalDiskPath(resolvedBase);
+
   const parts = rel.split(path.sep);
   let current = resolvedBase;
 
@@ -373,10 +430,10 @@ export function checkPhysicalAncestrySync(
       } catch (err: any) {
         throw new PathContainmentError(`Cannot resolve symlink target at '${current}': ${err.message}`);
       }
-      resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
+      resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
 
       if (options.enforceOwnership) {
-        const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+        const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
         if (isPathProtected(relToRoot)) {
           throw new PathContainmentError(
             `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`
@@ -406,8 +463,8 @@ export function checkPhysicalAncestrySync(
     if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
       try {
         const realTarget = fs.realpathSync(checkPath);
-        resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
-        const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+        resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
+        const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
         if (isPathProtected(relToRoot)) {
           throw new PathContainmentError(
             `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`
@@ -436,6 +493,8 @@ export async function checkPhysicalAncestry(
   const rel = path.relative(resolvedBase, resolvedTarget);
   if (!rel || rel === ".") return;
 
+  const canonBase = getCanonicalDiskPath(resolvedBase);
+
   const parts = rel.split(path.sep);
   let current = resolvedBase;
 
@@ -450,10 +509,10 @@ export async function checkPhysicalAncestry(
 
       if (stat.isSymbolicLink()) {
         const realTarget = await fs.promises.realpath(current);
-        resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
+        resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
 
         if (options.enforceOwnership) {
-          const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+          const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
           if (isPathProtected(relToRoot)) {
             throw new PathContainmentError(
               `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`
@@ -490,8 +549,8 @@ export async function checkPhysicalAncestry(
     if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
       try {
         const realTarget = await fs.promises.realpath(checkPath);
-        resolveAndContainPath(resolvedBase, realTarget, { allowEqual: true });
-        const relToRoot = path.relative(resolvedBase, realTarget).replace(/\\/g, "/");
+        resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
+        const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
         if (isPathProtected(relToRoot)) {
           throw new PathContainmentError(
             `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`
