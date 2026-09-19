@@ -287,36 +287,26 @@ export class CredentialStore {
         throw new Error("Temporary credential file verification failed: irregular file or hardlink detected");
       }
 
-      // Check and remove invalidation marker prior to commit.
-      // If the marker cannot be removed, the new record will be rejected on reload;
-      // persistence MUST NOT report success!
-      const markerFile = this.getInvalidationMarkerPath();
-      if (fs.existsSync(markerFile)) {
-        try {
-          fs.unlinkSync(markerFile);
-        } catch (markerErr: any) {
-          try { fs.unlinkSync(uniqueTemp); } catch {}
-          const safeErr = "Failed to clear invalidation marker prior to credential commit";
-          this.lastPersistenceError = safeErr;
-          LauncherLogger.error(`[CredentialStore] ${safeErr}`);
-          return { success: false, backend, sessionOnly: false, error: safeErr };
-        }
-      }
-
-      // Atomic rename to destination
+      // Atomic rename temporary file over target destination FIRST.
+      // The invalidation marker remains authoritative over any pre-existing credentials
+      // on disk until replacement is fully committed.
       fs.renameSync(uniqueTemp, targetFile);
       try {
         fs.chmodSync(targetFile, 0o600);
       } catch {}
 
-      // Double-check no marker was recreated during rename
+      // Clear the invalidation marker AFTER replacement is committed.
+      // If the marker cannot be removed after commit, the new record will be rejected on reload;
+      // remove the committed targetFile and report persistence failure fail-closed.
+      const markerFile = this.getInvalidationMarkerPath();
       if (fs.existsSync(markerFile)) {
         try {
           fs.unlinkSync(markerFile);
-        } catch {
+        } catch (markerErr: any) {
           try { fs.unlinkSync(targetFile); } catch {}
           const safeErr = "Failed to clear invalidation marker after credential commit";
           this.lastPersistenceError = safeErr;
+          LauncherLogger.error(`[CredentialStore] ${safeErr}`);
           return { success: false, backend, sessionOnly: false, error: safeErr };
         }
       }

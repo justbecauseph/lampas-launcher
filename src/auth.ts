@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { shell } from "electron";
 import { ConfigManager, normalizePortalUrl, portalFetch, PortalRedirectPolicyError } from "./config";
 import { SessionManager } from "./session-manager";
-import { type ClearCredentialsResult } from "./credential-store";
+import { type ClearCredentialsResult, type SaveCredentialsResult } from "./credential-store";
 import type { UserProfile } from "./types";
 import { LauncherLogger } from "./logger";
 import { OperationConflictError, UserCancelledError } from "./ipc-boundary";
@@ -142,7 +142,10 @@ export class LauncherAuth {
       const abortController = new AbortController();
       const clientSockets = new Set<net.Socket>();
 
-      const settleOnce = (result: { success: true; data: { token: string; user: UserProfile } } | { success: false; error: Error }) => {
+      const settleOnce = (
+        result: { success: true; data: { token: string; user: UserProfile } } | { success: false; error: Error },
+        reason?: string
+      ) => {
         if (isSettled) return;
         isSettled = true;
 
@@ -151,20 +154,48 @@ export class LauncherAuth {
           timeoutTimer = null;
         }
 
-        // Close sockets and server
-        for (const socket of clientSockets) {
-          try {
-            socket.destroy();
-          } catch {}
+        if (LauncherAuth.activeLoginContext === opContext) {
+          LauncherAuth.activeLoginContext = null;
         }
-        clientSockets.clear();
 
         try {
           server.close();
         } catch {}
 
-        if (LauncherAuth.activeLoginContext === opContext) {
-          LauncherAuth.activeLoginContext = null;
+        // Separate immediate logical settlement from bounded transport cleanup:
+        // Immediate termination reasons (cancelled, timeout, superseded, shutdown):
+        // Destroy client sockets immediately so aborted / hung operations terminate.
+        const isImmediateAbort = !result.success && (
+          reason === "timeout" ||
+          reason === "cancelled" ||
+          reason === "superseded" ||
+          reason === "shutdown"
+        );
+
+        if (isImmediateAbort) {
+          for (const socket of clientSockets) {
+            try {
+              socket.destroy();
+            } catch {}
+          }
+          clientSockets.clear();
+        } else {
+          // Intentional terminal response delivery (200 success or completed error response):
+          // Allow in-flight response data to flush gracefully to the client before closing
+          for (const socket of clientSockets) {
+            try {
+              socket.end();
+            } catch {}
+          }
+          const lingeringTimer = setTimeout(() => {
+            for (const socket of clientSockets) {
+              try {
+                socket.destroy();
+              } catch {}
+            }
+            clientSockets.clear();
+          }, 250);
+          if (lingeringTimer.unref) lingeringTimer.unref();
         }
 
         if (result.success) {
@@ -184,10 +215,10 @@ export class LauncherAuth {
           if (isSettled) return;
           abortController.abort();
           const finalError = err || new Error(`Login terminated: ${reason}`);
-          settleOnce({ success: false, error: finalError });
+          settleOnce({ success: false, error: finalError }, reason);
         },
         settleSuccess: (data) => {
-          settleOnce({ success: true, data });
+          settleOnce({ success: true, data }, "success");
         },
       };
 
@@ -571,15 +602,26 @@ export class LauncherAuth {
           return { valid: false };
         }
 
-        SessionManager.updateSessionFromRefresh(
-          portalUrl,
-          {
-            token: newToken,
-            refreshToken: newRefreshToken,
-            minecraftAccessToken: newMcToken,
-          },
-          user
-        );
+        let saveResult: SaveCredentialsResult;
+        try {
+          saveResult = SessionManager.updateSessionFromRefresh(
+            portalUrl,
+            {
+              token: newToken,
+              refreshToken: newRefreshToken,
+              minecraftAccessToken: newMcToken,
+            },
+            user
+          );
+        } catch (updateErr: any) {
+          LauncherLogger.warn(`[Auth Refresh] Failed to commit refreshed session: ${updateErr.message}`);
+          return { valid: false };
+        }
+
+        if (!saveResult.success && !saveResult.sessionOnly) {
+          LauncherLogger.warn(`[Auth Refresh] Refresh failed to persist and cannot run session-only: ${saveResult.error}`);
+          return { valid: false };
+        }
 
         return {
           valid: true,
@@ -700,17 +742,31 @@ export class LauncherAuth {
       }
 
       if (user?.minecraftAccessToken) {
-        SessionManager.updateSessionFromRefresh(
-          portalUrl,
-          {
-            token: config.token!,
-            refreshToken: config.refreshToken,
-            minecraftAccessToken: user.minecraftAccessToken,
-          },
-          user
-        );
+        try {
+          const updateResult = SessionManager.updateSessionFromRefresh(
+            portalUrl,
+            {
+              token: config.token!,
+              refreshToken: config.refreshToken,
+              minecraftAccessToken: user.minecraftAccessToken,
+            },
+            user
+          );
+          if (!updateResult.success && !updateResult.sessionOnly) {
+            LauncherLogger.warn(`[Auth Verify] Failed to update session: ${updateResult.error}`);
+            return { valid: false };
+          }
+        } catch (err: any) {
+          LauncherLogger.warn(`[Auth Verify] Session update rejected: ${err.message}`);
+          return { valid: false };
+        }
       } else {
-        SessionManager.setCurrentUser(user);
+        try {
+          SessionManager.setCurrentUser(user);
+        } catch (err: any) {
+          LauncherLogger.warn(`[Auth Verify] User identity rejected: ${err.message}`);
+          return { valid: false };
+        }
       }
 
       return {

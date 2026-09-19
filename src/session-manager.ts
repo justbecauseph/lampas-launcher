@@ -32,6 +32,57 @@ export interface MigrationOutcome {
   error?: string;
 }
 
+const SECRET_KEYS_SET = new Set([
+  "token",
+  "refreshToken",
+  "minecraftAccessToken",
+  "sessionPortalUrl",
+]);
+
+function decodeJsonStringToken(content: string): string {
+  try {
+    return JSON.parse(`"${content.replace(/"/g, '\\"')}"`);
+  } catch {
+    return content.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16))
+    );
+  }
+}
+
+function detectPlaintextSecretKeys(parsed: any, raw?: string | null): boolean {
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    for (const key of Object.keys(parsed)) {
+      if (SECRET_KEYS_SET.has(key)) return true;
+    }
+  }
+
+  if (!raw || typeof raw !== "string") return false;
+
+  try {
+    const tolerant = jsonc.parse(raw);
+    if (tolerant && typeof tolerant === "object" && !Array.isArray(tolerant)) {
+      for (const key of Object.keys(tolerant)) {
+        if (SECRET_KEYS_SET.has(key)) return true;
+      }
+    }
+  } catch {}
+
+  const keyRegex = /"((?:[^"\\]|\\.)*)"\s*:/g;
+  let match: RegExpExecArray | null;
+  while ((match = keyRegex.exec(raw)) !== null) {
+    const decoded = decodeJsonStringToken(match[1]);
+    if (SECRET_KEYS_SET.has(decoded)) return true;
+  }
+
+  const looseStringRegex = /"((?:[^"\\]|\\.)*)"/g;
+  while ((match = looseStringRegex.exec(raw)) !== null) {
+    const decoded = decodeJsonStringToken(match[1]);
+    if (SECRET_KEYS_SET.has(decoded)) return true;
+  }
+
+  return false;
+}
+
 export class SessionManager {
   private static sessionEpoch: number = 1;
   private static currentRecord: StoredCredentialRecord | null = null;
@@ -105,6 +156,23 @@ export class SessionManager {
    * belonging to a different Portal account or Minecraft UUID.
    */
   static setCurrentUser(user: UserProfile | null): void {
+    if (user) {
+      const uName = (user.name || "").toString().trim();
+      const uId = (user.id || "").toString().trim();
+      if (
+        !uName ||
+        !uId ||
+        uName.toLowerCase() === "player" ||
+        uName.toLowerCase() === "account" ||
+        uName.toLowerCase() === "unverified-migration" ||
+        uId.toLowerCase() === "player" ||
+        uId.toLowerCase() === "account" ||
+        uId.toLowerCase() === "unverified-migration"
+      ) {
+        throw new Error("Cannot set current user: placeholder or invalid identity");
+      }
+    }
+
     if (user && this.currentRecord) {
       const existingPortalId = this.currentRecord.portalAccountId;
       const existingMcUuid = this.currentRecord.minecraftUuid;
@@ -155,6 +223,62 @@ export class SessionManager {
     } else {
       this.currentUser = user;
     }
+  }
+
+  /**
+   * Validates a candidate session record and optional user profile.
+   * Enforces complete schema, identity non-placeholder rules, and type invariants.
+   */
+  static validateCandidateSession(
+    record: StoredCredentialRecord,
+    user?: UserProfile
+  ): { valid: boolean; error?: string } {
+    if (!CredentialStore.validateRecord(record)) {
+      return { valid: false, error: "Candidate record failed credential store schema validation" };
+    }
+
+    const portalAccountId = (record.portalAccountId || record.accountId || "").toString().trim();
+    const portalUsername = (record.portalUsername || record.accountUsername || "").toString().trim();
+
+    if (
+      !portalAccountId ||
+      portalAccountId.toLowerCase() === "account" ||
+      portalAccountId.toLowerCase() === "unverified-migration" ||
+      portalAccountId.toLowerCase() === "player"
+    ) {
+      return { valid: false, error: `Invalid account identity '${portalAccountId}'` };
+    }
+
+    if (
+      !portalUsername ||
+      portalUsername.toLowerCase() === "player" ||
+      portalUsername.toLowerCase() === "account" ||
+      portalUsername.toLowerCase() === "unverified-migration"
+    ) {
+      return { valid: false, error: `Invalid username '${portalUsername}'` };
+    }
+
+    if (user) {
+      const uId = (user.id || "").toString().trim();
+      const uName = (user.name || "").toString().trim();
+      if (!uId || uId.toLowerCase() === "player" || uId.toLowerCase() === "account" || uId.toLowerCase() === "unverified-migration") {
+        return { valid: false, error: `User profile has invalid or placeholder ID '${uId}'` };
+      }
+      if (!uName || uName.toLowerCase() === "player" || uName.toLowerCase() === "account" || uName.toLowerCase() === "unverified-migration") {
+        return { valid: false, error: `User profile has invalid or placeholder name '${uName}'` };
+      }
+      if (!user.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000") {
+        return { valid: false, error: "User profile lacks valid bound Minecraft UUID" };
+      }
+      if (!user.minecraftUsername || user.minecraftUsername.toLowerCase() === "player" || user.minecraftUsername.toLowerCase() === "account") {
+        return { valid: false, error: "User profile lacks valid Minecraft username" };
+      }
+      if (user.minecraftAccessToken !== undefined && typeof user.minecraftAccessToken !== "string") {
+        return { valid: false, error: "User profile has malformed Minecraft access token (must be string)" };
+      }
+    }
+
+    return { valid: true };
   }
 
   static isSessionOnlyMode(): boolean {
@@ -309,10 +433,7 @@ export class SessionManager {
         parsed = null;
       }
 
-      const SECRET_KEYS = ["token", "refreshToken", "minecraftAccessToken", "sessionPortalUrl"] as const;
-      const hasPlaintextKeys = parsed && typeof parsed === "object"
-        ? SECRET_KEYS.some((k) => k in parsed)
-        : (raw ? /"(token|refreshToken|minecraftAccessToken|sessionPortalUrl)"\s*:/.test(raw) : false);
+      const hasPlaintextKeys = detectPlaintextSecretKeys(parsed, raw);
 
       if (hasPlaintextKeys) {
         legacyPlaintextDetected = true;
@@ -430,68 +551,64 @@ export class SessionManager {
   }
 
   private static scrubPlaintextFromConfig(configPath: string, parsed: any, raw?: string | null): { success: boolean; error?: string } {
-    const SECRET_KEYS = new Set(["token", "refreshToken", "minecraftAccessToken", "sessionPortalUrl"]);
     try {
+      const extracted: Record<string, any> = {};
+
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        const scrubbed = { ...parsed };
-        for (const k of SECRET_KEYS) {
-          delete scrubbed[k];
+        for (const [k, v] of Object.entries(parsed)) {
+          if (!SECRET_KEYS_SET.has(k)) {
+            extracted[k] = v;
+          }
         }
-        writeAtomicFileSync(configPath, JSON.stringify(scrubbed, null, 2), "utf-8");
-        LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from config.json on disk.");
-        return { success: true };
       }
 
-      // If parsed is null (syntax error or truncated JSON in config.json), do NOT wipe non-secret settings!
       if (raw && typeof raw === "string") {
-        const extracted: Record<string, any> = {};
-
-        // 1. Try jsonc-parser to recover settings tolerantly
         try {
           const jsoncParsed = jsonc.parse(raw);
           if (jsoncParsed && typeof jsoncParsed === "object" && !Array.isArray(jsoncParsed)) {
             for (const [k, v] of Object.entries(jsoncParsed)) {
-              if (!SECRET_KEYS.has(k)) {
+              if (!SECRET_KEYS_SET.has(k)) {
                 extracted[k] = v;
               }
             }
           }
         } catch {}
 
-        // 2. If jsonc didn't recover or text was truncated, extract key-values via regex
-        if (Object.keys(extracted).length === 0) {
-          const kvRegex = /"([^"\\]+)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null|\[[^\]]*\]|\{[^}]*\})/g;
-          let match: RegExpExecArray | null;
-          while ((match = kvRegex.exec(raw)) !== null) {
-            const key = match[1];
-            if (!SECRET_KEYS.has(key)) {
-              try {
-                extracted[key] = JSON.parse(match[2]);
-              } catch {
-                if (match[2].startsWith('"') && match[2].endsWith('"')) {
-                  extracted[key] = match[2].slice(1, -1);
-                }
+        const kvRegex = /"((?:[^"\\]|\\.)*)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null|\[[^\]]*\]|\{[^}]*\})/g;
+        let match: RegExpExecArray | null;
+        while ((match = kvRegex.exec(raw)) !== null) {
+          const decodedKey = decodeJsonStringToken(match[1]);
+          if (!SECRET_KEYS_SET.has(decodedKey)) {
+            try {
+              extracted[decodedKey] = JSON.parse(match[2]);
+            } catch {
+              if (match[2].startsWith('"') && match[2].endsWith('"')) {
+                extracted[decodedKey] = match[2].slice(1, -1);
               }
             }
           }
         }
-
-        // 3. Regex redact all secret key-value pairs from raw text
-        const scrubbedRaw = raw.replace(
-          /[ \t]*"(?:token|refreshToken|minecraftAccessToken|sessionPortalUrl)"\s*:\s*(?:"(?:[^"\\]|\\.)*"|[^,\r\n}]+)[ \t]*,?[ \t]*\r?\n?/g,
-          ""
-        );
-
-        if (Object.keys(extracted).length > 0) {
-          writeAtomicFileSync(configPath, JSON.stringify(extracted, null, 2), "utf-8");
-        } else {
-          writeAtomicFileSync(configPath, scrubbedRaw, "utf-8");
-        }
-        LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from malformed config.json on disk.");
-        return { success: true };
       }
 
-      writeAtomicFileSync(configPath, "{}", "utf-8");
+      // Format output: never write ambiguous raw text! Always write valid JSON.
+      const scrubbedOutput = Object.keys(extracted).length > 0
+        ? JSON.stringify(extracted, null, 2)
+        : "{}\n";
+
+      writeAtomicFileSync(configPath, scrubbedOutput, "utf-8");
+
+      // Read-back verification to guarantee written file is valid JSON and contains zero secret keys
+      try {
+        const readBack = fs.readFileSync(configPath, "utf-8");
+        const readParsed = JSON.parse(readBack);
+        if (detectPlaintextSecretKeys(readParsed, readBack)) {
+          writeAtomicFileSync(configPath, "{}\n", "utf-8");
+        }
+      } catch {
+        writeAtomicFileSync(configPath, "{}\n", "utf-8");
+      }
+
+      LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from config.json on disk.");
       return { success: true };
     } catch (err: any) {
       LauncherLogger.error(`[SessionManager] Failed to scrub plaintext config: ${err.message}`);
@@ -564,6 +681,12 @@ export class SessionManager {
       updatedAt: Date.now(),
     };
 
+    // 1. Complete candidate session validation BEFORE any publication or mutation of currentUser
+    const candidateValidation = this.validateCandidateSession(record, user);
+    if (!candidateValidation.valid) {
+      throw new Error(`Invalid authentication data: ${candidateValidation.error}`);
+    }
+
     if (this.sessionEpoch !== writeEpoch) {
       LauncherLogger.warn("[SessionManager] Aborted credential write: session epoch advanced before write started.");
       return {
@@ -586,6 +709,10 @@ export class SessionManager {
         sessionOnly: false,
         error: "Session epoch invalidated during write",
       };
+    }
+
+    if (!saveResult.success && saveResult.error === "Invalid credential record schema") {
+      throw new Error("Invalid authentication data: credential store rejected schema");
     }
 
     if (saveResult.sessionOnly || !saveResult.success) {
@@ -685,7 +812,12 @@ export class SessionManager {
       if (user.minecraftUsername) record.minecraftUsername = user.minecraftUsername;
       record.accountId = record.portalAccountId || record.accountId;
       record.accountUsername = record.portalUsername || record.accountUsername;
-      this.currentUser = user;
+    }
+
+    // 1. Complete candidate session validation BEFORE any publication or mutation of currentUser
+    const candidateValidation = this.validateCandidateSession(record, user);
+    if (!candidateValidation.valid) {
+      throw new Error(`Invalid authentication data on refresh: ${candidateValidation.error}`);
     }
 
     if (this.sessionEpoch !== writeEpoch) {
@@ -712,6 +844,10 @@ export class SessionManager {
       };
     }
 
+    if (!saveResult.success && saveResult.error === "Invalid credential record schema") {
+      throw new Error("Invalid authentication data: credential store rejected schema");
+    }
+
     if (saveResult.sessionOnly || !saveResult.success) {
       const clearResult = CredentialStore.clearCredentials();
       if (!clearResult.durablyInvalidated) {
@@ -729,6 +865,9 @@ export class SessionManager {
     }
 
     this.currentRecord = record;
+    if (user) {
+      this.currentUser = user;
+    }
     this.notifySessionChange(this.getCredentials());
     return saveResult;
   }

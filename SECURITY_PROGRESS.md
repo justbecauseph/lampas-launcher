@@ -824,18 +824,93 @@ Following thorough review of checkpoint `502ecb0266fa1232d2b1427785bc039cc367cbd
 
 ---
 
-### 4. Review Gate 3 Status & Pause Declaration
+### 4. Review Gate 3 Fourth Amendment (Remediation of 4 Blocking Findings from `9f6ff931a20f91738d36d03561b3428fff6b9a09`)
 
-- **All 5 Blocking Findings Remediated and Verified:**
-  - Full suite (`bun test`): **316 passed, 0 failed, 4 skipped, 6 todo across 36 files** (1376 expect calls).
-  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **21 passed, 0 failed** (123 expect calls).
+Following thorough review of checkpoint `9f6ff931a20f91738d36d03561b3428fff6b9a09`, four blocking findings (three credential-lifecycle gaps and one Windows CI socket closure race) were remediated, verified against failing reproduction paths, and integrated:
+
+#### Finding 1: High — Invalidation Marker Premature Removal in `saveCredentials()`
+- **Vulnerability:** In `CredentialStore.saveCredentials()`, the durable invalidation marker was removed *before* `fs.renameSync(uniqueTemp, targetFile)` was called. If an interruption (power loss, OS crash, process kill, or `EBUSY` rename failure) occurred after unlinking the marker but before the rename committed, stale Account A's encrypted file remained on disk without an invalidation marker. Upon application restart when secure storage was available, Account A would silently resurrect.
+- **Remediation:**
+  - Inverted the commit sequence in `src/credential-store.ts` (`saveCredentials()`):
+    1. Write exclusive temp file (`fs.openSync` with `O_CREAT | O_EXCL | O_WRONLY`) and flush (`fs.fsyncSync`).
+    2. Atomically rename temp file to target file (`fs.renameSync(uniqueTemp, targetFile)`). This commits the new credential record to disk FIRST while the invalidation marker is still authoritative.
+    3. Remove the durable invalidation marker (`fs.unlinkSync(markerFile)`) ONLY AFTER the replacement credential file is committed.
+    4. If unlinking the marker fails, the newly committed credential file is immediately unlinked (`fs.unlinkSync(targetFile)`), leaving the marker intact to prevent stale exposure, and a failure result is reported.
+  - Added reproduction tests in `test/security-failure-reproductions.test.ts`:
+    - `Defect 1c`: Interruption before replacement rename preserves invalidation marker; restart refuses to load stale credentials.
+    - `Defect 1d`: Atomic rename failure (`EBUSY`) leaves invalidation marker intact; restart refuses to load stale credentials.
+    - `Defect 1e`: Interruption after replacement but before marker removal leaves launcher safely logged out on restart.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 1c: Invalidation marker remains authoritative until replacement is committed (interruption before replacement)` (passed).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 1d: Invalidation marker remains authoritative on atomic rename failure` (passed).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 1e: Interruption after replacement but before marker removal leaves launcher safely logged out` (passed).
+
+#### Finding 2: High — Escaped Credential Keys in Malformed JSON
+- **Vulnerability:** In `SessionManager`, tolerant plaintext scrubbing was gated behind a regex (`SECRET_KEY_REGEX = /"(?:token|refreshToken|minecraftAccessToken|sessionPortalUrl)"\s*:/`) that missed unicode-escaped keys such as `"to\u006ben"`. Furthermore, if `config.json` was truncated or malformed and no non-secret settings were salvaged, the scrubber previously fell back to writing raw unverified text, potentially leaving unscrubbed or malformed content on disk.
+- **Remediation:**
+  - Added `decodeJsonStringToken(content)` to decode unicode escape sequences (`\uXXXX`) and standard JSON string escapes (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`) in property names.
+  - Implemented `detectPlaintextSecretKeys(parsed, raw)`: structurally checks parsed object keys and tolerantly scans decoded property names from raw text against `SECRET_KEYS_SET = new Set(["token", "refreshToken", "minecraftAccessToken", "sessionPortalUrl"])`.
+  - In `scrubPlaintextFromConfig()`:
+    - Scans property names using `decodeJsonStringToken`, stripping secret key-value pairs regardless of literal or escaped representation.
+    - Salvages all non-secret configuration properties (`allocatedRamGb`, `gameDir`, `portalUrl`, `javaPath`, `javaArgs`, `noSync`, etc.).
+    - Formats valid JSON with 2-space indentation (or `"{}\n"` if no non-secret keys exist).
+    - Verifies the scrubbed result by reading it back from disk and validating with `JSON.parse`.
+  - Added reproduction tests in `test/security-failure-reproductions.test.ts`:
+    - `Defect 3c`: Escaped unicode keys (`to\u006ben`, `\u0072efreshToken`, `minecraft\u0041ccessToken`, `session\u0050ortalUrl`) in truncated JSON are scrubbed cleanly while preserving non-secret settings.
+    - `Defect 3d`: Duplicate keys, mixed literal/escaped keys, and present-but-falsy values are scrubbed cleanly to valid JSON.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 3c: Tolerant scanning detects escaped keys in malformed JSON and scrubs without losing non-secret settings` (passed).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 3d: Malformed JSON with duplicate and mixed escaped/literal keys scrubs clean and validates output` (passed).
+
+#### Finding 3: Medium — Refresh Publishes `"player"`/`"Player"` & Candidate Validation Fail-Closed
+- **Vulnerability:** In `SessionManager.updateSessionFromRefresh()`, `this.currentUser = user` was assigned *before* candidate record validation. If credential store schema validation failed, the method caught the error and treated it as a persistence failure, downgrading to session-only mode and publishing the invalid user in memory. Furthermore, `LauncherAuth.refreshSession()` and `verifySession()` did not check commit outcomes, allowing invalid authentication data to be treated as a valid refresh.
+- **Remediation:**
+  - Added `validateCandidateSession(record, user)` shared validator enforcing:
+    - Credential store schema validation (`CredentialStore.validateRecord(record)`).
+    - Identity and profile field constraints (UUID format, non-empty, non-synthetic names).
+    - Case-insensitive rejection of placeholder identities: `"player"`, `"account"`, `"unverified-migration"`.
+  - In `SessionManager.setCurrentUser()`: rejected placeholder identities case-insensitively.
+  - In `SessionManager.establishNewSession()`: validates candidate record first; re-throws schema rejections fail-closed without publishing.
+  - In `SessionManager.updateSessionFromRefresh()`:
+    - Validates complete candidate session BEFORE mutating `this.currentUser` or publishing any state.
+    - If candidate record fails schema validation, immediately aborts fail-closed and re-throws the error. This is NOT a storage error and must never downgrade to session-only mode.
+    - Assigns `this.currentUser = user` ONLY AFTER persistence checks succeed or safe session-only fallback is explicitly permitted.
+  - In `src/auth.ts`:
+    - `refreshSession()` and `verifySession()` check `updateSessionFromRefresh()` return value and catch validation errors, returning `{ valid: false }` without publishing.
+  - Added reproduction tests in `test/security-failure-reproductions.test.ts`:
+    - `Defect 2c`: Refresh returning `"player"` and `"Player"` throws, does not alter published user or session state, and `refreshSession()` returns `{ valid: false }`.
+    - `Defect 2d`: Refresh returning malformed optional token types (e.g. number instead of string) throws and does not downgrade to session-only mode.
+- **Evidence:**
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 2c: Same-account refresh rejects 'player' and 'Player' without altering published user or session state` (passed).
+  - `[Phase 3 Failure Path Reproductions] Reproduce Defect 2d: Same-account refresh rejects malformed optional token types and does not downgrade to session-only` (passed).
+
+#### Finding 4: Gate Blocker — Windows CI Socket Closure on Loopback OAuth Listener
+- **Vulnerability:** In `src/auth.ts`, `settleOnce()` called `socket.destroy()` unconditionally across all client sockets immediately upon sending the HTTP response. On Windows, immediate socket destruction resets the connection (`ECONNRESET` / `WSAECONNRESET`) while the HTTP response (`200 OK` or error payload) is still queued in the Windows TCP stack buffer, before the client browser or test harness can read it. This caused intermittent socket hangs and connection reset failures on Windows CI.
+- **Remediation:**
+  - Separated immediate logical settlement from bounded transport cleanup:
+    - **Logical Settlement:** Immediately sets `isSettled = true`, closes the HTTP server to new incoming connections (`server.close()`), and unregisters event listeners.
+    - **Transport Teardown:**
+      - For intentional response paths (`200 OK`, `400 Bad Request`, `409 Conflict`, etc.): allows Node's HTTP server to transmit buffered response data and close sockets gracefully via `socket.end()`. Sockets that do not close within a 250ms unref grace period are destroyed via `socket.destroy()`.
+      - For immediate abort paths (cancellation, timeout, supersession, shutdown): calls `socket.destroy()` immediately to terminate in-flight connections without waiting.
+  - Preserved strict single-use semantics and deterministic listener lifecycle.
+- **Evidence:**
+  - Characterization Test 60 (`Loopback OAuth listener enforces method, path, host, single-use, and deterministic cleanup`): passed cleanly.
+  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): all 28 tests pass cleanly with 0 connection resets or unhandled socket errors.
+
+---
+
+### 5. Review Gate 3 Status & Pause Declaration
+
+- **All 4 Blocking Findings Remediated and Verified:**
+  - Full suite (`bun test`): **323 passed, 0 failed, 4 skipped, 6 todo across 36 files** (1428 expect calls).
+  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **28 passed, 0 failed** (175 expect calls).
   - Security regression gates (`test/security-regression-gates.test.ts`): **17 passed, 0 failed, 4 skipped, 6 todo** (141 expect calls).
   - Child boundary runner (`test/security-boundary-characterization.ts`): **61 passed, 0 failed, 0 outbound violations, 0 skipped**.
   - Real Electron DPAPI restart test (`test/electron-dpapi-restart.test.ts`): **1 passed, 0 failed** (29 expect calls).
-  - TypeScript typechecks: 0 errors (`tsc --noEmit`, `tsconfig.renderer.json`, `tsconfig.security-test.json`).
+  - TypeScript typechecks: 0 errors across `tsconfig.json`, `tsconfig.renderer.json`, and `tsconfig.security-test.json`.
   - Production build: `bun run build` succeeds cleanly.
-  - Strict smoke test: `bun test/smoke/electron-smoke.ts --strict` succeeds cleanly.
-  - Lockfile: `git diff bun.lock` is empty (zero drift).
+  - Strict smoke test: `bun test/smoke/electron-smoke.ts --strict` succeeds cleanly (real Electron 44.0.0 and packaged binary ASAR verified; zero `--no-sandbox`).
+  - Lockfile: `git diff bun.lock` is empty (zero drift; byte-identical to baseline).
 
 **STOPPING AT REVIEW GATE 3.** Phase 4 remains paused pending formal review and acceptance of Review Gate 3. Acceptance does not authorize merging, tagging, or publication. Ready for user review.
 

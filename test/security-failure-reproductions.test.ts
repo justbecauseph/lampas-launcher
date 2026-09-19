@@ -49,7 +49,7 @@ class MockSafeStorage {
   available = true;
   failEncrypt = false;
   isEncryptionAvailable() { return this.available; }
-  getSelectedStorageBackend() { return "gnome_libsecret"; }
+  getSelectedStorageBackend() { return process.platform === "win32" ? "windows_dpapi" : "gnome_libsecret"; }
   encryptString(plain: string) {
     if (this.failEncrypt) throw new Error("Disk full / encrypt failed");
     return Buffer.from("ENC:" + plain);
@@ -1119,6 +1119,353 @@ describe("Phase 3 Failure Path Reproductions", () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  test("Reproduce Defect 1c: Invalidation marker remains authoritative until replacement is committed (interruption before replacement)", () => {
+    // 1. Account A is saved to disk
+    const saveA = CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "token-account-A",
+      portalAccountId: "acc-A",
+      portalUsername: "UserA",
+    });
+    expect(saveA.success).toBe(true);
+
+    // 2. Establish legitimate degraded-cleanup state:
+    // Old target exists (Account A), truncation failed (still contains Account A ciphertext),
+    // invalidation marker written.
+    const markerPath = CredentialStore.getInvalidationMarkerPath();
+    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now(), reason: "logout_cleanup_degraded" }), "utf-8");
+    expect(fs.existsSync(CredentialStore.getCredentialsFilePath())).toBe(true);
+    expect(fs.existsSync(markerPath)).toBe(true);
+
+    // 3. Simulate process interruption / crash BEFORE atomic replacement (before renameSync)
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("SIGKILL / simulated interruption before rename");
+    });
+
+    try {
+      const saveB = CredentialStore.saveCredentials({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "token-account-B",
+        portalAccountId: "acc-B",
+        portalUsername: "UserB",
+      });
+      expect(saveB.success).toBe(false);
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // 4. Assert filesystem state: Account A target remains, Account B not committed,
+    // and CRITICALLY: invalidation marker is STILL PRESENT!
+    expect(fs.existsSync(CredentialStore.getCredentialsFilePath())).toBe(true);
+    expect(fs.existsSync(markerPath)).toBe(true);
+
+    // 5. On next restart: loadCredentials must refuse to load stale Account A
+    const reloadResult = CredentialStore.loadCredentials();
+    expect(reloadResult).toBeNull();
+  });
+
+  test("Reproduce Defect 1d: Invalidation marker remains authoritative on atomic rename failure", () => {
+    // Degraded state: Account A target file exists, invalidation marker exists
+    const saveA = CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "token-A-rename-fail",
+      portalAccountId: "acc-A",
+      portalUsername: "UserA",
+    });
+    expect(saveA.success).toBe(true);
+
+    const markerPath = CredentialStore.getInvalidationMarkerPath();
+    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now() }), "utf-8");
+
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation(() => {
+      const err: any = new Error("EBUSY: resource locked during rename");
+      err.code = "EBUSY";
+      throw err;
+    });
+
+    try {
+      const result = CredentialStore.saveCredentials({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "token-B",
+        portalAccountId: "acc-B",
+        portalUsername: "UserB",
+      });
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+
+      // Marker must still exist on disk!
+      expect(fs.existsSync(markerPath)).toBe(true);
+
+      // Reload refuses to load stale credentials
+      expect(CredentialStore.loadCredentials()).toBeNull();
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
+
+  test("Reproduce Defect 1e: Interruption after replacement but before marker removal leaves launcher safely logged out", () => {
+    // Degraded state: Account A target file exists, invalidation marker exists
+    CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "token-A-stale",
+      portalAccountId: "acc-A",
+      portalUsername: "UserA",
+    });
+
+    const markerPath = CredentialStore.getInvalidationMarkerPath();
+    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now() }), "utf-8");
+
+    // Interruption after renameSync: simulate process crash before marker is unlinked
+    const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((p: any) => {
+      if (p.toString().includes("credentials.invalidated")) {
+        throw new Error("Simulated interruption after rename but before marker removal");
+      }
+      return (fs as any).unlinkSync(p);
+    });
+
+    try {
+      const saveB = CredentialStore.saveCredentials({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "token-B-interrupted",
+        portalAccountId: "acc-B",
+        portalUsername: "UserB",
+      });
+      // Persistence reports failure because marker could not be removed
+      expect(saveB.success).toBe(false);
+
+      // On restart: loadCredentials sees marker and stays safely logged out.
+      // Account A NEVER resurrects!
+      const reloaded = CredentialStore.loadCredentials();
+      expect(reloaded).toBeNull();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  test("Reproduce Defect 2c: Same-account refresh rejects 'player' and 'Player' without altering published user or session state", async () => {
+    // 1. Establish valid session for UserA
+    const userA = {
+      id: "acc-100",
+      name: "GenuineUser",
+      minecraftUuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      minecraftUsername: "GenuineMC",
+      isAdmin: false,
+      isTech: false,
+      roles: [],
+      allowedChannels: [],
+    };
+
+    SessionManager.establishNewSession(
+      "https://dev.lampas.town",
+      {
+        token: "valid-initial-token",
+        portalAccountId: userA.id,
+        portalUsername: userA.name,
+        minecraftUuid: userA.minecraftUuid,
+        minecraftUsername: userA.minecraftUsername,
+      },
+      userA
+    );
+
+    expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
+    expect(SessionManager.getCredentials()?.token).toBe("valid-initial-token");
+
+    let notifiedCreds: any = null;
+    const unsub = SessionManager.addSessionListener((creds) => {
+      notifiedCreds = creds;
+    });
+
+    try {
+      // 2. Attempt same-account refresh returning name: "player"
+      const refreshCandidatePlayer = {
+        id: userA.id,
+        name: "player",
+        minecraftUuid: userA.minecraftUuid,
+        minecraftUsername: userA.minecraftUsername,
+        isAdmin: false,
+        isTech: false,
+        roles: [],
+        allowedChannels: [],
+      };
+
+      expect(() => {
+        SessionManager.updateSessionFromRefresh(
+          "https://dev.lampas.town",
+          { token: "new-refresh-token-player" },
+          refreshCandidatePlayer
+        );
+      }).toThrow();
+
+      // Assert state was NOT altered
+      expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
+      expect(SessionManager.getCredentials()?.token).toBe("valid-initial-token");
+      expect(notifiedCreds).toBeNull();
+
+      // 3. Attempt same-account refresh returning name: "Player"
+      const refreshCandidateTitlePlayer = {
+        ...refreshCandidatePlayer,
+        name: "Player",
+      };
+
+      expect(() => {
+        SessionManager.updateSessionFromRefresh(
+          "https://dev.lampas.town",
+          { token: "new-refresh-token-Player" },
+          refreshCandidateTitlePlayer
+        );
+      }).toThrow();
+
+      // Assert state was NOT altered
+      expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
+      expect(SessionManager.getCredentials()?.token).toBe("valid-initial-token");
+      expect(notifiedCreds).toBeNull();
+
+      // 4. Exercise LauncherAuth.refreshSession integration:
+      // Mock portalFetch to return status 200 with user name "Player"
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+        return new Response(JSON.stringify({
+          valid: true,
+          token: "syn-refresh-token-200",
+          user: {
+            id: userA.id,
+            name: "Player",
+            minecraftUuid: userA.minecraftUuid,
+            minecraftUsername: userA.minecraftUsername,
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      });
+
+      try {
+        ConfigManager.set({ portalUrl: "https://dev.lampas.town" });
+        const refreshOutcome = await LauncherAuth.refreshSession();
+        // Must return valid: false because candidate identity was rejected!
+        expect(refreshOutcome.valid).toBe(false);
+
+        // Published user remains GenuineUser
+        expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
+        expect(SessionManager.getCredentials()?.token).toBe("valid-initial-token");
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    } finally {
+      unsub();
+    }
+  });
+
+  test("Reproduce Defect 2d: Same-account refresh rejects malformed optional token types and does not downgrade to session-only", async () => {
+    const userA = {
+      id: "acc-200",
+      name: "TypeSafetyUser",
+      minecraftUuid: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      minecraftUsername: "TypeMC",
+      isAdmin: false,
+      isTech: false,
+      roles: [],
+      allowedChannels: [],
+    };
+
+    SessionManager.establishNewSession(
+      "https://dev.lampas.town",
+      {
+        token: "token-200",
+        portalAccountId: userA.id,
+        portalUsername: userA.name,
+        minecraftUuid: userA.minecraftUuid,
+        minecraftUsername: userA.minecraftUsername,
+      },
+      userA
+    );
+
+    expect(SessionManager.getCurrentUser()?.name).toBe("TypeSafetyUser");
+
+    // Candidate with malformed optional token type (number instead of string)
+    expect(() => {
+      SessionManager.updateSessionFromRefresh(
+        "https://dev.lampas.town",
+        {
+          token: "new-token",
+          minecraftAccessToken: 12345 as any,
+        },
+        userA
+      );
+    }).toThrow();
+
+    // Published state remains untouched
+    expect(SessionManager.getCredentials()?.token).toBe("token-200");
+    expect(SessionManager.getCurrentUser()?.name).toBe("TypeSafetyUser");
+  });
+
+  test("Reproduce Defect 3c: Tolerant scanning detects escaped keys in malformed JSON and scrubs without losing non-secret settings", () => {
+    const configPath = path.join(userDataDir, "config.json");
+
+    // All 4 secret keys tested in escaped unicode format in truncated JSON (omitted closing brace):
+    // 1. to\u006ben
+    // 2. \u0072efreshToken
+    // 3. minecraft\u0041ccessToken
+    // 4. session\u0050ortalUrl
+    const escapedTruncatedJson =
+      '{"allocatedRamGb":8,"gameDir":"C:\\\\Games","to\\u006ben":"DUMMY_SECRET","\\u0072efreshToken":"DUMMY_REFRESH","minecraft\\u0041ccessToken":"DUMMY_MC","session\\u0050ortalUrl":"https://dev.lampas.town"';
+
+    fs.writeFileSync(configPath, escapedTruncatedJson, "utf-8");
+
+    // Initialize session manager
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+
+    // Must detect legacy plaintext despite unicode escapes and truncated JSON!
+    expect(outcome.legacyPlaintextDetected).toBe(true);
+    expect(outcome.legacyScrubbed).toBe(true);
+    // Malformed JSON is NOT eligible for migration
+    expect(outcome.migrated).toBe(false);
+
+    // Read back config.json from disk
+    const onDiskRaw = fs.readFileSync(configPath, "utf-8");
+    // Result MUST be valid JSON
+    const parsed = JSON.parse(onDiskRaw);
+
+    // Non-secret settings must be preserved!
+    expect(parsed.allocatedRamGb).toBe(8);
+    expect(parsed.gameDir).toBe("C:\\Games");
+
+    // Zero secret tokens must remain
+    expect("token" in parsed).toBe(false);
+    expect("refreshToken" in parsed).toBe(false);
+    expect("minecraftAccessToken" in parsed).toBe(false);
+    expect("sessionPortalUrl" in parsed).toBe(false);
+    expect(onDiskRaw).not.toContain("DUMMY_SECRET");
+    expect(onDiskRaw).not.toContain("DUMMY_REFRESH");
+    expect(onDiskRaw).not.toContain("DUMMY_MC");
+  });
+
+  test("Reproduce Defect 3d: Malformed JSON with duplicate and mixed escaped/literal keys scrubs clean and validates output", () => {
+    const configPath = path.join(userDataDir, "config.json");
+
+    // Mixed literal and escaped, duplicate keys, present-but-falsy values
+    const mixedMalformed =
+      '{"allocatedRamGb":16,"to\\u006ben":"token1","token":"token2","\\u0072efreshToken":"","portalUrl":"https://dev.lampas.town"';
+
+    fs.writeFileSync(configPath, mixedMalformed, "utf-8");
+
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    expect(outcome.legacyPlaintextDetected).toBe(true);
+    expect(outcome.legacyScrubbed).toBe(true);
+    expect(outcome.migrated).toBe(false);
+
+    const onDiskRaw = fs.readFileSync(configPath, "utf-8");
+    const parsed = JSON.parse(onDiskRaw);
+    expect(parsed.allocatedRamGb).toBe(16);
+    expect(parsed.portalUrl).toBe("https://dev.lampas.town");
+    expect("token" in parsed).toBe(false);
+    expect("refreshToken" in parsed).toBe(false);
+    expect(onDiskRaw).not.toContain("token1");
+    expect(onDiskRaw).not.toContain("token2");
   });
 });
 
