@@ -436,6 +436,7 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
   test("[Phase 3 Gate] Migration: Coexisting protected credentials and legacy plaintext prioritize protected record and scrub plaintext", () => {
     class MockGateSafeStorage {
       isEncryptionAvailable() { return true; }
+      getSelectedStorageBackend() { return "gnome_libsecret"; }
       encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
       decryptString(buf: Buffer) {
         const s = buf.toString("utf-8");
@@ -482,6 +483,7 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
   test("[Phase 3 Gate] Migration: Interrupted migration crash boundary recovers on restart and scrubs plaintext", () => {
     class MockGateSafeStorage {
       isEncryptionAvailable() { return true; }
+      getSelectedStorageBackend() { return "gnome_libsecret"; }
       encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
       decryptString(buf: Buffer) {
         const s = buf.toString("utf-8");
@@ -524,6 +526,7 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
   test("[Phase 3 Gate] Migration: Failed protected record load with legacy plaintext fails closed and scrubs disk without restoring session", () => {
     class MockGateSafeStorage {
       isEncryptionAvailable() { return true; }
+      getSelectedStorageBackend() { return "gnome_libsecret"; }
       encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
       decryptString() { throw new Error("Decryption hardware key revoked"); }
     }
@@ -559,6 +562,7 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
     class MockGateSafeStorage {
       failEncrypt = false;
       isEncryptionAvailable() { return true; }
+      getSelectedStorageBackend() { return "gnome_libsecret"; }
       encryptString(plain: string) {
         if (this.failEncrypt) throw new Error("Simulated storage write error");
         return Buffer.from("ENC:" + plain);

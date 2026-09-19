@@ -103,6 +103,10 @@ interface LoginOperationContext {
 export class LauncherAuth {
   private static activeLoginContext: LoginOperationContext | null = null;
 
+  static getActiveLoginContext(): LoginOperationContext | null {
+    return this.activeLoginContext;
+  }
+
   /**
    * Cancels any in-flight loopback OAuth login server, aborts requests, and terminates context.
    */
@@ -348,7 +352,18 @@ export class LauncherAuth {
           }
 
           const user = json.user;
-          if (!user?.id || !user?.name || typeof user.id !== "string" || typeof user.name !== "string" || user.id === "account" || user.id === "unverified-migration") {
+          if (
+            !user?.id ||
+            !user?.name ||
+            typeof user.id !== "string" ||
+            typeof user.name !== "string" ||
+            user.id.toLowerCase() === "account" ||
+            user.id.toLowerCase() === "unverified-migration" ||
+            user.id.toLowerCase() === "player" ||
+            user.name.toLowerCase() === "player" ||
+            user.name.toLowerCase() === "account" ||
+            user.name.toLowerCase() === "unverified-migration"
+          ) {
             const err = new Error("Token exchange failed: portal returned invalid user identity");
             res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
             res.end(renderErrorHtml("Token exchange failed. Server returned invalid user identity."));

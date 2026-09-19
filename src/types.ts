@@ -282,6 +282,8 @@ export interface ClearCredentialsResult {
   error?: string;
   deletedTarget: boolean;
   deletedTemp: boolean;
+  durablyInvalidated: boolean;
+  staleRecordIneligible?: boolean;
 }
 
 export interface AuthStorageStatusDto {

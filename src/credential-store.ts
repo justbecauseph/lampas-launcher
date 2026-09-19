@@ -39,6 +39,8 @@ export interface ClearCredentialsResult {
   error?: string;
   deletedTarget: boolean;
   deletedTemp: boolean;
+  durablyInvalidated: boolean;
+  staleRecordIneligible?: boolean;
 }
 
 export class CredentialStore {
@@ -158,10 +160,24 @@ export class CredentialStore {
     const v = record.version ?? record.schemaVersion;
     if (v !== 1) return false;
     if (typeof record.portalUrl !== "string" || !record.portalUrl.trim()) return false;
-    const accountId = record.portalAccountId || record.accountId;
-    if (typeof accountId !== "string" || !accountId.trim() || accountId === "account" || accountId === "unverified-migration") return false;
-    const username = record.portalUsername || record.accountUsername;
-    if (typeof username !== "string" || !username.trim()) return false;
+    const accountId = (record.portalAccountId || record.accountId || "").toString().trim();
+    if (
+      !accountId ||
+      accountId.toLowerCase() === "account" ||
+      accountId.toLowerCase() === "unverified-migration" ||
+      accountId.toLowerCase() === "player"
+    ) {
+      return false;
+    }
+    const username = (record.portalUsername || record.accountUsername || "").toString().trim();
+    if (
+      !username ||
+      username.toLowerCase() === "player" ||
+      username.toLowerCase() === "account" ||
+      username.toLowerCase() === "unverified-migration"
+    ) {
+      return false;
+    }
     if (typeof record.token !== "string" || !record.token.trim()) return false;
     if (record.refreshToken !== undefined && typeof record.refreshToken !== "string") return false;
     if (record.minecraftAccessToken !== undefined && typeof record.minecraftAccessToken !== "string") return false;
@@ -417,25 +433,30 @@ export class CredentialStore {
     const dir = this.getCredentialsDir();
     let deletedTarget = false;
     let deletedTemp = false;
+    let destroyedTarget = false;
+    let markerWritten = false;
     let error: string | undefined;
 
-    try {
-      if (fs.existsSync(targetFile)) {
+    const targetExisted = fs.existsSync(targetFile);
+    if (targetExisted) {
+      try {
         fs.unlinkSync(targetFile);
         deletedTarget = true;
+      } catch (err: any) {
+        error = sanitizeCleanupError(err);
+        this.lastCleanupError = error;
+        LauncherLogger.warn(`[CredentialStore] Could not delete stored credentials: ${error}`);
+        // Attempt overwrite with empty buffer so corrupt bytes cannot decrypt
+        try {
+          fs.writeFileSync(targetFile, Buffer.alloc(0));
+          destroyedTarget = true;
+        } catch {}
+        // Write durable invalidation marker so restart cannot resurrect old credentials
+        try {
+          fs.writeFileSync(markerFile, JSON.stringify({ invalidatedAt: Date.now(), error }), { mode: 0o600 });
+          markerWritten = fs.existsSync(markerFile);
+        } catch {}
       }
-    } catch (err: any) {
-      error = sanitizeCleanupError(err);
-      this.lastCleanupError = error;
-      LauncherLogger.warn(`[CredentialStore] Could not delete stored credentials: ${error}`);
-      // Attempt overwrite with empty buffer so corrupt bytes cannot decrypt
-      try {
-        fs.writeFileSync(targetFile, Buffer.alloc(0));
-      } catch {}
-      // Write durable invalidation marker so restart cannot resurrect old credentials
-      try {
-        fs.writeFileSync(markerFile, JSON.stringify({ invalidatedAt: Date.now(), error }), { mode: 0o600 });
-      } catch {}
     }
 
     // Clean up temporary files in credential directory
@@ -461,7 +482,7 @@ export class CredentialStore {
       }
     } catch {}
 
-    if (deletedTarget && !error) {
+    if ((deletedTarget || !targetExisted) && !error) {
       try {
         if (fs.existsSync(markerFile)) {
           fs.unlinkSync(markerFile);
@@ -470,8 +491,16 @@ export class CredentialStore {
       this.lastCleanupError = null;
     }
 
+    const durablyInvalidated = !targetExisted || deletedTarget || destroyedTarget || markerWritten;
     const success = !error;
-    return { success, error, deletedTarget, deletedTemp };
+    return {
+      success,
+      error,
+      deletedTarget,
+      deletedTemp,
+      durablyInvalidated,
+      staleRecordIneligible: durablyInvalidated,
+    };
   }
 }
 

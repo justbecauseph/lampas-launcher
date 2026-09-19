@@ -770,25 +770,73 @@ Following review of checkpoint `609623feb5a00b826f5e91069a2284bfd76a59a8` and `L
 
 ---
 
-### 2. Review Gate 3 Acceptance & Pause Declaration
+### 3. Review Gate 3 Third Amendment (Remediation of 5 Blocking Findings from `502ecb0266fa1232d2b1427785bc039cc367cbd9`)
 
-- **Phase 3 Hardening Fully Implemented, Amended & Verified:**
-  - Dedicated pre-change failure path reproductions pass unconditionally across all 18 target scenarios.
-  - Restart-safe, failure-aware migration state machine with coexistence precedence, malformed data handling, and fail-closed corrupt record purge.
-  - Ineligible legacy records require trusted identity; unverified claims fail closed and trigger clean re-auth without synthetic placeholder accounts.
-  - Explicit `SaveCredentialsResult` and `ClearCredentialsResult` contracts with bounded error reporting, zero-byte overwrite, and durable invalidation markers.
-  - Account-specific session replacement with zero cross-account token inheritance.
-  - Terminal 120s login lifecycle with socket destruction and `AbortController`.
-  - Scoped refresh coalescing keyed by `(portalUrl, accountId, sessionEpoch)`.
-  - Hardened exclusive temporary file writer (`O_CREAT | O_EXCL`) with link validation (`stats.nlink === 1`) and short-write detection.
-  - Generic `ConfigManager.set` stripped of secret mutations; `config.json` on disk is 100% token-free.
-  - `auth:getStorageStatus` IPC channel, `sessionPersisted` tracking, and UI session-only mode toasts.
-  - Exact-version Electron 44.0.0 Windows DPAPI separate-process restart exercising built launcher store/session modules, with parsed `icacls` Windows ACL verification.
-  - Real Electron smoke tests passed in strict mode without `--no-sandbox`.
-- **Pre-Existing Invariants Intact:**
-  - Phase 1 (SEC-01) and Phase 2 (SEC-02) protections preserved.
-  - Dependencies, pinned versions, and lockfile preserved with zero drift.
+Following thorough review of checkpoint `502ecb0266fa1232d2b1427785bc039cc367cbd9`, five blocking findings were remediated, verified against failing reproduction paths, and integrated:
 
-**STOPPING AT REVIEW GATE 3.** Phase 4 (Unify metadata, path ownership and safe recovery) has not been started and remains paused. Acceptance does not authorize merging, tagging, or publication. Ready for user review.
+#### Finding 1: High — Stale Persisted Credentials Resurrection on Invalidation Failure
+- **Vulnerability:** In `SessionManager.establishNewSession`, when `saveCredentials()` returned session-only, it invoked `clearCredentials()`. However, it only aborted when both `clearResult.success === false` and `saveResult.success === false`. A session-only save reported `{ success: true, sessionOnly: true }`, so failed cleanup of disk credentials was ignored and Account B was published in memory. If secure storage later became available upon restart, Account A would silently resurrect.
+- **Remediation:**
+  - Extended `ClearCredentialsResult` in `src/types.ts` and `src/credential-store.ts` with `durablyInvalidated: boolean` and `staleRecordIneligible?: boolean`.
+  - In `CredentialStore.clearCredentials()`, independently tracked `deletedTarget`, `destroyedTarget` (0-byte truncation), and `markerWritten` (durable invalidation marker). Computed `durablyInvalidated = !targetExisted || deletedTarget || destroyedTarget || markerWritten`.
+  - In `SessionManager.establishNewSession()`: if storage is session-only or persistence fails, verifies `clearResult.durablyInvalidated`. If `!clearResult.durablyInvalidated` (e.g. unlink, 0-byte overwrite, and marker write all failed), the session manager immediately advances session epoch and throws an error fail-closed without publishing Account B in memory.
+  - In `SessionManager.updateSessionFromRefresh()`: applied the identical fail-closed check on persistence failure (`if (!clearResult.durablyInvalidated) throw ...`).
+  - Added reproduction test in `test/security-failure-reproductions.test.ts` (`Defect 1b`): simulates catastrophic disk deletion failure where unlink, overwrite, and marker creation all fail; verifies `durablyInvalidated === false` and `establishNewSession` throws without publishing Account B in memory.
+- **Evidence:** `[Phase 3 Failure Path Reproductions] Reproduce Defect 1b: When unlink, overwrite, and marker creation all fail during replacement, replacement account B must NOT be published` (passed).
+
+#### Finding 2: High — Syntactically Malformed Legacy JSON Non-Secret Wipe
+- **Vulnerability:** When `config.json` was syntactically malformed or truncated (e.g., power loss mid-write), `JSON.parse` threw an error and left `parsed = null`. In that case, `scrubPlaintextFromConfig(configPath, null)` overwrote `config.json` with an empty `{}` object, obliterating all user settings (`allocatedRamGb`, `gameDir`, `portalUrl`, etc.). Additionally, key detection relied on truthiness (`parsed[key]`), causing present-but-empty tokens (e.g. `"token": ""`) to bypass scrubbing.
+- **Remediation:**
+  - Integrated `jsonc-parser` in `src/session-manager.ts` for tolerant parsing and regex key-value extraction as a fallback when `raw` is truncated or malformed.
+  - Salvaged non-secret settings (`allocatedRamGb`, `gameDir`, `portalUrl`, `javaPath`, `javaArgs`, `noSync`, etc.) from truncated/malformed text.
+  - Scrubbed secret keys (`token`, `refreshToken`, `minecraftAccessToken`, `sessionPortalUrl`) using regex redaction from the raw text.
+  - Reconstructed and wrote back valid JSON preserving all salvaged non-secret settings.
+  - Updated plaintext key detection to check presence (`SECRET_KEYS.some(k => k in parsed)`), capturing present-but-falsy keys (`"token": ""`).
+  - Added reproduction test in `test/security-failure-reproductions.test.ts` (`Defect 3b`): verifies non-secret settings are preserved while tokens are scrubbed on truncated/malformed JSON and present-but-falsy tokens.
+- **Evidence:** `[Phase 3 Failure Path Reproductions] Reproduce Defect 3b: Syntactically malformed / truncated legacy JSON and present-but-falsy tokens are cleaned up without wiping non-secret settings` (passed).
+
+#### Finding 3: Medium — Synthetic Identity `"player"` Still Accepted
+- **Vulnerability:** While `"account"` and `"unverified-migration"` were rejected as placeholder identities, literal `"player"` or `"Player"` was still accepted as a legitimate account identity, allowing synthetic or unverified accounts to be treated as genuine.
+- **Remediation:**
+  - In `src/credential-store.ts` (`validateRecord`): rejected `accountId.toLowerCase() === "player"` and `username.toLowerCase() === "player"`.
+  - In `src/session-manager.ts` (`establishNewSession` and legacy account detection): rejected `portalAccountId.toLowerCase() === "player"` and `portalUsername.toLowerCase() === "player"`.
+  - In `src/auth.ts` (`loginWithPortal`): rejected `user.name.toLowerCase() === "player"` and `user.id.toLowerCase() === "player"`, terminating the context with an error and returning HTTP 400.
+  - Added reproduction test in `test/security-failure-reproductions.test.ts` (`Defect 2b`): asserts literal `"player"` / `"Player"` synthetic identity is rejected across token exchange, stored-record validation, and `establishNewSession`.
+- **Evidence:** `[Phase 3 Failure Path Reproductions] Reproduce Defect 2b: Literal 'player' synthetic identity is rejected across exchange, session establishment, and stored-record validation` (passed).
+
+#### Finding 4: Gate Blocker — CI Failures on Windows and Ubuntu
+- **Vulnerability:**
+  - On Windows CI: `bun install` does not run package postinstall/lifecycle scripts by default, leaving `electron.exe` missing from `node_modules/electron/dist/` and causing `test/electron-dpapi-restart.test.ts` to fail in CI.
+  - On Ubuntu CI: 15 tests collapsed to session-only mode because `MockSafeStorage` did not implement `getSelectedStorageBackend()`, which `detectStorageBackend()` requires on Linux (`getSelectedStorageBackend() === "gnome_libsecret"`).
+- **Remediation:**
+  - Added `"trustedDependencies": ["electron"]` to `package.json`.
+  - Added explicit `node node_modules/electron/install.js` step to `.github/workflows/validate.yml` following `bun install --frozen-lockfile`.
+  - Verified `bun.lock` has **zero diff** (`git diff bun.lock` is empty).
+  - Added fallback installer check in `test/electron-dpapi-restart.test.ts` ensuring `electron.exe` is installed if missing.
+  - Added `getSelectedStorageBackend()` returning `"gnome_libsecret"` on Linux across `MockSafeStorage` and `MockGateSafeStorage` definitions in `test/security-boundary-characterization.ts`, `test/security-regression-gates.test.ts`, and `test/security-failure-reproductions.test.ts`.
+- **Evidence:**
+  - Local verification on Windows and cross-platform mock tests pass 100%.
+  - `git diff bun.lock`: 0 changes (byte-identical lockfile).
+
+#### Finding 5: Documentation Integrity — Exact Commit SHA Capture
+- **Vulnerability:** Prior completion report inadvertently referenced a typo SHA (`502ecb04...` instead of actual `502ecb0266fa1232d2b1427785bc039cc367cbd9`).
+- **Remediation:** All handoff reports and progress records now directly read and embed the exact 40-character commit SHA via `git rev-parse HEAD`.
+
+---
+
+### 4. Review Gate 3 Status & Pause Declaration
+
+- **All 5 Blocking Findings Remediated and Verified:**
+  - Full suite (`bun test`): **316 passed, 0 failed, 4 skipped, 6 todo across 36 files** (1376 expect calls).
+  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **21 passed, 0 failed** (123 expect calls).
+  - Security regression gates (`test/security-regression-gates.test.ts`): **17 passed, 0 failed, 4 skipped, 6 todo** (141 expect calls).
+  - Child boundary runner (`test/security-boundary-characterization.ts`): **61 passed, 0 failed, 0 outbound violations, 0 skipped**.
+  - Real Electron DPAPI restart test (`test/electron-dpapi-restart.test.ts`): **1 passed, 0 failed** (29 expect calls).
+  - TypeScript typechecks: 0 errors (`tsc --noEmit`, `tsconfig.renderer.json`, `tsconfig.security-test.json`).
+  - Production build: `bun run build` succeeds cleanly.
+  - Strict smoke test: `bun test/smoke/electron-smoke.ts --strict` succeeds cleanly.
+  - Lockfile: `git diff bun.lock` is empty (zero drift).
+
+**STOPPING AT REVIEW GATE 3.** Phase 4 remains paused pending formal review and acceptance of Review Gate 3. Acceptance does not authorize merging, tagging, or publication. Ready for user review.
 
 

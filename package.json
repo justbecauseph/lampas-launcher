@@ -38,6 +38,9 @@
     "typescript": "^5.8.2",
     "vite": "^6.2.0"
   },
+  "trustedDependencies": [
+    "electron"
+  ],
   "build": {
     "appId": "town.lampas.launcher",
     "productName": "Lampas Launcher",

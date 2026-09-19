@@ -49,6 +49,7 @@ class MockSafeStorage {
   available = true;
   failEncrypt = false;
   isEncryptionAvailable() { return this.available; }
+  getSelectedStorageBackend() { return "gnome_libsecret"; }
   encryptString(plain: string) {
     if (this.failEncrypt) throw new Error("Disk full / encrypt failed");
     return Buffer.from("ENC:" + plain);
@@ -368,6 +369,84 @@ describe("Phase 3 Failure Path Reproductions", () => {
     expect(CredentialStore.loadCredentials()).toBeNull();
   });
 
+  test("Reproduce Defect 1b: When unlink, overwrite, and marker creation all fail during replacement, replacement account B must NOT be published", () => {
+    const configPath = path.join(userDataDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ portalUrl: "https://dev.lampas.town" }));
+
+    // Step 1: Persist Account A
+    const mockStorage = new MockSafeStorage();
+    CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-acc-a",
+      refreshToken: "refresh-acc-a",
+      portalAccountId: "acc-a",
+      portalUsername: "Alice",
+    });
+    expect(SessionManager.getCredentials()?.token).toBe("token-acc-a");
+    expect(CredentialStore.hasStoredCredentialsFile()).toBe(true);
+
+    // Step 2: Provider becomes session-only
+    mockStorage.available = false;
+
+    // Step 3: Simulate catastrophic cleanup failure where unlink, truncate overwrite, and marker write all fail
+    const targetFile = CredentialStore.getCredentialsFilePath();
+    const markerFile = CredentialStore.getInvalidationMarkerPath();
+    const origUnlink = fs.unlinkSync.bind(fs);
+    const origWrite = fs.writeFileSync.bind(fs);
+
+    let simulateCatastrophe = true;
+
+    const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((p: any) => {
+      if (simulateCatastrophe && p.toString().includes("credentials.enc")) {
+        const err: any = new Error("EBUSY: resource locked");
+        err.code = "EBUSY";
+        throw err;
+      }
+      return origUnlink(p);
+    });
+
+    const writeSpy = spyOn(fs, "writeFileSync").mockImplementation((p: any, data: any, opts: any) => {
+      if (simulateCatastrophe && (p.toString().includes("credentials.enc") || p.toString().includes("credentials.invalidated"))) {
+        const err: any = new Error("EPERM: disk write protected");
+        err.code = "EPERM";
+        throw err;
+      }
+      return origWrite(p, data, opts);
+    });
+
+    try {
+      // Step 4: Clear credentials directly under catastrophe -> durablyInvalidated must be FALSE
+      const clearResult = CredentialStore.clearCredentials();
+      expect(clearResult.success).toBe(false);
+      expect(clearResult.durablyInvalidated).toBe(false);
+      expect(clearResult.staleRecordIneligible).toBe(false);
+
+      // Step 5: Account B attempts login in session-only mode -> MUST THROW and refuse to publish!
+      SessionManager.resetForTesting();
+      ConfigManager.resetForTesting();
+
+      expect(() => {
+        SessionManager.establishNewSession("https://dev.lampas.town", {
+          token: "token-acc-b",
+          refreshToken: "refresh-acc-b",
+          portalAccountId: "acc-b",
+          portalUsername: "Bob",
+        });
+      }).toThrow(/Failed to sanitize disk credentials/);
+
+      // Invariant: Account B must NOT be published in memory!
+      expect(SessionManager.isAuthenticated()).toBe(false);
+      expect(SessionManager.getCredentials()).toBeNull();
+      expect(SessionManager.getCurrentUser()).toBeNull();
+    } finally {
+      simulateCatastrophe = false;
+      unlinkSpy.mockRestore();
+      writeSpy.mockRestore();
+      mockStorage.available = true;
+      CredentialStore.clearCredentials();
+    }
+  });
+
   test("Reproduce Defect 2: Reject invalid authentication data before publication (no session-only downgrade, no placeholders, no Portal-ID-as-Minecraft-UUID)", () => {
     // 1. Missing or empty token must throw, not downgrade to session-only and publish
     expect(() => {
@@ -410,6 +489,108 @@ describe("Phase 3 Failure Path Reproductions", () => {
     expect(restoredUser?.minecraftUuid).toBeUndefined();
   });
 
+  test("Reproduce Defect 2b: Literal 'player' synthetic identity is rejected across exchange, session establishment, and stored-record validation", async () => {
+    // 1. Stored-record validation must reject 'player' and 'Player'
+    const recordWithPlayer: any = {
+      version: 1,
+      schemaVersion: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "valid-token-123",
+      portalAccountId: "acc-123",
+      portalUsername: "player",
+    };
+    expect(CredentialStore.validateRecord(recordWithPlayer)).toBe(false);
+
+    const recordWithPlayerUpper: any = {
+      ...recordWithPlayer,
+      portalUsername: "Player",
+    };
+    expect(CredentialStore.validateRecord(recordWithPlayerUpper)).toBe(false);
+
+    // 2. establishNewSession must reject 'player' and 'Player'
+    expect(() => {
+      SessionManager.establishNewSession("https://dev.lampas.town", {
+        token: "token-valid",
+        portalAccountId: "acc-123",
+        portalUsername: "player",
+      });
+    }).toThrow(/placeholders/);
+
+    expect(() => {
+      SessionManager.establishNewSession("https://dev.lampas.town", {
+        token: "token-valid",
+        portalAccountId: "acc-123",
+        portalUsername: "Player",
+      });
+    }).toThrow(/placeholders/);
+
+    // 3. Token exchange rejection for literal 'player' username
+    const origFetch = globalThis.fetch;
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
+      if (url.toString().includes("/api/v1/auth/exchange")) {
+        return new Response(
+          JSON.stringify({
+            token: "syn-token-exchange",
+            user: {
+              id: "user-legit-id",
+              name: "player", // Rejected synthetic identity
+              minecraftUuid: "11111111-1111-1111-1111-111111111111",
+              minecraftUsername: "PlayerMC",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return origFetch(url, init);
+    });
+
+    try {
+      SessionManager.clearSession();
+      CredentialStore.clearCredentials();
+      ConfigManager.resetForTesting();
+
+      let loginErr: any = null;
+      const loginPromise = LauncherAuth.loginWithPortal();
+      loginPromise.catch((err: any) => {
+        loginErr = err;
+      });
+
+      const context = LauncherAuth.activeLoginContext;
+      expect(context).not.toBeNull();
+
+      while (!context?.authUrl) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      const authUrl = context.authUrl || "";
+      const portMatch = authUrl.match(/port=(\d+)/);
+      const stateMatch = authUrl.match(/state=([^&]+)/);
+      const port = parseInt(portMatch![1], 10);
+      const state = decodeURIComponent(stateMatch![1]);
+
+      const http = await import("node:http");
+      const clientReq = http.request({
+        hostname: "127.0.0.1",
+        port,
+        path: `/callback?code=good-code&state=${encodeURIComponent(state)}`,
+        method: "GET",
+      });
+      clientReq.on("error", () => {});
+      clientReq.on("response", (res) => {
+        res.resume();
+      });
+      clientReq.end();
+
+      // Exchange must reject and fail the login promise
+      await expect(loginPromise).rejects.toThrow(/invalid user identity/);
+      expect(SessionManager.isAuthenticated()).toBe(false);
+      expect(SessionManager.getCredentials()).toBeNull();
+    } finally {
+      LauncherAuth.cancelLogin();
+      fetchSpy.mockRestore();
+    }
+  });
+
   test("Reproduce Defect 3: Malformed legacy data is ineligible without bypassing cleanup; preserves settings", () => {
     CredentialStore.clearCredentials();
     const configPath = path.join(userDataDir, "config.json");
@@ -438,6 +619,52 @@ describe("Phase 3 Failure Path Reproductions", () => {
     // Non-secret settings must be preserved
     expect(scrubbed.ram).toBe(6);
     expect(scrubbed.gameDir).toBe("C:\\CustomGames");
+  });
+
+  test("Reproduce Defect 3b: Syntactically malformed / truncated legacy JSON and present-but-falsy tokens are cleaned up without wiping non-secret settings", () => {
+    CredentialStore.clearCredentials();
+    const configPath = path.join(userDataDir, "config.json");
+
+    // Case 1: Truncated JSON lacking closing brace but containing settings and secret token
+    const truncatedConfig = `{\n  "allocatedRamGb": 8,\n  "gameDir": "C:/CustomGames",\n  "portalUrl": "https://dev.lampas.town",\n  "token": "secret-truncated-token"\n`;
+    fs.writeFileSync(configPath, truncatedConfig, "utf-8");
+
+    // JSON.parse on truncatedConfig throws SyntaxError
+    expect(() => JSON.parse(truncatedConfig)).toThrow();
+
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+
+    expect(outcome.legacyPlaintextDetected).toBe(true);
+    expect(outcome.legacyScrubbed).toBe(true);
+
+    // Invariant: Non-secret settings MUST NOT be wiped! File must be recovered to valid JSON
+    const diskContent = fs.readFileSync(configPath, "utf-8");
+    expect(diskContent).not.toContain("secret-truncated-token");
+    const parsed = JSON.parse(diskContent);
+    expect(parsed.allocatedRamGb).toBe(8);
+    expect(parsed.gameDir).toBe("C:/CustomGames");
+    expect(parsed.token).toBeUndefined();
+
+    // Case 2: Present-but-falsy secret fields (e.g. token: "") must be detected and scrubbed
+    fs.writeFileSync(configPath, JSON.stringify({
+      allocatedRamGb: 6,
+      portalUrl: "https://dev.lampas.town",
+      token: "", // present-but-falsy
+      refreshToken: false, // present-but-falsy
+    }, null, 2));
+
+    SessionManager.resetForTesting();
+    ConfigManager.resetForTesting();
+    const outcome2 = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    expect(outcome2.legacyPlaintextDetected).toBe(true);
+    expect(outcome2.legacyScrubbed).toBe(true);
+
+    const parsed2 = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect("token" in parsed2).toBe(false);
+    expect("refreshToken" in parsed2).toBe(false);
+    expect(parsed2.allocatedRamGb).toBe(6);
   });
 
   test("Reproduce Defect 4: Short write and invalidation marker persistence contract", () => {

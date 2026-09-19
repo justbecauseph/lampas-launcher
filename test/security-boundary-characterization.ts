@@ -460,7 +460,7 @@ try {
     private key = crypto.randomBytes(32);
     private iv = crypto.randomBytes(16);
     public available: boolean = true;
-    public backend: string = "windows_dpapi";
+    public backend: string = process.platform === "linux" ? "gnome_libsecret" : "windows_dpapi";
     public failEncryption: boolean = false;
     public failDecryption: boolean = false;
     public onEncryptCallback: (() => void) | null = null;
@@ -706,7 +706,7 @@ try {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           valid: true,
-          user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
+          user: { id: "u1", name: "BoundaryUser", minecraftUsername: "BoundaryUser", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
         }));
         return;
       }
@@ -729,7 +729,7 @@ try {
           valid: true,
           token: "syn-refreshed-token-a",
           refreshToken: "syn-refreshed-refresh-a",
-          user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
+          user: { id: "u1", name: "BoundaryUser", minecraftUsername: "BoundaryUser", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
         }));
         return;
       }
@@ -751,7 +751,7 @@ try {
         res.end(JSON.stringify({
           token: "syn-exchanged-token-a",
           refreshToken: "syn-exchanged-refresh-a",
-          user: { id: "u1", name: "Player", minecraftUsername: "Player", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
+          user: { id: "u1", name: "BoundaryUser", minecraftUsername: "BoundaryUser", minecraftUuid: "00000000-0000-0000-0000-000000000001" },
         }));
         return;
       }
@@ -3522,8 +3522,8 @@ try {
       };
 
       // Assert exact argument/value pairs
-      if (getFlagVal("--username") !== "Player") {
-        throw new Error(`Expected exact pair --username Player, got: ${getFlagVal("--username")}`);
+      if (getFlagVal("--username") !== "BoundaryUser") {
+        throw new Error(`Expected exact pair --username BoundaryUser, got: ${getFlagVal("--username")}`);
       }
       if (getFlagVal("--version") !== "26.2") {
         throw new Error(`Expected exact pair --version 26.2, got: ${getFlagVal("--version")}`);
@@ -3563,7 +3563,7 @@ try {
       ) {
         throw new Error(`Forged renderer arguments leaked into process execution sink! Args: ${JSON.stringify(forgedCall.args)}`);
       }
-      if (getFlagVal("--username", forgedCall.args) !== "Player") {
+      if (getFlagVal("--username", forgedCall.args) !== "BoundaryUser") {
         throw new Error("Main-owned consolidated user identity was overridden by forged renderer input");
       }
     } finally {

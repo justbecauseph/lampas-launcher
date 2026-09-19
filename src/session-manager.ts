@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
+import * as jsonc from "jsonc-parser";
 import { CredentialStore, type StoredCredentialRecord, type SaveCredentialsResult, type ClearCredentialsResult, type StorageBackendType } from "./credential-store";
 import { normalizePortalUrl } from "./portal-policy";
 import { writeAtomicFileSync } from "./file-transfer";
@@ -308,8 +309,9 @@ export class SessionManager {
         parsed = null;
       }
 
+      const SECRET_KEYS = ["token", "refreshToken", "minecraftAccessToken", "sessionPortalUrl"] as const;
       const hasPlaintextKeys = parsed && typeof parsed === "object"
-        ? Boolean(parsed.token || parsed.refreshToken || parsed.minecraftAccessToken || parsed.sessionPortalUrl)
+        ? SECRET_KEYS.some((k) => k in parsed)
         : (raw ? /"(token|refreshToken|minecraftAccessToken|sessionPortalUrl)"\s*:/.test(raw) : false);
 
       if (hasPlaintextKeys) {
@@ -327,14 +329,14 @@ export class SessionManager {
         // Case A: Protected record already loaded -> protected record has precedence; scrub legacy plaintext
         if (protectedLoaded) {
           LauncherLogger.info("[SessionManager] Both protected record and legacy plaintext existed. Scrubbing legacy plaintext (protected record takes precedence).");
-          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
           legacyScrubbed = scrubResult.success;
           if (!scrubResult.success) outcomeError = scrubResult.error;
         }
         // Case B: Protected record failed to load -> DO NOT silently restore legacy plaintext! Fail closed.
         else if (failedProtectedLoad) {
           LauncherLogger.warn("[SessionManager] Protected record load failed; refusing to silently restore legacy plaintext. Scrubbing plaintext and requiring clean reauthentication.");
-          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
           legacyScrubbed = scrubResult.success;
           if (!scrubResult.success) outcomeError = scrubResult.error;
           this.advanceSessionEpoch();
@@ -345,15 +347,19 @@ export class SessionManager {
           const rawUsername = (parsed?.portalUsername || parsed?.accountUsername || "").toString().trim();
           const hasTrustedAccountEvidence = Boolean(
             rawAccountId && rawUsername &&
-            rawAccountId !== "account" && rawAccountId !== "unverified-migration" &&
-            rawUsername !== "player"
+            rawAccountId.toLowerCase() !== "account" &&
+            rawAccountId.toLowerCase() !== "unverified-migration" &&
+            rawAccountId.toLowerCase() !== "player" &&
+            rawUsername.toLowerCase() !== "player" &&
+            rawUsername.toLowerCase() !== "account" &&
+            rawUsername.toLowerCase() !== "unverified-migration"
           );
           const hasValidToken = typeof parsed?.token === "string" && parsed.token.trim().length > 0;
           const originMatches = legacySessionPortal !== null && legacySessionPortal === canonicalActivePortal;
 
           if (!hasValidToken || !originMatches || !hasTrustedAccountEvidence) {
             LauncherLogger.warn("[SessionManager] Ineligible or unverified legacy credentials found in config.json. Scrubbing plaintext from disk and requiring clean reauthentication.");
-            const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+            const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
             legacyScrubbed = scrubResult.success;
             if (!scrubResult.success) outcomeError = scrubResult.error;
             this.advanceSessionEpoch();
@@ -379,7 +385,7 @@ export class SessionManager {
               this.currentRecord = legacyRecord;
               this.isCurrentSessionPersisted = false;
               migrated = true;
-              const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+              const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
               legacyScrubbed = scrubResult.success;
               if (!scrubResult.success) outcomeError = scrubResult.error;
             } else {
@@ -402,7 +408,7 @@ export class SessionManager {
                 this.isCurrentSessionPersisted = false;
                 this.advanceSessionEpoch();
               }
-              const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed);
+              const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
               legacyScrubbed = scrubResult.success;
               if (!scrubResult.success) outcomeError = scrubResult.error;
             }
@@ -423,18 +429,69 @@ export class SessionManager {
     return outcome;
   }
 
-  private static scrubPlaintextFromConfig(configPath: string, parsed: any): { success: boolean; error?: string } {
+  private static scrubPlaintextFromConfig(configPath: string, parsed: any, raw?: string | null): { success: boolean; error?: string } {
+    const SECRET_KEYS = new Set(["token", "refreshToken", "minecraftAccessToken", "sessionPortalUrl"]);
     try {
-      let scrubbed: any = {};
-      if (parsed && typeof parsed === "object") {
-        scrubbed = { ...parsed };
-        delete scrubbed.token;
-        delete scrubbed.refreshToken;
-        delete scrubbed.minecraftAccessToken;
-        delete scrubbed.sessionPortalUrl;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const scrubbed = { ...parsed };
+        for (const k of SECRET_KEYS) {
+          delete scrubbed[k];
+        }
+        writeAtomicFileSync(configPath, JSON.stringify(scrubbed, null, 2), "utf-8");
+        LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from config.json on disk.");
+        return { success: true };
       }
-      writeAtomicFileSync(configPath, JSON.stringify(scrubbed, null, 2), "utf-8");
-      LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from config.json on disk.");
+
+      // If parsed is null (syntax error or truncated JSON in config.json), do NOT wipe non-secret settings!
+      if (raw && typeof raw === "string") {
+        const extracted: Record<string, any> = {};
+
+        // 1. Try jsonc-parser to recover settings tolerantly
+        try {
+          const jsoncParsed = jsonc.parse(raw);
+          if (jsoncParsed && typeof jsoncParsed === "object" && !Array.isArray(jsoncParsed)) {
+            for (const [k, v] of Object.entries(jsoncParsed)) {
+              if (!SECRET_KEYS.has(k)) {
+                extracted[k] = v;
+              }
+            }
+          }
+        } catch {}
+
+        // 2. If jsonc didn't recover or text was truncated, extract key-values via regex
+        if (Object.keys(extracted).length === 0) {
+          const kvRegex = /"([^"\\]+)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null|\[[^\]]*\]|\{[^}]*\})/g;
+          let match: RegExpExecArray | null;
+          while ((match = kvRegex.exec(raw)) !== null) {
+            const key = match[1];
+            if (!SECRET_KEYS.has(key)) {
+              try {
+                extracted[key] = JSON.parse(match[2]);
+              } catch {
+                if (match[2].startsWith('"') && match[2].endsWith('"')) {
+                  extracted[key] = match[2].slice(1, -1);
+                }
+              }
+            }
+          }
+        }
+
+        // 3. Regex redact all secret key-value pairs from raw text
+        const scrubbedRaw = raw.replace(
+          /[ \t]*"(?:token|refreshToken|minecraftAccessToken|sessionPortalUrl)"\s*:\s*(?:"(?:[^"\\]|\\.)*"|[^,\r\n}]+)[ \t]*,?[ \t]*\r?\n?/g,
+          ""
+        );
+
+        if (Object.keys(extracted).length > 0) {
+          writeAtomicFileSync(configPath, JSON.stringify(extracted, null, 2), "utf-8");
+        } else {
+          writeAtomicFileSync(configPath, scrubbedRaw, "utf-8");
+        }
+        LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from malformed config.json on disk.");
+        return { success: true };
+      }
+
+      writeAtomicFileSync(configPath, "{}", "utf-8");
       return { success: true };
     } catch (err: any) {
       LauncherLogger.error(`[SessionManager] Failed to scrub plaintext config: ${err.message}`);
@@ -468,7 +525,17 @@ export class SessionManager {
     const token = (credentials.token || "").toString().trim();
 
     // Reject invalid authentication data before publication
-    if (!token || !portalAccountId || !portalUsername || portalAccountId === "account" || portalAccountId === "unverified-migration") {
+    if (
+      !token ||
+      !portalAccountId ||
+      !portalUsername ||
+      portalAccountId.toLowerCase() === "account" ||
+      portalAccountId.toLowerCase() === "unverified-migration" ||
+      portalAccountId.toLowerCase() === "player" ||
+      portalUsername.toLowerCase() === "player" ||
+      portalUsername.toLowerCase() === "account" ||
+      portalUsername.toLowerCase() === "unverified-migration"
+    ) {
       throw new Error("Invalid authentication data: token, portalAccountId, and portalUsername are required and cannot be placeholders");
     }
 
@@ -524,9 +591,11 @@ export class SessionManager {
     if (saveResult.sessionOnly || !saveResult.success) {
       // Invalidate existing disk credentials independently of currentRecord
       const clearResult = CredentialStore.clearCredentials();
-      if (!clearResult.success && !saveResult.success) {
-        // Disk cleanup failed and persistence failed: fail login completely
-        throw new Error(`Persistence failure and could not sanitize disk credentials: ${saveResult.error}`);
+      if (!clearResult.durablyInvalidated) {
+        this.advanceSessionEpoch();
+        throw new Error(
+          `Failed to sanitize disk credentials: stale credentials could not be deleted or durably invalidated (${clearResult.error || "durable invalidation failed"})`
+        );
       }
       this.isCurrentSessionPersisted = false;
       if (!saveResult.success) {
@@ -644,7 +713,13 @@ export class SessionManager {
     }
 
     if (saveResult.sessionOnly || !saveResult.success) {
-      CredentialStore.clearCredentials();
+      const clearResult = CredentialStore.clearCredentials();
+      if (!clearResult.durablyInvalidated) {
+        this.advanceSessionEpoch();
+        throw new Error(
+          `Failed to sanitize disk credentials on refresh: stale credentials could not be deleted or durably invalidated (${clearResult.error || "durable invalidation failed"})`
+        );
+      }
       this.isCurrentSessionPersisted = false;
       if (!saveResult.success) {
         LauncherLogger.warn(`[SessionManager] Failed to persist refreshed credentials (${saveResult.error}); continuing in session-only mode.`);

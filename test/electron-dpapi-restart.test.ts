@@ -9,6 +9,17 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
   const electronBin = isWindows
     ? path.resolve(__dirname, "../node_modules/electron/dist/electron.exe")
     : path.resolve(__dirname, "../node_modules/.bin/electron");
+
+  // Deterministically ensure Electron binary is installed if missing on Windows
+  if (isWindows && !fs.existsSync(electronBin)) {
+    const installerPath = path.resolve(__dirname, "../node_modules/electron/install.js");
+    if (fs.existsSync(installerPath)) {
+      try {
+        cp.execFileSync("node", [installerPath], { stdio: "inherit" });
+      } catch {}
+    }
+  }
+
   const launcherRoot = path.resolve(__dirname, "..");
   const credStoreModulePath = path.resolve(launcherRoot, "dist/credential-store.js");
   const sessionManagerModulePath = path.resolve(launcherRoot, "dist/session-manager.js");
