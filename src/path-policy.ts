@@ -249,6 +249,27 @@ export function isPathProtected(relPath: string): boolean {
   return category === "RESERVED_INTERNAL" || category === "PROTECTED_PLAYER_DATA";
 }
 
+function stripExtendedPathPrefix(p: string): string {
+  if (process.platform !== "win32") return p;
+  if (p.startsWith("\\\\?\\UNC\\")) {
+    return "\\\\" + p.substring(8);
+  }
+  if (p.startsWith("\\\\?\\")) {
+    return p.substring(4);
+  }
+  return p;
+}
+
+export function realpathCanonicalSync(targetPath: string): string {
+  const fn = fs.realpathSync.native || fs.realpathSync;
+  return stripExtendedPathPrefix(fn(targetPath));
+}
+
+export async function realpathCanonical(targetPath: string): Promise<string> {
+  const res = await fs.promises.realpath(targetPath);
+  return stripExtendedPathPrefix(res);
+}
+
 /**
  * Safely resolves the canonical realpath of a directory or path,
  * falling back to resolving the nearest existing ancestor if the path itself does not exist.
@@ -259,7 +280,7 @@ export function getCanonicalDiskPath(targetPath: string): string {
   const resolved = path.resolve(targetPath);
   if (fs.existsSync(resolved)) {
     try {
-      return fs.realpathSync(resolved);
+      return realpathCanonicalSync(resolved);
     } catch {
       return resolved;
     }
@@ -275,7 +296,7 @@ export function getCanonicalDiskPath(targetPath: string): string {
     ancestor = parent;
     if (fs.existsSync(ancestor)) {
       try {
-        const realAncestor = fs.realpathSync(ancestor);
+        const realAncestor = realpathCanonicalSync(ancestor);
         return path.join(realAncestor, ...missingParts);
       } catch {
         return resolved;
@@ -426,7 +447,7 @@ export function checkPhysicalAncestrySync(
       // Follow symlink and verify target remains within baseDir
       let realTarget: string;
       try {
-        realTarget = fs.realpathSync(current);
+        realTarget = realpathCanonicalSync(current);
       } catch (err: any) {
         throw new PathContainmentError(`Cannot resolve symlink target at '${current}': ${err.message}`);
       }
@@ -462,7 +483,7 @@ export function checkPhysicalAncestrySync(
     }
     if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
       try {
-        const realTarget = fs.realpathSync(checkPath);
+        const realTarget = realpathCanonicalSync(checkPath);
         resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
         const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
         if (isPathProtected(relToRoot)) {
@@ -508,7 +529,7 @@ export async function checkPhysicalAncestry(
       }
 
       if (stat.isSymbolicLink()) {
-        const realTarget = await fs.promises.realpath(current);
+        const realTarget = await realpathCanonical(current);
         resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
 
         if (options.enforceOwnership) {
@@ -548,7 +569,7 @@ export async function checkPhysicalAncestry(
     }
     if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
       try {
-        const realTarget = await fs.promises.realpath(checkPath);
+        const realTarget = await realpathCanonical(checkPath);
         resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
         const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
         if (isPathProtected(relToRoot)) {
