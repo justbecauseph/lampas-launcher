@@ -899,16 +899,75 @@ Following thorough review of checkpoint `9f6ff931a20f91738d36d03561b3428fff6b9a0
 
 ---
 
-### 5. Review Gate 3 Status & Pause Declaration
+### 5. Review Gate 3 Fifth Amendment (Remediation of 5 Blockers and Report/Implementation Mismatch from `adfcf32b97f13baf763d52ab2455048f1f5030f0`)
 
-- **All 4 Blocking Findings Remediated and Verified:**
-  - Full suite (`bun test`): **323 passed, 0 failed, 4 skipped, 6 todo across 36 files** (1428 expect calls).
-  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **28 passed, 0 failed** (175 expect calls).
+Following review of checkpoint `adfcf32b97f13baf763d52ab2455048f1f5030f0`, five blockers and one report/implementation mismatch were remediated, verified with failing reproduction tests, and integrated:
+
+#### Blocker 1: High — Removal of Loose String Scan False Positive in `detectPlaintextSecretKeys`
+- **Vulnerability:** `detectPlaintextSecretKeys` performed a secondary `looseStringRegex = /"((?:[^"\\]|\\.)*)"/g` pass across *every* JSON string in the raw text, treating ordinary non-secret configuration values whose string content matched a credential-key name (e.g. `javaArgs: "token"` or `customSetting: "sessionPortalUrl"`) as secret material. Read-back verification in `scrubPlaintextFromConfig` repeatedly flagged the rewritten file, executing `writeAtomicFileSync(configPath, "{}\n", "utf-8")` and wiping completely valid, secret-free user configuration files to `{}`.
+- **Remediation:**
+  - Removed `looseStringRegex` entirely from `detectPlaintextSecretKeys` in `src/session-manager.ts`.
+  - Property name detection is strictly confined to object keys (via parsed object inspection, tolerant `jsonc` parser, and escape-aware property name regex `/"((?:[^"\\]|\\.)*)"\s*:/g` matching strings immediately preceding `:`).
+  - Added reproduction test `Defect 3e` in `test/security-failure-reproductions.test.ts`: writes valid configuration containing non-secret settings with values `"token"`, `"refreshToken"`, `"minecraftAccessToken"`, and `"sessionPortalUrl"`. Confirms `legacyPlaintextDetected === false`, `legacyScrubbed === false`, and byte/semantic preservation of the file on disk.
+- **Evidence:** `[Phase 3 Failure Path Reproductions] Reproduce Defect 3e: Non-secret configuration values named after credential keys are NOT detected as secret material or wiped` (passed).
+
+#### Blocker 2: Gate Blocker — Windows CI Socket Closure on Loopback OAuth Listener
+- **Vulnerability:** In `src/auth.ts`, `settleOnce` previously called `socket.end()` synchronously across all connected client sockets immediately upon logical settlement. In concurrent requests (such as Test 60 sending valid callback + replay 409 concurrently), calling `socket.end()` manually raced with Windows TCP socket buffering, causing Windows CI to abort connections prematurely with `The socket connection was closed unexpectedly.`
+- **Remediation:**
+  - Removed manual `socket.end()` calls from `settleOnce` in `src/auth.ts`.
+  - Added explicit `Connection: "close"` response header to all loopback HTTP responses (`200 OK`, `400 Bad Request`, `405 Method Not Allowed`, `409 Conflict`, `414 URI Too Long`, `502 Bad Gateway`, `500 Internal Server Error`).
+  - Node's HTTP engine owns transmission and socket closure upon completing `res.end()`.
+  - In `loginWithPortal`, hooked `res.once("finish", ...)` to ensure the HTTP 200 response body has flushed completely before calling `opContext.settleSuccess()`.
+  - Maintained immediate `socket.destroy()` only for genuine abort paths (`timeout`, `cancelled`, `superseded`, `shutdown`).
+  - Maintained a 1000ms unref'd fail-safe timer for unclosed lingering sockets.
+- **Evidence:** Boundary Characterization Test 60 (`Loopback OAuth listener enforces method, path, host, single-use, and deterministic cleanup`) passes cleanly without unexpected socket closures.
+
+#### Blocker 3: Medium — Strict String Schema Enforcement in `CredentialStore.validateRecord`
+- **Vulnerability:** `(record.portalAccountId || record.accountId || "").toString().trim()` coerced numeric identities (e.g. `12345`) to strings, allowing numeric credentials to pass validation and be loaded into `StoredCredentialRecord`.
+- **Remediation:**
+  - In `CredentialStore.validateRecord`: enforced `typeof` string checks on `record.portalAccountId`, `record.accountId`, `record.portalUsername`, and `record.accountUsername` before trimming and validation. Numeric values fail validation fail-closed.
+  - In `SessionManager.validateCandidateSession`: strictly enforced string types on candidate record and user profile fields without numeric coercion.
+  - In `SessionManager.setCurrentUser`: strictly enforced `typeof user.id === "string"` and `typeof user.name === "string"`.
+  - Added reproduction test `Defect 2e` in `test/security-failure-reproductions.test.ts`: verifies numeric identities fail `validateRecord`, `saveCredentials`, `loadCredentials`, `validateCandidateSession`, and `setCurrentUser`.
+- **Evidence:** `[Phase 3 Failure Path Reproductions] Reproduce Defect 2e: Numeric identities violate strict schema and are rejected across validateRecord, saveCredentials, loadCredentials, and validateCandidateSession` (passed).
+
+#### Blocker 4: Medium — Truthful `sessionPersisted` Lifecycle Tracking
+- **Vulnerability:** `SessionManager.clearSession()` and `SessionManager.resetForTesting()` did not reset `this.isCurrentSessionPersisted = false`. Calling `getStorageStatus()` after logout could falsely report `sessionPersisted: true`.
+- **Remediation:**
+  - Added `this.isCurrentSessionPersisted = false;` to `SessionManager.clearSession()`.
+  - Added `this.isCurrentSessionPersisted = false;` to `SessionManager.resetForTesting()`.
+  - In `SessionManager.getStorageStatus()`: computed `sessionPersisted: hasActiveSession && this.isCurrentSessionPersisted`, ensuring `sessionPersisted` is never true when no authenticated session exists.
+  - Added reproduction test `Defect 5b` in `test/security-failure-reproductions.test.ts`: verifies `sessionPersisted` is `true` during active persisted session, and resets to `false` after logout and after `resetForTesting()`.
+- **Evidence:** `[Phase 3 Failure Path Reproductions] Reproduce Defect 5b: sessionPersisted accurately tracks active session and resets to false on logout and resetForTesting` (passed).
+
+#### Blocker 5: Medium / Test-Evidence — Defect 1e Recursive `unlinkSync` Spy Fix
+- **Vulnerability:** In `test/security-failure-reproductions.test.ts`, the `unlinkSync` spy called `(fs as any).unlinkSync(p)`, recursively calling the spy itself and preventing proper invocation of the underlying `fs.unlinkSync` for target files.
+- **Remediation:** Captured `const originalUnlink = fs.unlinkSync.bind(fs);` before spying and delegated non-marker unlinks to `originalUnlink(p)`.
+- **Evidence:** Defect 1e passes cleanly and accurately verifies that `targetFile` is deleted and launcher remains logged out when marker removal fails.
+
+#### Report/Implementation Alignment: Minecraft UUID Format Enforcement
+- **Remediation:**
+  - Implemented `isValidMinecraftUuid(uuid)` in `src/session-manager.ts` validating:
+    - Canonical dashed UUID: `/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/`
+    - Compact 32-hex UUID: `/^[0-9a-fA-F]{32}$/`
+    - Rejection of all-zero UUIDs (`00000000-0000-0000-0000-000000000000` / `00000000000000000000000000000000`)
+    - Rejection of non-UUID garbage strings (`"garbage"`, `"12345"`, non-string values)
+  - Enforced across `CredentialStore.validateRecord`, `SessionManager.validateCandidateSession`, `LauncherAuth.loginWithPortal`, `LauncherAuth.refreshSession`, and `LauncherAuth.verifySession`.
+  - Added reproduction test `Defect 2f` in `test/security-failure-reproductions.test.ts`.
+- **Evidence:** `[Phase 3 Failure Path Reproductions] Reproduce Defect 2f: Minecraft UUID format enforcement accepts canonical and compact UUIDs and rejects garbage/non-UUID strings` (passed).
+
+---
+
+### 6. Review Gate 3 Status & Pause Declaration
+
+- **All Blocking Findings Remediated and Verified:**
+  - Full suite (`bun test`): **327 passed, 0 failed, 4 skipped, 6 todo across 36 files** (1467 expect calls).
+  - Security failure reproductions (`test/security-failure-reproductions.test.ts`): **32 passed, 0 failed** (214 expect calls).
   - Security regression gates (`test/security-regression-gates.test.ts`): **17 passed, 0 failed, 4 skipped, 6 todo** (141 expect calls).
   - Child boundary runner (`test/security-boundary-characterization.ts`): **61 passed, 0 failed, 0 outbound violations, 0 skipped**.
   - Real Electron DPAPI restart test (`test/electron-dpapi-restart.test.ts`): **1 passed, 0 failed** (29 expect calls).
   - TypeScript typechecks: 0 errors across `tsconfig.json`, `tsconfig.renderer.json`, and `tsconfig.security-test.json`.
-  - Production build: `bun run build` succeeds cleanly.
+  - Production build: `bun run build` succeeds cleanly in 153ms.
   - Strict smoke test: `bun test/smoke/electron-smoke.ts --strict` succeeds cleanly (real Electron 44.0.0 and packaged binary ASAR verified; zero `--no-sandbox`).
   - Lockfile: `git diff bun.lock` is empty (zero drift; byte-identical to baseline).
 

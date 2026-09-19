@@ -44,6 +44,7 @@ let LauncherAuth: any;
 let CredentialStore: any;
 let SessionManager: any;
 let PortalPolicy: any;
+let isValidMinecraftUuid: any;
 
 class MockSafeStorage {
   available = true;
@@ -78,6 +79,7 @@ beforeAll(async () => {
 
   const sessMod = await import("../src/session-manager");
   SessionManager = sessMod.SessionManager;
+  isValidMinecraftUuid = sessMod.isValidMinecraftUuid;
 });
 
 beforeEach(() => {
@@ -277,7 +279,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
       minecraftAccessToken: "mc-token-acc-a-secret",
       portalAccountId: "acc-a",
       portalUsername: "Alice",
-      minecraftUuid: "uuid-a",
+      minecraftUuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       minecraftUsername: "AliceMC",
     });
 
@@ -1223,11 +1225,12 @@ describe("Phase 3 Failure Path Reproductions", () => {
     fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now() }), "utf-8");
 
     // Interruption after renameSync: simulate process crash before marker is unlinked
+    const originalUnlink = fs.unlinkSync.bind(fs);
     const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((p: any) => {
       if (p.toString().includes("credentials.invalidated")) {
         throw new Error("Simulated interruption after rename but before marker removal");
       }
-      return (fs as any).unlinkSync(p);
+      return originalUnlink(p);
     });
 
     try {
@@ -1466,6 +1469,208 @@ describe("Phase 3 Failure Path Reproductions", () => {
     expect("refreshToken" in parsed).toBe(false);
     expect(onDiskRaw).not.toContain("token1");
     expect(onDiskRaw).not.toContain("token2");
+  });
+
+  test("Reproduce Defect 3e: Non-secret configuration values named after credential keys are NOT detected as secret material or wiped", () => {
+    const configPath = path.join(userDataDir, "config.json");
+
+    // Valid settings where property values equal secret key names
+    const safeConfig = {
+      allocatedRamGb: 8,
+      javaArgs: "token",
+      portalUrl: "https://dev.lampas.town",
+      gameDir: "refreshToken",
+      customSetting: "minecraftAccessToken",
+      anotherSetting: "sessionPortalUrl",
+    };
+
+    const initialJson = JSON.stringify(safeConfig, null, 2);
+    fs.writeFileSync(configPath, initialJson, "utf-8");
+
+    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    expect(outcome.legacyPlaintextDetected).toBe(false);
+    expect(outcome.legacyScrubbed).toBe(false);
+    expect(outcome.migrated).toBe(false);
+
+    // Assert disk file is byte-for-byte and semantically preserved (NOT wiped to {})
+    const onDiskRaw = fs.readFileSync(configPath, "utf-8");
+    const parsed = JSON.parse(onDiskRaw);
+    expect(parsed.allocatedRamGb).toBe(8);
+    expect(parsed.javaArgs).toBe("token");
+    expect(parsed.gameDir).toBe("refreshToken");
+    expect(parsed.customSetting).toBe("minecraftAccessToken");
+    expect(parsed.anotherSetting).toBe("sessionPortalUrl");
+    expect(onDiskRaw).toBe(initialJson);
+  });
+
+  test("Reproduce Defect 2e: Numeric identities violate strict schema and are rejected across validateRecord, saveCredentials, loadCredentials, and validateCandidateSession", () => {
+    // 1. validateRecord rejects numeric portalAccountId and portalUsername
+    expect(CredentialStore.validateRecord({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "secret-token",
+      portalAccountId: 12345,
+      portalUsername: 67890,
+    } as any)).toBe(false);
+
+    expect(CredentialStore.validateRecord({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "secret-token",
+      accountId: 99999,
+      accountUsername: 88888,
+    } as any)).toBe(false);
+
+    // 2. saveCredentials fails cleanly
+    const saveRes = CredentialStore.saveCredentials({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "secret-token",
+      portalAccountId: 12345 as any,
+      portalUsername: 67890 as any,
+    });
+    expect(saveRes.success).toBe(false);
+    expect(saveRes.error).toBe("Invalid credential record schema");
+
+    // 3. Directly encrypted numeric payload cannot be loaded via loadCredentials
+    const targetFile = CredentialStore.getCredentialsFilePath();
+    const mock = new MockSafeStorage();
+    const encryptedNumeric = mock.encryptString(JSON.stringify({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "secret-token",
+      portalAccountId: 12345,
+      portalUsername: 67890,
+    }));
+    fs.writeFileSync(targetFile, encryptedNumeric);
+
+    const loaded = CredentialStore.loadCredentials();
+    expect(loaded).toBeNull();
+
+    // 4. validateCandidateSession rejects numeric identities
+    const candidateValidation = SessionManager.validateCandidateSession({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "secret-token",
+      portalAccountId: 12345 as any,
+      portalUsername: 67890 as any,
+    });
+    expect(candidateValidation.valid).toBe(false);
+    expect(candidateValidation.error).toBeDefined();
+
+    // 5. setCurrentUser rejects numeric IDs or names
+    expect(() => SessionManager.setCurrentUser({
+      id: 12345 as any,
+      name: 67890 as any,
+      minecraftUuid: "12345678-1234-1234-1234-123456789abc",
+      minecraftUsername: "ValidMcUser",
+      isAdmin: false,
+      isTech: false,
+      roles: [],
+      allowedChannels: [],
+    })).toThrow("user ID and name must be strings");
+  });
+
+  test("Reproduce Defect 5b: sessionPersisted accurately tracks active session and resets to false on logout and resetForTesting", () => {
+    // 1. Establish persisted session
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-persisted-status",
+      portalAccountId: "user-persisted-id",
+      portalUsername: "UserPersisted",
+      minecraftUuid: "12345678-1234-1234-1234-123456789abc",
+      minecraftUsername: "McPersisted",
+    });
+
+    let status = SessionManager.getStorageStatus();
+    expect(status.sessionPersisted).toBe(true);
+    expect(status.sessionOnly).toBe(false);
+
+    // 2. Clear session (logout)
+    const clearResult = SessionManager.clearSession();
+    expect(clearResult.success).toBe(true);
+
+    status = SessionManager.getStorageStatus();
+    expect(status.sessionPersisted).toBe(false);
+    expect(status.sessionOnly).toBe(false); // No active session, not in session-only mode
+
+    // 3. Re-establish persisted session and verify resetForTesting
+    SessionManager.establishNewSession("https://dev.lampas.town", {
+      token: "token-persisted-status-2",
+      portalAccountId: "user-persisted-id-2",
+      portalUsername: "UserPersisted2",
+      minecraftUuid: "12345678-1234-1234-1234-123456789abc",
+      minecraftUsername: "McPersisted2",
+    });
+    expect(SessionManager.getStorageStatus().sessionPersisted).toBe(true);
+
+    SessionManager.resetForTesting();
+    expect(SessionManager.getStorageStatus().sessionPersisted).toBe(false);
+  });
+
+  test("Reproduce Defect 2f: Minecraft UUID format enforcement accepts canonical and compact UUIDs and rejects garbage/non-UUID strings", () => {
+    // Valid canonical dashed UUID
+    expect(isValidMinecraftUuid("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
+    // Valid 32-hex compact UUID
+    expect(isValidMinecraftUuid("550e8400e29b41d4a716446655440000")).toBe(true);
+
+    // Rejected: All-zero UUIDs
+    expect(isValidMinecraftUuid("00000000-0000-0000-0000-000000000000")).toBe(false);
+    expect(isValidMinecraftUuid("00000000000000000000000000000000")).toBe(false);
+
+    // Rejected: Non-UUID garbage strings
+    expect(isValidMinecraftUuid("garbage")).toBe(false);
+    expect(isValidMinecraftUuid("not-a-uuid-at-all")).toBe(false);
+    expect(isValidMinecraftUuid("12345")).toBe(false);
+    expect(isValidMinecraftUuid(null)).toBe(false);
+    expect(isValidMinecraftUuid(undefined)).toBe(false);
+    expect(isValidMinecraftUuid(12345)).toBe(false);
+
+    // validateCandidateSession with garbage user UUID fails with UUID format error
+    const garbageCandidate = SessionManager.validateCandidateSession(
+      {
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "secret-token",
+        portalAccountId: "acc-1",
+        portalUsername: "user-1",
+      },
+      {
+        id: "acc-1",
+        name: "user-1",
+        minecraftUuid: "garbage",
+        minecraftUsername: "ValidMcUser",
+        isAdmin: false,
+        isTech: false,
+        roles: [],
+        allowedChannels: [],
+      }
+    );
+    expect(garbageCandidate.valid).toBe(false);
+    expect(garbageCandidate.error).toContain("UUID format");
+
+    // validateCandidateSession with garbage record UUID fails with schema error
+    const garbageRecordCandidate = SessionManager.validateCandidateSession(
+      {
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "secret-token",
+        portalAccountId: "acc-1",
+        portalUsername: "user-1",
+        minecraftUuid: "garbage",
+      }
+    );
+    expect(garbageRecordCandidate.valid).toBe(false);
+    expect(garbageRecordCandidate.error).toContain("credential store schema validation");
+
+    // CredentialStore.validateRecord rejects garbage UUID
+    expect(CredentialStore.validateRecord({
+      version: 1,
+      portalUrl: "https://dev.lampas.town",
+      token: "secret-token",
+      portalAccountId: "acc-1",
+      portalUsername: "user-1",
+      minecraftUuid: "garbage",
+    })).toBe(false);
   });
 });
 

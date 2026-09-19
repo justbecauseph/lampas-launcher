@@ -160,7 +160,15 @@ export class CredentialStore {
     const v = record.version ?? record.schemaVersion;
     if (v !== 1) return false;
     if (typeof record.portalUrl !== "string" || !record.portalUrl.trim()) return false;
-    const accountId = (record.portalAccountId || record.accountId || "").toString().trim();
+
+    if (record.portalAccountId !== undefined && typeof record.portalAccountId !== "string") return false;
+    if (record.accountId !== undefined && typeof record.accountId !== "string") return false;
+    if (record.portalUsername !== undefined && typeof record.portalUsername !== "string") return false;
+    if (record.accountUsername !== undefined && typeof record.accountUsername !== "string") return false;
+
+    const rawAccountId = record.portalAccountId ?? record.accountId;
+    if (typeof rawAccountId !== "string") return false;
+    const accountId = rawAccountId.trim();
     if (
       !accountId ||
       accountId.toLowerCase() === "account" ||
@@ -169,7 +177,10 @@ export class CredentialStore {
     ) {
       return false;
     }
-    const username = (record.portalUsername || record.accountUsername || "").toString().trim();
+
+    const rawUsername = record.portalUsername ?? record.accountUsername;
+    if (typeof rawUsername !== "string") return false;
+    const username = rawUsername.trim();
     if (
       !username ||
       username.toLowerCase() === "player" ||
@@ -178,11 +189,21 @@ export class CredentialStore {
     ) {
       return false;
     }
+
     if (typeof record.token !== "string" || !record.token.trim()) return false;
     if (record.refreshToken !== undefined && typeof record.refreshToken !== "string") return false;
     if (record.minecraftAccessToken !== undefined && typeof record.minecraftAccessToken !== "string") return false;
-    if (record.minecraftUuid !== undefined && typeof record.minecraftUuid !== "string") return false;
-    if (record.minecraftUsername !== undefined && typeof record.minecraftUsername !== "string") return false;
+    if (record.minecraftUuid !== undefined) {
+      if (typeof record.minecraftUuid !== "string") return false;
+      const trimmedUuid = record.minecraftUuid.trim();
+      if (!/^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$/.test(trimmedUuid)) return false;
+      if (/^(?:0{8}-0{4}-0{4}-0{4}-0{12}|0{32})$/.test(trimmedUuid)) return false;
+    }
+    if (record.minecraftUsername !== undefined) {
+      if (typeof record.minecraftUsername !== "string") return false;
+      const trimmedName = record.minecraftUsername.trim();
+      if (!trimmedName || trimmedName.toLowerCase() === "player" || trimmedName.toLowerCase() === "account") return false;
+    }
     return true;
   }
 

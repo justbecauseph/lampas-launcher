@@ -74,13 +74,18 @@ function detectPlaintextSecretKeys(parsed: any, raw?: string | null): boolean {
     if (SECRET_KEYS_SET.has(decoded)) return true;
   }
 
-  const looseStringRegex = /"((?:[^"\\]|\\.)*)"/g;
-  while ((match = looseStringRegex.exec(raw)) !== null) {
-    const decoded = decodeJsonStringToken(match[1]);
-    if (SECRET_KEYS_SET.has(decoded)) return true;
-  }
-
   return false;
+}
+
+const MINECRAFT_UUID_REGEX = /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$/;
+const ZERO_UUID_REGEX = /^(?:0{8}-0{4}-0{4}-0{4}-0{12}|0{32})$/;
+
+export function isValidMinecraftUuid(uuid: any): boolean {
+  if (typeof uuid !== "string") return false;
+  const trimmed = uuid.trim();
+  if (!MINECRAFT_UUID_REGEX.test(trimmed)) return false;
+  if (ZERO_UUID_REGEX.test(trimmed)) return false;
+  return true;
 }
 
 export class SessionManager {
@@ -157,8 +162,11 @@ export class SessionManager {
    */
   static setCurrentUser(user: UserProfile | null): void {
     if (user) {
-      const uName = (user.name || "").toString().trim();
-      const uId = (user.id || "").toString().trim();
+      if (typeof user.id !== "string" || typeof user.name !== "string") {
+        throw new Error("Cannot set current user: user ID and name must be strings");
+      }
+      const uName = user.name.trim();
+      const uId = user.id.trim();
       if (
         !uName ||
         !uId ||
@@ -237,9 +245,24 @@ export class SessionManager {
       return { valid: false, error: "Candidate record failed credential store schema validation" };
     }
 
-    const portalAccountId = (record.portalAccountId || record.accountId || "").toString().trim();
-    const portalUsername = (record.portalUsername || record.accountUsername || "").toString().trim();
+    if (record.portalAccountId !== undefined && typeof record.portalAccountId !== "string") {
+      return { valid: false, error: "Candidate record has malformed portalAccountId (must be string)" };
+    }
+    if (record.accountId !== undefined && typeof record.accountId !== "string") {
+      return { valid: false, error: "Candidate record has malformed accountId (must be string)" };
+    }
+    if (record.portalUsername !== undefined && typeof record.portalUsername !== "string") {
+      return { valid: false, error: "Candidate record has malformed portalUsername (must be string)" };
+    }
+    if (record.accountUsername !== undefined && typeof record.accountUsername !== "string") {
+      return { valid: false, error: "Candidate record has malformed accountUsername (must be string)" };
+    }
 
+    const rawAccountId = record.portalAccountId ?? record.accountId;
+    if (typeof rawAccountId !== "string") {
+      return { valid: false, error: "Candidate record lacks valid string account ID" };
+    }
+    const portalAccountId = rawAccountId.trim();
     if (
       !portalAccountId ||
       portalAccountId.toLowerCase() === "account" ||
@@ -249,6 +272,11 @@ export class SessionManager {
       return { valid: false, error: `Invalid account identity '${portalAccountId}'` };
     }
 
+    const rawUsername = record.portalUsername ?? record.accountUsername;
+    if (typeof rawUsername !== "string") {
+      return { valid: false, error: "Candidate record lacks valid string username" };
+    }
+    const portalUsername = rawUsername.trim();
     if (
       !portalUsername ||
       portalUsername.toLowerCase() === "player" ||
@@ -258,19 +286,35 @@ export class SessionManager {
       return { valid: false, error: `Invalid username '${portalUsername}'` };
     }
 
+    if (record.minecraftUuid !== undefined) {
+      if (!isValidMinecraftUuid(record.minecraftUuid)) {
+        return { valid: false, error: "Candidate record has invalid Minecraft UUID format" };
+      }
+    }
+
     if (user) {
-      const uId = (user.id || "").toString().trim();
-      const uName = (user.name || "").toString().trim();
+      if (typeof user.id !== "string") {
+        return { valid: false, error: "User profile lacks valid string ID" };
+      }
+      const uId = user.id.trim();
       if (!uId || uId.toLowerCase() === "player" || uId.toLowerCase() === "account" || uId.toLowerCase() === "unverified-migration") {
         return { valid: false, error: `User profile has invalid or placeholder ID '${uId}'` };
       }
+      if (typeof user.name !== "string") {
+        return { valid: false, error: "User profile lacks valid string name" };
+      }
+      const uName = user.name.trim();
       if (!uName || uName.toLowerCase() === "player" || uName.toLowerCase() === "account" || uName.toLowerCase() === "unverified-migration") {
         return { valid: false, error: `User profile has invalid or placeholder name '${uName}'` };
       }
-      if (!user.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000") {
-        return { valid: false, error: "User profile lacks valid bound Minecraft UUID" };
+      if (!isValidMinecraftUuid(user.minecraftUuid)) {
+        return { valid: false, error: "User profile lacks valid bound Minecraft UUID format" };
       }
-      if (!user.minecraftUsername || user.minecraftUsername.toLowerCase() === "player" || user.minecraftUsername.toLowerCase() === "account") {
+      if (typeof user.minecraftUsername !== "string") {
+        return { valid: false, error: "User profile lacks valid string Minecraft username" };
+      }
+      const mcUsername = user.minecraftUsername.trim();
+      if (!mcUsername || mcUsername.toLowerCase() === "player" || mcUsername.toLowerCase() === "account") {
         return { valid: false, error: "User profile lacks valid Minecraft username" };
       }
       if (user.minecraftAccessToken !== undefined && typeof user.minecraftAccessToken !== "string") {
@@ -311,7 +355,7 @@ export class SessionManager {
       backend,
       sessionOnly,
       persistenceAvailable,
-      sessionPersisted: this.isCurrentSessionPersisted,
+      sessionPersisted: hasActiveSession && this.isCurrentSessionPersisted,
       lastPersistenceError: this.getLastPersistenceError(),
       lastCleanupError: this.getLastCleanupError(),
     };
@@ -918,6 +962,7 @@ export class SessionManager {
     this.activeLoginEpoch++;
     this.currentRecord = null;
     this.currentUser = null;
+    this.isCurrentSessionPersisted = false;
 
     const clearResult = CredentialStore.clearCredentials();
     this.notifySessionChange(null);
@@ -942,6 +987,7 @@ export class SessionManager {
     this.sessionEpoch = 1;
     this.currentRecord = null;
     this.currentUser = null;
+    this.isCurrentSessionPersisted = false;
     this.activeLoginEpoch = 0;
     this.refreshPromises.clear();
     this.initialized = false;

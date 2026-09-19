@@ -622,7 +622,7 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
       minecraftAccessToken: "mc-token-acc-1",
       portalAccountId: "acc-1",
       portalUsername: "Alice",
-      minecraftUuid: "mc-uuid-1",
+      minecraftUuid: "11111111-1111-1111-1111-111111111111",
       minecraftUsername: "AliceMC",
     });
 
@@ -650,7 +650,7 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
       SessionManager.setCurrentUser({
         id: "acc-unauthorized",
         name: "Eve",
-        minecraftUuid: "mc-uuid-unauthorized",
+        minecraftUuid: "22222222-2222-2222-2222-222222222222",
         minecraftUsername: "EveMC",
         isAdmin: false,
         isTech: false,
