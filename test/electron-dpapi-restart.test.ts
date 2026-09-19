@@ -154,7 +154,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
       const testRefreshSecret = "syn-refresh-" + testSecret;
       const testAccountId = "dpapi-test-account-123";
       const testUsername = "NativeUser";
-      const testMcUuid = "mc-uuid-456";
+      const testMcUuid = "44444444-4444-4444-4444-444444444444";
 
       try {
         // Step 1: Process 1 — Launch real Electron 44.0.0 and exercise built CredentialStore and SessionManager to persist credentials
