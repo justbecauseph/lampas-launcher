@@ -1273,12 +1273,16 @@ h2 {
 }
 
 .mod-switch {
+  position: relative;
   display: inline-flex;
   align-items: center;
   cursor: pointer;
 }
 .mod-switch input {
   position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   opacity: 0;
   pointer-events: none;
 }
