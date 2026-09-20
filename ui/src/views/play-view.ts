@@ -175,13 +175,9 @@ export function initPlayView(options: PlayViewOptions): {
         return;
       }
 
-      if (isGameRunning) {
-        // If game is running, clicking Play button jumps to Console tab
-        switchToTab("tab-console");
-        return;
-      }
+      switchToTab("tab-console");
 
-      if (isLaunching) return;
+      if (isGameRunning || isLaunching) return;
 
       isLaunching = true;
       clearConsole();
