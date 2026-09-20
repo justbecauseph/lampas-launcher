@@ -18,11 +18,7 @@ export interface OnlineMinecraftPlayer {
 }
 
 export type MinecraftServerState =
-  | "starting"
-  | "online"
-  | "stopping"
-  | "offline"
-  | "unknown";
+  "starting" | "online" | "stopping" | "offline" | "unknown";
 
 export type PresenceFreshness = "live" | "stale" | "unavailable";
 
@@ -52,6 +48,7 @@ export interface LauncherConfig {
   disabledClientMods?: string[];
   customClientMods?: CustomClientMod[];
   noSync?: boolean;
+  externalImages?: boolean;
   token?: string;
   refreshToken?: string;
   minecraftAccessToken?: string;
@@ -96,7 +93,15 @@ export interface CustomClientMod {
 }
 
 export interface SyncProgress {
-  status: "idle" | "checking" | "downloading" | "verifying" | "staging" | "repairing" | "complete" | "error";
+  status:
+    | "idle"
+    | "checking"
+    | "downloading"
+    | "verifying"
+    | "staging"
+    | "repairing"
+    | "complete"
+    | "error";
   message: string;
   currentFile?: string;
   filesCompleted: number;
@@ -140,7 +145,7 @@ export interface ReleaseDescriptor extends MinecraftRuntimeDefinition {
   version: string;
   minimumLauncherVersion: string;
   protocol: number;
-  gitCommit?: string;
+  gitCommit?: string | null;
   created: string;
   clientManifest: string;
   serverManifest: string;
@@ -231,6 +236,7 @@ export interface RendererSettingsDto {
   disabledClientMods?: string[];
   customClientMods?: CustomClientMod[];
   noSync?: boolean;
+  externalImages: boolean;
 }
 
 export interface ModCatalogEntry {
@@ -266,7 +272,8 @@ export interface SyncResult {
   runtime?: InstalledRuntimeInfo;
 }
 
-export type KnownLocationId = "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog";
+export type KnownLocationId =
+  "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog";
 
 export interface UpdateSettingsDto {
   portalUrl?: string;
@@ -275,6 +282,7 @@ export interface UpdateSettingsDto {
   noSync?: boolean;
   javaPath?: string;
   javaArgs?: string;
+  externalImages?: boolean;
 }
 
 export interface ClearCredentialsResult {
@@ -295,6 +303,13 @@ export interface AuthStorageStatusDto {
   lastCleanupError?: string | null;
 }
 
+export interface CosmeticImageResult {
+  dataUrl: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  width: number;
+  height: number;
+}
+
 export interface LampasApi {
   auth: {
     login: () => Promise<{ user: RendererUserProfile }>;
@@ -302,6 +317,10 @@ export interface LampasApi {
     verify: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
     refresh: () => Promise<{ valid: boolean; user?: RendererUserProfile }>;
     getStorageStatus: () => Promise<AuthStorageStatusDto>;
+  };
+  cosmetics: {
+    getAvatar: () => Promise<CosmeticImageResult | null>;
+    getModIcon: (id: string) => Promise<CosmeticImageResult | null>;
   };
   server: {
     getStatus: () => Promise<ServerStatus>;
@@ -317,7 +336,10 @@ export interface LampasApi {
     browseAndAdd: () => Promise<CustomClientMod[]>;
     addDropped: (files: File[]) => Promise<CustomClientMod[]>;
     setOfficialEnabled: (id: string, enabled: boolean) => Promise<string[]>;
-    setCustomEnabled: (filename: string, enabled: boolean) => Promise<CustomClientMod[]>;
+    setCustomEnabled: (
+      filename: string,
+      enabled: boolean,
+    ) => Promise<CustomClientMod[]>;
     removeCustom: (filename: string) => Promise<CustomClientMod[]>;
   };
   game: {
@@ -325,16 +347,30 @@ export interface LampasApi {
     kill: () => Promise<void>;
     isRunning: () => Promise<boolean>;
     onLog: (callback: (entry: GameLogEntry) => void) => () => void;
-    onLogBatch: (callback: (batch: { batchId: number; entries: GameLogEntry[]; dropped: number; bytes?: number }) => void) => () => void;
+    onLogBatch: (
+      callback: (batch: {
+        batchId: number;
+        entries: GameLogEntry[];
+        dropped: number;
+        bytes?: number;
+      }) => void,
+    ) => () => void;
     onExit: (callback: (code: number | null) => void) => () => void;
   };
   gameDirectory: {
     getStatus: () => Promise<DirectoryStatus>;
-    browse: (defaultPath?: string) => Promise<{ canceled: boolean; filePaths: string[] }>;
-    validate: (targetPath: string, currentPath?: string) => Promise<DirectoryValidationResult>;
+    browse: (
+      defaultPath?: string,
+    ) => Promise<{ canceled: boolean; filePaths: string[] }>;
+    validate: (
+      targetPath: string,
+      currentPath?: string,
+    ) => Promise<DirectoryValidationResult>;
     configure: (targetPath: string) => Promise<RendererSettingsDto>;
     move: (targetPath: string) => Promise<DirectoryMoveResult>;
-    onMoveProgress: (callback: (progress: DirectoryMoveProgress) => void) => () => void;
+    onMoveProgress: (
+      callback: (progress: DirectoryMoveProgress) => void,
+    ) => () => void;
   };
   config: {
     get: () => Promise<RendererSettingsDto>;
@@ -358,4 +394,3 @@ export interface LampasApi {
     openMinecraftLog: () => Promise<string>;
   };
 }
-

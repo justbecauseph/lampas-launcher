@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -23,7 +31,8 @@ const { LauncherLogger } = await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager } = await import("../src/client-mods");
 const { GameRunner } = await import("../src/game-runner");
-const { GameDirectoryManager, writeStagingMarker } = await import("../src/game-directory");
+const { GameDirectoryManager, writeStagingMarker } =
+  await import("../src/game-directory");
 const { LauncherSync } = await import("../src/sync");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { hashFile } = await import("../src/file-transfer");
@@ -99,7 +108,10 @@ describe("Phase 0 Characterization — Operation Settlement & Guard Gaps (F07, F
 describe("Phase 0 Characterization — Fast vs Full Sync Verification & Same-Size Detection (F02, F03)", () => {
   test("Fast sync metadata shortcut skips SHA-256 when size and mtime match prevState", async () => {
     const fileContent = Buffer.from("clean-managed-mod-data");
-    const sha256 = crypto.createHash("sha256").update(fileContent).digest("hex");
+    const sha256 = crypto
+      .createHash("sha256")
+      .update(fileContent)
+      .digest("hex");
     const size = fileContent.length;
 
     const modsDir = path.join(gameDir, "mods");
@@ -124,7 +136,7 @@ describe("Phase 0 Characterization — Fast vs Full Sync Verification & Same-Siz
             policy: "MANAGED",
           },
         },
-      })
+      }),
     );
 
     const server = Bun.serve({
@@ -132,28 +144,44 @@ describe("Phase 0 Characterization — Fast vs Full Sync Verification & Same-Siz
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [
               {
                 path: "mods/clean.jar",
                 hashes: { sha256 },
                 size,
-                download: { url: "/api/v1/blobs/" + sha256 },
+                download: {
+                  url: "/api/v1/blobs/" + sha256,
+                  provider: "lampas",
+                },
                 policy: "MANAGED",
               },
             ],
@@ -164,7 +192,9 @@ describe("Phase 0 Characterization — Fast vs Full Sync Verification & Same-Siz
       },
     });
 
-    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       const progressMessages: string[] = [];
@@ -204,9 +234,11 @@ describe("Phase 0 Characterization — Fast vs Full Sync Verification & Same-Siz
     };
 
     await expect(GameDirectoryManager.moveInstallation(dstDir)).rejects.toThrow(
-      "content SHA-256 mismatch"
+      "content SHA-256 mismatch",
     );
-    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe("ABCD");
+    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe(
+      "ABCD",
+    );
     expect(fs.existsSync(dstDir)).toBe(false);
   });
 });
@@ -235,7 +267,7 @@ describe("Phase 0 Characterization — Move Recovery Semantics (F01)", () => {
         target: path.join(testRoot, "target"),
         staging: stagingDir,
         phase: "copying",
-      })
+      }),
     );
 
     await GameDirectoryManager.recoverInterruptedMove();
@@ -256,7 +288,10 @@ describe("Phase 0 Characterization — Full Repair Gaps in MinecraftBootstrap (F
     fs.writeFileSync(assetIndexPath, bogusJson, "utf-8");
 
     const healthyJson = JSON.stringify({ objects: {} });
-    const healthySha1 = crypto.createHash("sha1").update(healthyJson).digest("hex");
+    const healthySha1 = crypto
+      .createHash("sha1")
+      .update(healthyJson)
+      .digest("hex");
 
     const server = Bun.serve({
       port: 0,
@@ -276,7 +311,7 @@ describe("Phase 0 Characterization — Full Repair Gaps in MinecraftBootstrap (F
           size: Buffer.byteLength(healthyJson),
         },
         (msg: string) => logged.push(msg),
-        "full"
+        "full",
       );
 
       // In Phase 3, full repair verifies sha1 and re-downloads when corrupt
@@ -291,7 +326,11 @@ describe("Phase 0 Characterization — Full Repair Gaps in MinecraftBootstrap (F
     fs.mkdirSync(nativesDir, { recursive: true });
 
     // Create marker
-    const markerPath = path.join(gameDir, ".lampas", "natives-26.2-" + process.platform + ".complete");
+    const markerPath = path.join(
+      gameDir,
+      ".lampas",
+      "natives-26.2-" + process.platform + ".complete",
+    );
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, new Date().toISOString(), "utf-8");
 

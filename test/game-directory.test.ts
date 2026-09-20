@@ -1,4 +1,12 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -17,13 +25,18 @@ mock.module("electron", () => ({
   dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
-const { ConfigManager, getDefaultGameDir, getUserDataDir } = await import("../src/config");
-const { GameDirectoryManager, writeStagingMarker } = await import("../src/game-directory");
+const { ConfigManager, getDefaultGameDir, getUserDataDir } =
+  await import("../src/config");
+const { GameDirectoryManager, writeStagingMarker } =
+  await import("../src/game-directory");
 const { GameRunner } = await import("../src/game-runner");
 const { OperationCoordinator } = await import("../src/operations");
 
 beforeEach(() => {
-  process.env.LAMPAS_DEFAULT_GAME_DIR = path.join(testRoot, "default-lampas-game");
+  process.env.LAMPAS_DEFAULT_GAME_DIR = path.join(
+    testRoot,
+    "default-lampas-game",
+  );
   ConfigManager.resetForTesting();
   GameDirectoryManager.resetForTesting();
   OperationCoordinator.resetForTesting();
@@ -46,7 +59,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     const status = GameDirectoryManager.getStatus();
     expect(status.isConfigured).toBe(false);
     expect(GameDirectoryManager.needsInitialSetup()).toBe(true);
-    expect(status.gameDir).toBe(path.resolve(path.join(testRoot, "default-lampas-game")));
+    expect(status.gameDir).toBe(
+      path.resolve(path.join(testRoot, "default-lampas-game")),
+    );
   });
 
   test("legacy config with non-empty gameDir is automatically treated as configured", () => {
@@ -57,7 +72,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       JSON.stringify({
         portalUrl: "https://dev.lampas.town",
         gameDir: path.join(testRoot, "legacy-game"),
-      })
+      }),
     );
 
     const status = GameDirectoryManager.getStatus();
@@ -73,7 +88,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     try {
       fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-      fs.writeFileSync(stateFile, JSON.stringify({ pack: "Lampas 2", version: "2.0.0" }));
+      fs.writeFileSync(
+        stateFile,
+        JSON.stringify({ pack: "Lampas 2", version: "2.0.0" }),
+      );
 
       const status = GameDirectoryManager.getStatus();
       expect(status.isConfigured).toBe(true);
@@ -82,7 +100,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     } finally {
       if (fs.existsSync(path.join(defaultDir, ".lampas"))) {
         try {
-          fs.rmSync(path.join(defaultDir, ".lampas"), { recursive: true, force: true });
+          fs.rmSync(path.join(defaultDir, ".lampas"), {
+            recursive: true,
+            force: true,
+          });
         } catch {}
       }
     }
@@ -112,8 +133,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
   test("configureInitial is rejected when game directory is already configured", async () => {
     ConfigManager.set({ gameDirConfigured: true });
-    await expect(GameDirectoryManager.configureInitial(path.join(testRoot, "another-dir"))).rejects.toThrow(
-      "Game directory is already configured; use Move Installation."
+    await expect(
+      GameDirectoryManager.configureInitial(path.join(testRoot, "another-dir")),
+    ).rejects.toThrow(
+      "Game directory is already configured; use Move Installation.",
     );
   });
 
@@ -122,31 +145,52 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     // Empty / whitespace
     expect(GameDirectoryManager.validateTarget("", current).valid).toBe(false);
-    expect(GameDirectoryManager.validateTarget("   ", current).valid).toBe(false);
+    expect(GameDirectoryManager.validateTarget("   ", current).valid).toBe(
+      false,
+    );
 
     // Root paths
-    expect(GameDirectoryManager.validateTarget(path.parse(process.cwd()).root, current).valid).toBe(false);
+    expect(
+      GameDirectoryManager.validateTarget(
+        path.parse(process.cwd()).root,
+        current,
+      ).valid,
+    ).toBe(false);
     if (process.platform === "win32") {
-      expect(GameDirectoryManager.validateTarget("C:\\", current).valid).toBe(false);
-      expect(GameDirectoryManager.validateTarget("C:", current).valid).toBe(false);
+      expect(GameDirectoryManager.validateTarget("C:\\", current).valid).toBe(
+        false,
+      );
+      expect(GameDirectoryManager.validateTarget("C:", current).valid).toBe(
+        false,
+      );
     } else {
-      expect(GameDirectoryManager.validateTarget("/", current).valid).toBe(false);
+      expect(GameDirectoryManager.validateTarget("/", current).valid).toBe(
+        false,
+      );
     }
 
     // Same path
-    expect(GameDirectoryManager.validateTarget(current, current).valid).toBe(false);
+    expect(GameDirectoryManager.validateTarget(current, current).valid).toBe(
+      false,
+    );
 
     // Target inside current
     const insideTarget = path.join(current, "subfolder");
-    expect(GameDirectoryManager.validateTarget(insideTarget, current).valid).toBe(false);
+    expect(
+      GameDirectoryManager.validateTarget(insideTarget, current).valid,
+    ).toBe(false);
 
     // Current inside target
     const parentTarget = path.dirname(current);
-    expect(GameDirectoryManager.validateTarget(parentTarget, current).valid).toBe(false);
+    expect(
+      GameDirectoryManager.validateTarget(parentTarget, current).valid,
+    ).toBe(false);
 
     // Valid sibling path
     const validSibling = path.join(testRoot, "new-sibling-dir");
-    expect(GameDirectoryManager.validateTarget(validSibling, current).valid).toBe(true);
+    expect(
+      GameDirectoryManager.validateTarget(validSibling, current).valid,
+    ).toBe(true);
   });
 
   test("rejects move to an existing non-empty directory", async () => {
@@ -157,13 +201,16 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     fs.writeFileSync(path.join(sourceDir, "options.txt"), "sound:1.0");
 
     fs.mkdirSync(targetDir, { recursive: true });
-    fs.writeFileSync(path.join(targetDir, "unrelated.txt"), "some existing data");
+    fs.writeFileSync(
+      path.join(targetDir, "unrelated.txt"),
+      "some existing data",
+    );
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
 
-    await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow(
-      "already exists and is not empty"
-    );
+    await expect(
+      GameDirectoryManager.moveInstallation(targetDir),
+    ).rejects.toThrow("already exists and is not empty");
     expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
     expect(fs.existsSync(path.join(sourceDir, "options.txt"))).toBe(true);
   });
@@ -180,9 +227,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     (GameRunner as any).isGameRunning = () => true;
 
     try {
-      await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow(
-        "while Minecraft is running"
-      );
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("while Minecraft is running");
     } finally {
       (GameRunner as any).isGameRunning = origIsRunning;
     }
@@ -193,55 +240,115 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     const targetDir = path.join(testRoot, "game-full-target");
 
     // Populate source tree
-    fs.mkdirSync(path.join(sourceDir, ".lampas", "cache", "sha256"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, ".lampas", "cache", "sha256"), {
+      recursive: true,
+    });
     fs.writeFileSync(
       path.join(sourceDir, ".lampas", "installation.json"),
-      JSON.stringify({ pack: "Lampas 2", version: "2.0.0", files: {} })
+      JSON.stringify({ pack: "Lampas 2", version: "2.0.0", files: {} }),
     );
-    fs.writeFileSync(path.join(sourceDir, ".lampas", "cache", "sha256", "abc123hash"), "cached data");
+    fs.writeFileSync(
+      path.join(sourceDir, ".lampas", "cache", "sha256", "abc123hash"),
+      "cached data",
+    );
 
-    fs.mkdirSync(path.join(sourceDir, "saves", "My World 1"), { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "saves", "My World 1", "level.dat"), "world-data");
+    fs.mkdirSync(path.join(sourceDir, "saves", "My World 1"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(sourceDir, "saves", "My World 1", "level.dat"),
+      "world-data",
+    );
 
     fs.mkdirSync(path.join(sourceDir, "screenshots"), { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "screenshots", "2026-08-24.png"), "image-bytes");
+    fs.writeFileSync(
+      path.join(sourceDir, "screenshots", "2026-08-24.png"),
+      "image-bytes",
+    );
 
     fs.mkdirSync(path.join(sourceDir, "resourcepacks"), { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "resourcepacks", "custom-pack.zip"), "zip-bytes");
+    fs.writeFileSync(
+      path.join(sourceDir, "resourcepacks", "custom-pack.zip"),
+      "zip-bytes",
+    );
 
     fs.mkdirSync(path.join(sourceDir, "mods"), { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "mods", "fabric-api.jar"), "mod-bytes");
-    fs.writeFileSync(path.join(sourceDir, "mods", "my-local-mod.jar"), "custom-mod-bytes");
+    fs.writeFileSync(
+      path.join(sourceDir, "mods", "fabric-api.jar"),
+      "mod-bytes",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "mods", "my-local-mod.jar"),
+      "custom-mod-bytes",
+    );
 
-    fs.writeFileSync(path.join(sourceDir, "options.txt"), "fov:90\ngamma:1.0\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "options.txt"),
+      "fov:90\ngamma:1.0\n",
+    );
     fs.writeFileSync(path.join(sourceDir, "servers.dat"), "server-list-data");
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
 
     const progressPhases: string[] = [];
-    const result = await GameDirectoryManager.moveInstallation(targetDir, (p) => {
-      progressPhases.push(p.phase);
-    });
+    const result = await GameDirectoryManager.moveInstallation(
+      targetDir,
+      (p) => {
+        progressPhases.push(p.phase);
+      },
+    );
 
     expect(result.success).toBe(true);
     expect(result.gameDir).toBe(path.resolve(targetDir));
     expect(ConfigManager.get().gameDir).toBe(path.resolve(targetDir));
 
     // Target has all files
-    expect(fs.existsSync(path.join(targetDir, ".lampas", "installation.json"))).toBe(true);
-    expect(fs.existsSync(path.join(targetDir, ".lampas", "cache", "sha256", "abc123hash"))).toBe(true);
-    expect(fs.readFileSync(path.join(targetDir, "saves", "My World 1", "level.dat"), "utf-8")).toBe("world-data");
-    expect(fs.readFileSync(path.join(targetDir, "screenshots", "2026-08-24.png"), "utf-8")).toBe("image-bytes");
-    expect(fs.readFileSync(path.join(targetDir, "resourcepacks", "custom-pack.zip"), "utf-8")).toBe("zip-bytes");
-    expect(fs.readFileSync(path.join(targetDir, "mods", "my-local-mod.jar"), "utf-8")).toBe("custom-mod-bytes");
-    expect(fs.readFileSync(path.join(targetDir, "options.txt"), "utf-8")).toBe("fov:90\ngamma:1.0\n");
-    expect(fs.readFileSync(path.join(targetDir, "servers.dat"), "utf-8")).toBe("server-list-data");
+    expect(
+      fs.existsSync(path.join(targetDir, ".lampas", "installation.json")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(targetDir, ".lampas", "cache", "sha256", "abc123hash"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.readFileSync(
+        path.join(targetDir, "saves", "My World 1", "level.dat"),
+        "utf-8",
+      ),
+    ).toBe("world-data");
+    expect(
+      fs.readFileSync(
+        path.join(targetDir, "screenshots", "2026-08-24.png"),
+        "utf-8",
+      ),
+    ).toBe("image-bytes");
+    expect(
+      fs.readFileSync(
+        path.join(targetDir, "resourcepacks", "custom-pack.zip"),
+        "utf-8",
+      ),
+    ).toBe("zip-bytes");
+    expect(
+      fs.readFileSync(
+        path.join(targetDir, "mods", "my-local-mod.jar"),
+        "utf-8",
+      ),
+    ).toBe("custom-mod-bytes");
+    expect(fs.readFileSync(path.join(targetDir, "options.txt"), "utf-8")).toBe(
+      "fov:90\ngamma:1.0\n",
+    );
+    expect(fs.readFileSync(path.join(targetDir, "servers.dat"), "utf-8")).toBe(
+      "server-list-data",
+    );
 
     // Old source removed
     expect(fs.existsSync(sourceDir)).toBe(false);
 
     // Journal removed
-    expect(fs.existsSync(path.join(userDataDir, "directory-move.json"))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, "directory-move.json"))).toBe(
+      false,
+    );
   });
 
   test("falls back to copy + verify + staging rename when fs.rename throws EXDEV", async () => {
@@ -250,7 +357,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     fs.mkdirSync(path.join(sourceDir, "mods"), { recursive: true });
     fs.writeFileSync(path.join(sourceDir, "options.txt"), "sound:0.8");
-    fs.writeFileSync(path.join(sourceDir, "mods", "test.jar"), "test-mod-contents");
+    fs.writeFileSync(
+      path.join(sourceDir, "mods", "test.jar"),
+      "test-mod-contents",
+    );
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
 
@@ -266,9 +376,12 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     try {
       const phases: string[] = [];
-      const result = await GameDirectoryManager.moveInstallation(targetDir, (p) => {
-        phases.push(p.phase);
-      });
+      const result = await GameDirectoryManager.moveInstallation(
+        targetDir,
+        (p) => {
+          phases.push(p.phase);
+        },
+      );
 
       expect(result.success).toBe(true);
       expect(phases).toContain("moving");
@@ -277,7 +390,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       expect(phases).toContain("complete");
 
       expect(fs.existsSync(path.join(targetDir, "options.txt"))).toBe(true);
-      expect(fs.readFileSync(path.join(targetDir, "mods", "test.jar"), "utf-8")).toBe("test-mod-contents");
+      expect(
+        fs.readFileSync(path.join(targetDir, "mods", "test.jar"), "utf-8"),
+      ).toBe("test-mod-contents");
       expect(fs.existsSync(sourceDir)).toBe(false);
       expect(ConfigManager.get().gameDir).toBe(path.resolve(targetDir));
     } finally {
@@ -290,7 +405,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     const targetDir = path.join(testRoot, "verify-fail-target");
 
     fs.mkdirSync(sourceDir, { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "options.txt"), "important-config-never-lose");
+    fs.writeFileSync(
+      path.join(sourceDir, "options.txt"),
+      "important-config-never-lose",
+    );
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
 
@@ -310,11 +428,15 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     };
 
     try {
-      await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow("Verification failed");
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("Verification failed");
 
       // Source must be completely intact
       expect(fs.existsSync(path.join(sourceDir, "options.txt"))).toBe(true);
-      expect(fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8")).toBe("important-config-never-lose");
+      expect(
+        fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8"),
+      ).toBe("important-config-never-lose");
 
       // Target must not exist
       expect(fs.existsSync(targetDir)).toBe(false);
@@ -351,10 +473,14 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     };
 
     try {
-      await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow("content SHA-256 mismatch");
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("content SHA-256 mismatch");
 
       // Source is untouched
-      expect(fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8")).toBe("ABCD");
+      expect(
+        fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8"),
+      ).toBe("ABCD");
       expect(fs.existsSync(targetDir)).toBe(false);
       expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
     } finally {
@@ -402,7 +528,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         target: newTarget,
         staging: path.join(testRoot, `.lampas-moving-${opId}`),
         phase: "renaming",
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: oldSource, gameDirConfigured: true });
@@ -442,7 +568,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         target: targetDir,
         staging: stagingDir,
         phase: "copying",
-      })
+      }),
     );
 
     await GameDirectoryManager.recoverInterruptedMove();
@@ -464,7 +590,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     fs.mkdirSync(newTarget, { recursive: true });
     fs.writeFileSync(path.join(newTarget, "options.txt"), "new-options");
-    const sha256 = crypto.createHash("sha256").update("new-options").digest("hex");
+    const sha256 = crypto
+      .createHash("sha256")
+      .update("new-options")
+      .digest("hex");
     fs.writeFileSync(
       path.join(newTarget, ".lampas_move_receipt.json"),
       JSON.stringify({
@@ -479,7 +608,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         files: [{ relativePath: "options.txt", size: 11, sha256 }],
         stagingVerified: true,
         timestamp: new Date().toISOString(),
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: oldSource, gameDirConfigured: true });
@@ -494,7 +623,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         target: newTarget,
         staging: stagingDir,
         phase: "cleaning",
-      })
+      }),
     );
 
     await GameDirectoryManager.recoverInterruptedMove();
@@ -511,8 +640,12 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     const sourceDir = path.join(testRoot, "empty-dir-source");
     const targetDir = path.join(testRoot, "empty-dir-target");
 
-    fs.mkdirSync(path.join(sourceDir, "saves", "EmptyWorld"), { recursive: true });
-    fs.mkdirSync(path.join(sourceDir, "screenshots", "empty_album"), { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "saves", "EmptyWorld"), {
+      recursive: true,
+    });
+    fs.mkdirSync(path.join(sourceDir, "screenshots", "empty_album"), {
+      recursive: true,
+    });
     fs.writeFileSync(path.join(sourceDir, "options.txt"), "sound:0.5");
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
@@ -527,11 +660,23 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     try {
       const result = await GameDirectoryManager.moveInstallation(targetDir);
       expect(result.success).toBe(true);
-      expect(fs.existsSync(path.join(targetDir, "saves", "EmptyWorld"))).toBe(true);
-      expect(fs.statSync(path.join(targetDir, "saves", "EmptyWorld")).isDirectory()).toBe(true);
-      expect(fs.existsSync(path.join(targetDir, "screenshots", "empty_album"))).toBe(true);
-      expect(fs.statSync(path.join(targetDir, "screenshots", "empty_album")).isDirectory()).toBe(true);
-      expect(fs.readFileSync(path.join(targetDir, "options.txt"), "utf-8")).toBe("sound:0.5");
+      expect(fs.existsSync(path.join(targetDir, "saves", "EmptyWorld"))).toBe(
+        true,
+      );
+      expect(
+        fs.statSync(path.join(targetDir, "saves", "EmptyWorld")).isDirectory(),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(targetDir, "screenshots", "empty_album")),
+      ).toBe(true);
+      expect(
+        fs
+          .statSync(path.join(targetDir, "screenshots", "empty_album"))
+          .isDirectory(),
+      ).toBe(true);
+      expect(
+        fs.readFileSync(path.join(targetDir, "options.txt"), "utf-8"),
+      ).toBe("sound:0.5");
       expect(fs.existsSync(sourceDir)).toBe(false);
     } finally {
       GameDirectoryManager.resetForTesting();
@@ -554,7 +699,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     };
 
     try {
-      await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow("EPERM");
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("EPERM");
       expect(fs.existsSync(path.join(sourceDir, "options.txt"))).toBe(true);
       expect(fs.existsSync(targetDir)).toBe(false);
       expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
@@ -589,7 +736,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     };
 
     try {
-      await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow("Unsupported file type");
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("Unsupported file type");
       expect(fs.existsSync(path.join(sourceDir, "real.txt"))).toBe(true);
       expect(fs.existsSync(targetDir)).toBe(false);
     } finally {
@@ -617,11 +766,16 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     GameDirectoryManager._copyFn = (src: string, dst: string) => {
       fs.copyFileSync(src, dst);
       // External writer mutates source file!
-      fs.writeFileSync(path.join(sourceDir, "options.txt"), "externally-modified-content");
+      fs.writeFileSync(
+        path.join(sourceDir, "options.txt"),
+        "externally-modified-content",
+      );
     };
 
     try {
-      await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow("source drift detected");
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("source drift detected");
       // Source must be preserved
       expect(fs.existsSync(path.join(sourceDir, "options.txt"))).toBe(true);
       expect(fs.existsSync(targetDir)).toBe(false);
@@ -659,9 +813,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     });
 
     try {
-      await expect(GameDirectoryManager.moveInstallation(targetDir)).rejects.toThrow(
-        "Disk full or simulated config persistence error"
-      );
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("Disk full or simulated config persistence error");
 
       // Target was promoted
       expect(fs.existsSync(path.join(targetDir, "options.txt"))).toBe(true);
@@ -718,7 +872,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         target: targetDir,
         staging: stagingDir,
         phase: "verifying",
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
@@ -743,7 +897,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     fs.mkdirSync(stagingDir, { recursive: true });
     fs.writeFileSync(path.join(stagingDir, "save.txt"), "verified-content");
-    const sha256 = crypto.createHash("sha256").update("verified-content").digest("hex");
+    const sha256 = crypto
+      .createHash("sha256")
+      .update("verified-content")
+      .digest("hex");
     fs.writeFileSync(
       path.join(stagingDir, ".lampas_move_receipt.json"),
       JSON.stringify({
@@ -758,7 +915,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         files: [{ relativePath: "save.txt", size: 16, sha256 }],
         stagingVerified: true,
         timestamp: new Date().toISOString(),
-      })
+      }),
     );
 
     const journalPath = path.join(userDataDir, "directory-move.json");
@@ -773,7 +930,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         phase: "finalizing",
         stagingVerified: true,
         stagingReceipt: { fileCount: 1, totalBytes: 16 },
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
@@ -783,7 +940,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     // Target was promoted from staging
     expect(fs.existsSync(stagingDir)).toBe(false);
     expect(fs.existsSync(path.join(targetDir, "save.txt"))).toBe(true);
-    expect(fs.readFileSync(path.join(targetDir, "save.txt"), "utf-8")).toBe("verified-content");
+    expect(fs.readFileSync(path.join(targetDir, "save.txt"), "utf-8")).toBe(
+      "verified-content",
+    );
     // Source was cleaned
     expect(fs.existsSync(sourceDir)).toBe(false);
     // Journal removed
@@ -822,7 +981,11 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     try {
       await expect(
-        GameDirectoryManager.moveInstallation(targetDir, undefined, controller.signal)
+        GameDirectoryManager.moveInstallation(
+          targetDir,
+          undefined,
+          controller.signal,
+        ),
       ).rejects.toThrow();
 
       // Source remains intact
@@ -856,19 +1019,21 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         target: targetDir,
         staging: stagingDir,
         phase: "cleaning",
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
 
     // Expect recovery to abort with an explicit error rather than silently deleting source
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /Recovery aborted: target directory .* is missing during cleaning phase/
+      /Recovery aborted: target directory .* is missing during cleaning phase/,
     );
 
     // CRITICAL: Source MUST NOT be deleted!
     expect(fs.existsSync(sourceDir)).toBe(true);
-    expect(fs.readFileSync(path.join(sourceDir, "world-data.txt"), "utf-8")).toBe("precious-world");
+    expect(
+      fs.readFileSync(path.join(sourceDir, "world-data.txt"), "utf-8"),
+    ).toBe("precious-world");
     // Journal is preserved for diagnostics
     expect(fs.existsSync(journalPath)).toBe(true);
   });
@@ -897,16 +1062,18 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         target: targetDir,
         staging: stagingDir,
         phase: "cleaning",
-      })
+      }),
     );
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /Recovery aborted: target directory .* does not contain a verified move receipt|Recovery aborted: move receipt lacks verified per-file inventory evidence/
+      /Recovery aborted: target directory .* does not contain a verified move receipt|Recovery aborted: move receipt lacks verified per-file inventory evidence/,
     );
 
     // Source is preserved
     expect(fs.existsSync(sourceDir)).toBe(true);
-    expect(fs.readFileSync(path.join(sourceDir, "save-data.txt"), "utf-8")).toBe("source-original");
+    expect(
+      fs.readFileSync(path.join(sourceDir, "save-data.txt"), "utf-8"),
+    ).toBe("source-original");
   });
 
   test("Phase 7: recovery aborts and preserves source if target already exists without move receipt during finalizing phase", async () => {
@@ -921,7 +1088,10 @@ describe("GameDirectoryManager & Installation Relocation", () => {
 
     // Target exists with unrelated content
     fs.mkdirSync(targetDir, { recursive: true });
-    fs.writeFileSync(path.join(targetDir, "existing-unrelated.txt"), "should-not-overwrite");
+    fs.writeFileSync(
+      path.join(targetDir, "existing-unrelated.txt"),
+      "should-not-overwrite",
+    );
 
     fs.mkdirSync(stagingDir, { recursive: true });
     fs.writeFileSync(path.join(stagingDir, "player.dat"), "staged-data");
@@ -938,16 +1108,18 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         staging: stagingDir,
         phase: "finalizing",
         stagingVerified: true,
-      })
+      }),
     );
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /Recovery aborted: target directory .* exists without a matching move receipt/
+      /Recovery aborted: target directory .* exists without a matching move receipt/,
     );
 
     // Source is preserved
     expect(fs.existsSync(sourceDir)).toBe(true);
-    expect(fs.readFileSync(path.join(sourceDir, "player.dat"), "utf-8")).toBe("player-data");
+    expect(fs.readFileSync(path.join(sourceDir, "player.dat"), "utf-8")).toBe(
+      "player-data",
+    );
   });
 
   test("Phase 7: startup recovery failure blocks launcher mutations via OperationCoordinator", async () => {
@@ -955,23 +1127,29 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     expect(OperationCoordinator.isBlocked()).toBe(false);
 
     // Simulate recovery error
-    OperationCoordinator.blockMutations("Target directory missing during cleaning recovery");
+    OperationCoordinator.blockMutations(
+      "Target directory missing during cleaning recovery",
+    );
 
     expect(OperationCoordinator.isBlocked()).toBe(true);
-    expect(OperationCoordinator.getBlockedReason()).toBe("Target directory missing during cleaning recovery");
+    expect(OperationCoordinator.getBlockedReason()).toBe(
+      "Target directory missing during cleaning recovery",
+    );
 
     // All mutator acquisitions and assertion guards fail
     expect(() => OperationCoordinator.acquire("sync")).toThrow(
-      /Launcher operations are blocked due to an unresolved startup recovery failure/
+      /Launcher operations are blocked due to an unresolved startup recovery failure/,
     );
     expect(() => OperationCoordinator.acquire("repair")).toThrow(
-      /Launcher operations are blocked due to an unresolved startup recovery failure/
+      /Launcher operations are blocked due to an unresolved startup recovery failure/,
     );
     expect(() => OperationCoordinator.acquire("move")).toThrow(
-      /Launcher operations are blocked due to an unresolved startup recovery failure/
+      /Launcher operations are blocked due to an unresolved startup recovery failure/,
     );
-    expect(() => OperationCoordinator.assertCanMutate("update configuration")).toThrow(
-      /Cannot perform 'update configuration': launcher operations are blocked/
+    expect(() =>
+      OperationCoordinator.assertCanMutate("update configuration"),
+    ).toThrow(
+      /Cannot perform 'update configuration': launcher operations are blocked/,
     );
 
     OperationCoordinator.resetForTesting();

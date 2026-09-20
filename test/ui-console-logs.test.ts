@@ -4,7 +4,10 @@ import * as path from "node:path";
 
 describe("UI Console Logs clearing on Play interaction", () => {
   test("renderer.js defines clearConsoleLogs and clears consoleOutput on Play button interaction", () => {
-    const rendererCode = fs.readFileSync(path.join(__dirname, "../ui/renderer.js"), "utf-8");
+    const rendererCode = fs.readFileSync(
+      path.join(__dirname, "../ui/renderer.js"),
+      "utf-8",
+    );
 
     // Verify clearConsoleLogs function is defined
     expect(rendererCode).toContain("function clearConsoleLogs(notify = false)");
@@ -12,7 +15,9 @@ describe("UI Console Logs clearing on Play interaction", () => {
     expect(rendererCode).toContain('consoleCount.innerText = "0 lines"');
 
     // Verify btnPlay.onclick calls clearConsoleLogs
-    const btnPlayIndex = rendererCode.indexOf("btnPlay.onclick = async () => {");
+    const btnPlayIndex = rendererCode.indexOf(
+      "btnPlay.onclick = async () => {",
+    );
     expect(btnPlayIndex).toBeGreaterThan(-1);
     const btnPlayBlock = rendererCode.slice(btnPlayIndex, btnPlayIndex + 300);
     expect(btnPlayBlock).toContain("clearConsoleLogs();");
@@ -20,7 +25,7 @@ describe("UI Console Logs clearing on Play interaction", () => {
     // Verify btnClearLogs calls clearConsoleLogs(true)
     const btnClearBlock = rendererCode.slice(
       rendererCode.indexOf("if (btnClearLogs) {"),
-      rendererCode.indexOf("if (btnClearLogs) {") + 200
+      rendererCode.indexOf("if (btnClearLogs) {") + 200,
     );
     expect(btnClearBlock).toContain("clearConsoleLogs(true);");
   });
@@ -29,7 +34,8 @@ describe("UI Console Logs clearing on Play interaction", () => {
     // Simulate console UI elements
     const elements: Record<string, any> = {
       "console-output": {
-        innerHTML: '<div class="console-line">[12:00:00] [INFO] Old log from previous game run</div>',
+        innerHTML:
+          '<div class="console-line">[12:00:00] [INFO] Old log from previous game run</div>',
         scrollTop: 100,
         scrollHeight: 200,
         appendChild(child: any) {
@@ -54,7 +60,9 @@ describe("UI Console Logs clearing on Play interaction", () => {
     }
 
     // Before clearing
-    expect(elements["console-output"].innerHTML).toContain("Old log from previous game run");
+    expect(elements["console-output"].innerHTML).toContain(
+      "Old log from previous game run",
+    );
     expect(elements["console-count"].innerText).toBe("42 lines");
     expect(logLineCount).toBe(42);
 

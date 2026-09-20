@@ -17,7 +17,8 @@ mock.module("electron", () => ({
 
 const { LauncherLogger } = await import("../src/logger");
 const { tomlAdapter } = await import("../src/config-patches/adapters/toml");
-const { reconcileConfigPatches } = await import("../src/config-patches/reconciler");
+const { reconcileConfigPatches } =
+  await import("../src/config-patches/reconciler");
 import type { ConfigPatch, InstallationState } from "../src/types";
 
 describe("TOML conservative targeted adapter preservation tests", () => {

@@ -15,7 +15,12 @@ afterAll(() => {
 
 let execFileCalls: Array<{ file: string; args: string[]; options: any }> = [];
 let mockExecFileHandler:
-  | ((file: string, args: string[], options: any, cb: (err: any, stdout: string, stderr: string) => void) => void)
+  | ((
+      file: string,
+      args: string[],
+      options: any,
+      cb: (err: any, stdout: string, stderr: string) => void,
+    ) => void)
   | null = null;
 
 mock.module("electron", () => ({
@@ -34,7 +39,8 @@ mock.module("node:child_process", () => ({
   },
 }));
 
-const { JavaRuntimeManager } = await import("../src/java-runtime");
+const { JavaRuntimeManager, validateJavaRuntimeManifest } =
+  await import("../src/java-runtime");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 
 describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
@@ -77,7 +83,11 @@ describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
 
   test("safely handles paths with spaces, unicode characters, and shell metacharacters without shell execution", async () => {
     // Non-existent path with spaces and shell metacharacters
-    const injectionPath = path.join(testRoot, "folder with space & ; calc.exe", "java.exe");
+    const injectionPath = path.join(
+      testRoot,
+      "folder with space & ; calc.exe",
+      "java.exe",
+    );
     expect(await JavaRuntimeManager.checkJavaVersion(injectionPath)).toBeNull();
     expect(execFileCalls.length).toBe(0);
 
@@ -93,7 +103,11 @@ describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
       expect(options.shell).toBe(false);
       expect(options.timeout).toBe(4000);
       expect(options.maxBuffer).toBe(64 * 1024);
-      cb(null, "", 'openjdk version "25.0.1" 2025-10-14\nOpenJDK Runtime Environment');
+      cb(
+        null,
+        "",
+        'openjdk version "25.0.1" 2025-10-14\nOpenJDK Runtime Environment',
+      );
     };
 
     const ver = await JavaRuntimeManager.checkJavaVersion(unicodeJava);
@@ -159,7 +173,7 @@ describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
 
     // Standard OpenJDK format on stderr
     mockExecFileHandler = (_f, _a, _o, cb) => {
-      cb(null, "", 'openjdk 25.0.1 2025-10-14\nOpenJDK 64-Bit Server VM');
+      cb(null, "", "openjdk 25.0.1 2025-10-14\nOpenJDK 64-Bit Server VM");
     };
     expect(await JavaRuntimeManager.checkJavaVersion(dummyJava)).toBe(25);
 
@@ -213,7 +227,9 @@ describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
     };
 
     const logs: string[] = [];
-    const selected = await JavaRuntimeManager.ensureJava25(gameDir, (m) => logs.push(m));
+    const selected = await JavaRuntimeManager.ensureJava25(gameDir, (m) =>
+      logs.push(m),
+    );
     expect(selected).toBe(customJava);
     expect(logs.some((l) => l.includes("Using configured Java 25"))).toBe(true);
   });
@@ -228,7 +244,7 @@ describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
       "runtime",
       "java-runtime-epsilon",
       "bin",
-      process.platform === "win32" ? "javaw.exe" : "java"
+      process.platform === "win32" ? "javaw.exe" : "java",
     );
     fs.mkdirSync(path.dirname(localJava), { recursive: true });
     fs.writeFileSync(localJava, "dummy");
@@ -244,8 +260,222 @@ describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
     };
 
     const logs: string[] = [];
-    const selected = await JavaRuntimeManager.ensureJava25(gameDir, (m) => logs.push(m));
+    const selected = await JavaRuntimeManager.ensureJava25(gameDir, (m) =>
+      logs.push(m),
+    );
     expect(selected).toBe(localJava);
     expect(logs.some((l) => l.includes("Found local Java 25"))).toBe(true);
+  });
+
+  test("validateJavaRuntimeManifest requires hashed sized files and rejects file descendant collisions", () => {
+    const sha1 = "a".repeat(40);
+    const valid = validateJavaRuntimeManifest({
+      files: {
+        bin: { type: "directory" },
+        "bin/java": {
+          type: "file",
+          executable: true,
+          downloads: {
+            raw: { url: "https://cdn.example/java", sha1, size: 4 },
+          },
+        },
+      },
+    });
+    expect(
+      valid.find((entry) => entry.relativePath === "bin/java")?.downloads?.raw
+        .sha1,
+    ).toBe(sha1);
+
+    expect(() =>
+      validateJavaRuntimeManifest({
+        files: {
+          "bin/java": {
+            type: "file",
+            downloads: { raw: { url: "https://cdn.example/java", size: 4 } },
+          },
+        },
+      }),
+    ).toThrow(/Invalid digest|missing/i);
+
+    expect(() =>
+      validateJavaRuntimeManifest({
+        files: {
+          "bin/java": {
+            type: "file",
+            downloads: {
+              raw: { url: "https://cdn.example/java", sha1, size: 4 },
+            },
+          },
+          "bin/java/version": {
+            type: "file",
+            downloads: {
+              raw: { url: "https://cdn.example/version", sha1, size: 4 },
+            },
+          },
+        },
+      }),
+    ).toThrow(/collides with descendant/);
+  });
+
+  test("rejects Java manifests whose expected bytes exceed the preflight repair budget", () => {
+    const sha1 = "b".repeat(40);
+    const perFileLimit = 2 * 1024 * 1024 * 1024;
+    expect(() =>
+      validateJavaRuntimeManifest({
+        files: {
+          "bin/java": {
+            type: "file",
+            executable: true,
+            downloads: {
+              raw: {
+                url: "https://cdn.example/java",
+                sha1,
+                size: perFileLimit + 1,
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow(/limit|2147483648/);
+
+    const aggregateFiles = Object.fromEntries(
+      ["bin/java", "lib/runtime-a", "lib/runtime-b"].map((relativePath) => [
+        relativePath,
+        {
+          type: "file",
+          downloads: {
+            raw: {
+              url: `https://cdn.example/${relativePath}`,
+              sha1,
+              size: 1.5 * 1024 * 1024 * 1024,
+            },
+          },
+        },
+      ]),
+    );
+    expect(() =>
+      validateJavaRuntimeManifest({ files: aggregateFiles }),
+    ).toThrow(/limit|4294967296/);
+  });
+
+  test("full managed repair hashes runtime bytes before invoking the Java probe", async () => {
+    ConfigManager.set({ javaPath: undefined });
+    const localJava = path.join(
+      gameDir,
+      "runtime",
+      "java-runtime-epsilon",
+      "bin",
+      process.platform === "win32" ? "javaw.exe" : "java",
+    );
+    fs.mkdirSync(path.dirname(localJava), { recursive: true });
+    fs.writeFileSync(localJava, "tampered-managed-runtime");
+
+    const executablePath =
+      process.platform === "win32" ? "bin/java.exe" : "bin/java";
+    const executableBytes = Buffer.from("verified-managed-runtime");
+    const executableSha1 = require("node:crypto")
+      .createHash("sha1")
+      .update(executableBytes)
+      .digest("hex");
+    const manifest = {
+      files: {
+        [executablePath]: {
+          type: "file",
+          executable: true,
+          downloads: {
+            raw: {
+              url: `https://piston-data.mojang.com/runtime/${path.basename(executablePath)}`,
+              sha1: executableSha1,
+              size: executableBytes.length,
+            },
+          },
+        },
+        ...(process.platform === "win32"
+          ? {
+              "bin/javaw.exe": {
+                type: "file",
+                executable: true,
+                downloads: {
+                  raw: {
+                    url: "https://piston-data.mojang.com/runtime/javaw.exe",
+                    sha1: require("node:crypto")
+                      .createHash("sha1")
+                      .update("javaw-runtime")
+                      .digest("hex"),
+                    size: Buffer.byteLength("javaw-runtime"),
+                  },
+                },
+              },
+            }
+          : {}),
+      },
+    };
+    const manifestBody = JSON.stringify(manifest);
+    const manifestSha1 = require("node:crypto")
+      .createHash("sha1")
+      .update(manifestBody)
+      .digest("hex");
+    const events: string[] = [];
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith("/all.json")) {
+        events.push("metadata");
+        return Response.json({
+          [process.platform === "win32"
+            ? "windows-x64"
+            : process.platform === "darwin"
+              ? "mac-os"
+              : "linux"]: {
+            "java-runtime-epsilon": [
+              {
+                manifest: {
+                  url: "https://piston-meta.mojang.com/runtime.json",
+                  sha1: manifestSha1,
+                  size: Buffer.byteLength(manifestBody),
+                },
+              },
+            ],
+          },
+        });
+      }
+      if (url.endsWith("/runtime.json")) {
+        events.push("metadata");
+        return new Response(manifestBody, {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      events.push("download");
+      const body = url.endsWith("javaw.exe")
+        ? "javaw-runtime"
+        : executableBytes;
+      return new Response(body);
+    }) as typeof globalThis.fetch;
+
+    mockExecFileHandler = (_file, _args, _options, cb) => {
+      events.push("exec");
+      cb(null, "", 'openjdk version "25.0.1" 2025-10-14');
+    };
+    try {
+      const selected = await JavaRuntimeManager.ensureJava25(
+        gameDir,
+        () => {},
+        "full",
+      );
+      expect(selected).toBe(localJava);
+      expect(events.indexOf("download")).toBeGreaterThan(-1);
+      expect(events.indexOf("exec")).toBeGreaterThan(
+        events.indexOf("download"),
+      );
+      if (process.platform === "win32") {
+        expect(
+          fs.readFileSync(path.join(path.dirname(localJava), "java.exe")),
+        ).toEqual(executableBytes);
+      } else {
+        expect(fs.readFileSync(localJava)).toEqual(executableBytes);
+      }
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
   });
 });

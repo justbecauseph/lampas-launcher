@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-adapters-test-"));
+const testRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "lampas-adapters-test-"),
+);
 const userDataDir = path.join(testRoot, "user-data");
 
 mock.module("electron", () => ({
@@ -17,10 +19,12 @@ mock.module("electron", () => ({
 
 const { LauncherLogger } = await import("../src/logger");
 const { yamlAdapter } = await import("../src/config-patches/adapters/yaml");
-const { propertiesAdapter } = await import("../src/config-patches/adapters/properties");
+const { propertiesAdapter } =
+  await import("../src/config-patches/adapters/properties");
 const { iniAdapter } = await import("../src/config-patches/adapters/ini");
 const { textAdapter } = await import("../src/config-patches/adapters/text");
-const { reconcileConfigPatches } = await import("../src/config-patches/reconciler");
+const { reconcileConfigPatches } =
+  await import("../src/config-patches/reconciler");
 import type { ConfigPatch, InstallationState } from "../src/types";
 
 describe("YAML, Properties, INI, and Text adapter preservation tests", () => {
@@ -175,7 +179,9 @@ hypixelOnlyChatTabs_comment=true_not_matched
     expect(res.changed).toBe(true);
     expect(res.output).toContain("hypixelOnlyChatTabs=false");
     expect(res.output).toContain("anotherSetting=123");
-    expect(res.output).toContain("hypixelOnlyChatTabs_comment=true_not_matched");
+    expect(res.output).toContain(
+      "hypixelOnlyChatTabs_comment=true_not_matched",
+    );
 
     // Idempotency: second run sees 0 matches for search, but replacement is satisfied
     const reApply = textAdapter.apply(res.output, [
@@ -197,7 +203,7 @@ hypixelOnlyChatTabs_comment=true_not_matched
           replacement: "nonexistent=false",
           expectedMatches: 1,
         },
-      ])
+      ]),
     ).toThrow(/matches for 'nonexistent=true', but found 0/);
   });
 
@@ -210,7 +216,11 @@ hypixelOnlyChatTabs_comment=true_not_matched
     fs.writeFileSync(propPath, "# Prop comment\nsetting=true\n", "utf-8");
 
     const iniPath = path.join(tempDir, "config/mod.ini");
-    fs.writeFileSync(iniPath, "; INI comment\n[sec]\nsetting = true\n", "utf-8");
+    fs.writeFileSync(
+      iniPath,
+      "; INI comment\n[sec]\nsetting = true\n",
+      "utf-8",
+    );
 
     const textPath = path.join(tempDir, "config/mod.conf");
     fs.writeFileSync(textPath, "# Text comment\nsetting: true\n", "utf-8");
@@ -268,7 +278,11 @@ hypixelOnlyChatTabs_comment=true_not_matched
       files: {},
     };
 
-    const res = await reconcileConfigPatches({ gameDir: tempDir, patches, prevState });
+    const res = await reconcileConfigPatches({
+      gameDir: tempDir,
+      patches,
+      prevState,
+    });
     expect(res.appliedCount).toBe(4);
 
     expect(fs.readFileSync(yamlPath, "utf-8")).toContain("setting: false");

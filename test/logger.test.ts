@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -68,9 +76,11 @@ describe("LauncherLogger persistent disk logging", () => {
   test("sanitizes authorization tokens in log output", async () => {
     const logger = new LauncherLoggerService();
     logger.init(logsDir);
-    logger.info("Sending request with Bearer secret_token_12345678901234567890");
     logger.info(
-      "User JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+      "Sending request with Bearer secret_token_12345678901234567890",
+    );
+    logger.info(
+      "User JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
     );
     await logger.flush();
 
@@ -112,34 +122,49 @@ describe("LauncherLogger persistent disk logging", () => {
     const logger = new LauncherLoggerService();
     logger.init(logsDir);
 
-    logger.logApiRequest("POST", "https://dev.lampas.town/api/v1/auth/exchange", {
-      code: "secret_auth_code_123",
-      code_verifier: "my_secret_verifier",
-    });
+    logger.logApiRequest(
+      "POST",
+      "https://dev.lampas.town/api/v1/auth/exchange",
+      {
+        code: "secret_auth_code_123",
+        code_verifier: "my_secret_verifier",
+      },
+    );
 
-    logger.logApiResponse("GET", "https://dev.lampas.town/api/v1/channels/stable", 200, 142, {
-      version: "2.0.0",
-      pack: "Lampas 2",
-    });
+    logger.logApiResponse(
+      "GET",
+      "https://dev.lampas.town/api/v1/channels/stable",
+      200,
+      142,
+      {
+        version: "2.0.0",
+        pack: "Lampas 2",
+      },
+    );
 
     logger.logApiError(
       "GET",
       "https://dev.lampas.town/api/v1/releases/9.9.9",
       new Error("HTTP 404 Not Found"),
-      55
+      55,
     );
     await logger.flush();
 
     const content = fs.readFileSync(logger.getLogPath(), "utf-8");
-    expect(content).toContain("[HTTP Request] POST https://dev.lampas.town/api/v1/auth/exchange");
-    expect(content).toContain('"code": "[REDACTED]"');
-    expect(content).toContain('"code_verifier": "[REDACTED]"');
+    expect(content).toContain(
+      "[HTTP Request] POST https://dev.lampas.town/api/v1/auth/exchange",
+    );
+    expect(content).not.toContain("Body:");
     expect(content).not.toContain("secret_auth_code_123");
 
-    expect(content).toContain("[HTTP Response] GET https://dev.lampas.town/api/v1/channels/stable -> 200 (142ms)");
-    expect(content).toContain('"version":"2.0.0"');
+    expect(content).toContain(
+      "[HTTP Response] GET https://dev.lampas.town/api/v1/channels/stable -> 200 (142ms)",
+    );
+    expect(content).not.toContain("Response:");
 
-    expect(content).toContain("[HTTP Error] GET https://dev.lampas.town/api/v1/releases/9.9.9 (55ms) -> HTTP 404 Not Found");
+    expect(content).toContain(
+      "[HTTP Error] GET https://dev.lampas.town/api/v1/releases/9.9.9 (55ms) -> HTTP 404 Not Found",
+    );
     await logger.close();
   });
 
@@ -227,7 +252,9 @@ describe("LauncherLogger persistent disk logging", () => {
 
     try {
       ws.emit("error", new Error("Disk hardware failure"));
-      expect(stderrOutput).toContain("[LauncherLogger Stream Error] Disk hardware failure");
+      expect(stderrOutput).toContain(
+        "[LauncherLogger Stream Error] Disk hardware failure",
+      );
       // Flush does not hang
       await logger.flush();
       await logger.close();
@@ -239,7 +266,9 @@ describe("LauncherLogger persistent disk logging", () => {
   test("LauncherLogger static facade delegates to defaultInstance", () => {
     expect(typeof LauncherLogger.info).toBe("function");
     expect(typeof LauncherLogger.getLogPath).toBe("function");
-    expect(LauncherLogger.sanitize("Bearer secret12345678901234567890")).toBe("Bearer [REDACTED]");
+    expect(LauncherLogger.sanitize("Bearer secret12345678901234567890")).toBe(
+      "Bearer [REDACTED]",
+    );
   });
 
   test("safeBoundedClone handles circular references, deep nesting, wide objects, and sensitive keys", async () => {
@@ -291,11 +320,17 @@ describe("LauncherLogger persistent disk logging", () => {
       secretToken: "secret_value_1234567890_super_secret_auth_token",
     };
 
-    logger.logApiRequest("POST", "https://dev.lampas.town/api/v1/auth", payload);
+    logger.logApiRequest(
+      "POST",
+      "https://dev.lampas.town/api/v1/auth",
+      payload,
+    );
     await logger.flush();
 
     const content = fs.readFileSync(logger.getLogPath(), "utf-8");
-    expect(content).toContain("[HTTP Request] POST https://dev.lampas.town/api/v1/auth");
+    expect(content).toContain(
+      "[HTTP Request] POST https://dev.lampas.town/api/v1/auth",
+    );
     // Token value MUST NOT appear even in truncated representation
     expect(content).not.toContain("secret_value_1234567890");
     await logger.close();
@@ -310,7 +345,7 @@ describe("LauncherLogger persistent disk logging", () => {
     await logger.flush();
 
     const content = fs.readFileSync(logger.getLogPath(), "utf-8");
-    expect(content).toContain("...[TRUNCATED]");
+    expect(content).toContain("[Oversized log record discarded]");
     await logger.close();
   });
 
@@ -355,7 +390,9 @@ describe("LauncherLogger persistent disk logging", () => {
       logger.error("Error message after close");
 
       expect(fallbackLogged).toContain("[POST-CLOSE LOG] Message after close");
-      expect(fallbackLogged).toContain("[POST-CLOSE ERROR] Error message after close");
+      expect(fallbackLogged).toContain(
+        "[POST-CLOSE ERROR] Error message after close",
+      );
 
       const metrics = logger.getMetrics();
       expect(metrics.droppedCount).toBe(2);

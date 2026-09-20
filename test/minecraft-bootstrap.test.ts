@@ -5,7 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { zipSync } from "fflate";
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-bootstrap-test-"));
+const testRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "lampas-bootstrap-test-"),
+);
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
 
@@ -122,8 +124,8 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
             size: Buffer.byteLength(invalidBody),
           },
           () => {},
-          "full"
-        )
+          "full",
+        ),
       ).rejects.toThrow(/Invalid asset index shape/);
     } finally {
       server.stop(true);
@@ -169,11 +171,13 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
           size: Buffer.byteLength(indexBody),
         },
         (m: string) => logs.push(m),
-        "full"
+        "full",
       );
 
       // Only 1 unique asset object should be verified
-      expect(logs.some((l) => l.includes("All 1 official asset objects verified"))).toBe(true);
+      expect(
+        logs.some((l) => l.includes("All 1 official asset objects verified")),
+      ).toBe(true);
     } finally {
       server.stop(true);
     }
@@ -209,9 +213,81 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
             size: Buffer.byteLength(indexBody),
           },
           () => {},
-          "full"
-        )
+          "full",
+        ),
       ).rejects.toThrow(/Inconsistent asset metadata for hash/);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("ensureAssets enforces per-object and aggregate byte budgets before creating objects", async () => {
+    const assetsDir = path.join(gameDir, "assets-budget");
+    const oversizedBody = JSON.stringify({
+      objects: {
+        "too-large.bin": {
+          hash: "f".repeat(40),
+          size: 2 * 1024 * 1024 * 1024 + 1,
+        },
+      },
+    });
+    const aggregateBody = JSON.stringify({
+      objects: Object.fromEntries(
+        Array.from({ length: 22 }, (_, index) => [
+          `large-${index}.bin`,
+          {
+            hash: index.toString(16).padStart(40, "0"),
+            size: 1.5 * 1024 * 1024 * 1024,
+          },
+        ]),
+      ),
+    });
+    const bodies = [oversizedBody, aggregateBody];
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(bodies.shift() || aggregateBody);
+      },
+    });
+
+    try {
+      const oversizedHash = crypto
+        .createHash("sha1")
+        .update(oversizedBody)
+        .digest("hex");
+      await expect(
+        (MinecraftBootstrap as any).ensureAssets(
+          assetsDir,
+          {
+            id: "oversized",
+            sha1: oversizedHash,
+            url: `http://127.0.0.1:${server.port}/oversized.json`,
+            size: Buffer.byteLength(oversizedBody),
+          },
+          () => {},
+          "full",
+        ),
+      ).rejects.toThrow(/limit|2147483648/);
+      expect(fs.existsSync(path.join(assetsDir, "objects"))).toBe(false);
+
+      const aggregateHash = crypto
+        .createHash("sha1")
+        .update(aggregateBody)
+        .digest("hex");
+      await expect(
+        (MinecraftBootstrap as any).ensureAssets(
+          assetsDir,
+          {
+            id: "aggregate",
+            sha1: aggregateHash,
+            url: `http://127.0.0.1:${server.port}/aggregate.json`,
+            size: Buffer.byteLength(aggregateBody),
+          },
+          () => {},
+          "full",
+        ),
+      ).rejects.toThrow(/limit|34359738368/);
+      expect(fs.existsSync(path.join(assetsDir, "objects"))).toBe(false);
     } finally {
       server.stop(true);
     }
@@ -222,7 +298,12 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
     const zeroByteHash = "da39a3ee5e6b4b0d3255bfef95601890afd80709"; // SHA-1 of empty string
 
     // Pre-create zero-byte file
-    const objPath = path.join(assetsDir, "objects", zeroByteHash.substring(0, 2), zeroByteHash);
+    const objPath = path.join(
+      assetsDir,
+      "objects",
+      zeroByteHash.substring(0, 2),
+      zeroByteHash,
+    );
     fs.mkdirSync(path.dirname(objPath), { recursive: true });
     fs.writeFileSync(objPath, Buffer.alloc(0));
 
@@ -251,12 +332,14 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
           size: Buffer.byteLength(indexBody),
         },
         (m: string) => logs.push(m),
-        "full"
+        "full",
       );
 
       expect(fs.existsSync(objPath)).toBe(true);
       expect(fs.statSync(objPath).size).toBe(0);
-      expect(logs.some((l) => l.includes("All 1 official asset objects verified"))).toBe(true);
+      expect(
+        logs.some((l) => l.includes("All 1 official asset objects verified")),
+      ).toBe(true);
     } finally {
       server.stop(true);
     }
@@ -264,13 +347,20 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
 
   test("ensureNatives extracts native libraries and writes structured receipt and legacy marker", async () => {
     const nativesDir = path.join(gameDir, "natives");
-    const nativeExt = process.platform === "win32" ? ".dll" : process.platform === "darwin" ? ".dylib" : ".so";
+    const nativeExt =
+      process.platform === "win32"
+        ? ".dll"
+        : process.platform === "darwin"
+          ? ".dylib"
+          : ".so";
     const nativeFileName = `test-native${nativeExt}`;
 
     const mockArchive = path.join(testRoot, "natives-test.jar");
     const jarBytes = zipSync({
       [nativeFileName]: new Uint8Array(Buffer.from("binary native payload")),
-      "META-INF/MANIFEST.MF": new Uint8Array(Buffer.from("Manifest-Version: 1.0\n")),
+      "META-INF/MANIFEST.MF": new Uint8Array(
+        Buffer.from("Manifest-Version: 1.0\n"),
+      ),
     });
     fs.writeFileSync(mockArchive, Buffer.from(jarBytes));
 
@@ -280,16 +370,22 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
       "26.2",
       [{ path: mockArchive, changed: true }],
       (m: string) => logs.push(m),
-      "full"
+      "full",
     );
 
     // Destination file exists
     const extractedFile = path.join(nativesDir, nativeFileName);
     expect(fs.existsSync(extractedFile)).toBe(true);
-    expect(fs.readFileSync(extractedFile, "utf-8")).toBe("binary native payload");
+    expect(fs.readFileSync(extractedFile, "utf-8")).toBe(
+      "binary native payload",
+    );
 
     // Modern receipt exists and contains required fields
-    const receiptPath = path.join(gameDir, ".lampas", `natives-26.2-${process.platform}-${process.arch}.json`);
+    const receiptPath = path.join(
+      gameDir,
+      ".lampas",
+      `natives-26.2-${process.platform}-${process.arch}.json`,
+    );
     expect(fs.existsSync(receiptPath)).toBe(true);
     const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf-8"));
     expect(receipt.version).toBe("26.2");
@@ -300,7 +396,11 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
     expect(receipt.files).toContain(nativeFileName);
 
     // Legacy marker also exists
-    const legacyPath = path.join(gameDir, ".lampas", `natives-26.2-${process.platform}.complete`);
+    const legacyPath = path.join(
+      gameDir,
+      ".lampas",
+      `natives-26.2-${process.platform}.complete`,
+    );
     expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
@@ -321,8 +421,8 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
         "26.2",
         [{ path: corruptArchive, changed: true }],
         () => {},
-        "full"
-      )
+        "full",
+      ),
     ).rejects.toThrow(/Failed to decompress native archive/);
 
     // Check that no lingering .staging directories remain in subGameDir

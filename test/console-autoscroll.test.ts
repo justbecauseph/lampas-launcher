@@ -20,8 +20,10 @@ class MockDomElement {
 
   classList = {
     classes: new Set<string>(),
-    add: (...c: string[]) => c.forEach((cls) => this.classList.classes.add(cls)),
-    remove: (...c: string[]) => c.forEach((cls) => this.classList.classes.delete(cls)),
+    add: (...c: string[]) =>
+      c.forEach((cls) => this.classList.classes.add(cls)),
+    remove: (...c: string[]) =>
+      c.forEach((cls) => this.classList.classes.delete(cls)),
     contains: (cls: string) => this.classList.classes.has(cls),
   };
 
@@ -66,7 +68,9 @@ class MockDomElement {
 
   querySelectorAll(selector: string): MockDomElement[] {
     if (selector === ".console-line") {
-      return this.childNodes.filter((c) => c.className.includes("console-line"));
+      return this.childNodes.filter((c) =>
+        c.className.includes("console-line"),
+      );
     }
     return [];
   }
@@ -98,7 +102,8 @@ describe("Console View Auto-Scroll and Controls", () => {
       },
     };
 
-    let logBatchCallback: ((batch: { entries: GameLogEntry[] }) => void) | null = null;
+    let logBatchCallback:
+      ((batch: { entries: GameLogEntry[] }) => void) | null = null;
     (globalThis as any).window = {
       lampas: {
         game: {
@@ -143,8 +148,16 @@ describe("Console View Auto-Scroll and Controls", () => {
     if (logBatchCallback) {
       (logBatchCallback as any)({
         entries: [
-          { timestamp: "12:00:01", level: "INFO", message: "Batch game line 1" },
-          { timestamp: "12:00:02", level: "WARN", message: "Batch game line 2" },
+          {
+            timestamp: "12:00:01",
+            level: "INFO",
+            message: "Batch game line 1",
+          },
+          {
+            timestamp: "12:00:02",
+            level: "WARN",
+            message: "Batch game line 2",
+          },
         ],
       });
     }

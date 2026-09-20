@@ -13,12 +13,14 @@ export function getDefaultGameDir(): string {
   }
   return path.join(
     process.env.APPDATA || process.env.HOME || process.cwd(),
-    ".minecraft-lampas"
+    ".minecraft-lampas",
   );
 }
 
 export function getUserDataDir(): string {
-  return app ? app.getPath("userData") : path.join(process.env.APPDATA || process.cwd(), ".lampas-launcher");
+  return app
+    ? app.getPath("userData")
+    : path.join(process.env.APPDATA || process.cwd(), ".lampas-launcher");
 }
 
 const DEFAULT_CONFIG: LauncherConfig = {
@@ -31,10 +33,29 @@ const DEFAULT_CONFIG: LauncherConfig = {
   disabledClientMods: [],
   customClientMods: [],
   noSync: false,
+  externalImages: false,
 };
 
-import { normalizePortalUrl, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError, PortalPolicy, type DevelopmentPortalPolicy } from "./portal-policy";
-export { normalizePortalUrl, validateWebUrl, isApprovedRemoteHost, isExactLoopbackHost, portalFetch, PortalRedirectPolicyError, PortalPolicyError, PortalPolicy, type DevelopmentPortalPolicy } from "./portal-policy";
+import {
+  normalizePortalUrl,
+  isExactLoopbackHost,
+  portalFetch,
+  PortalRedirectPolicyError,
+  PortalPolicyError,
+  PortalPolicy,
+  type DevelopmentPortalPolicy,
+} from "./portal-policy";
+export {
+  normalizePortalUrl,
+  validateWebUrl,
+  isApprovedRemoteHost,
+  isExactLoopbackHost,
+  portalFetch,
+  PortalRedirectPolicyError,
+  PortalPolicyError,
+  PortalPolicy,
+  type DevelopmentPortalPolicy,
+} from "./portal-policy";
 
 function valuesEqual(a: any, b: any): boolean {
   if (a === b) return true;
@@ -51,15 +72,23 @@ function formatConfigValue(key: string, value: any): string {
   if (value === undefined || value === null) {
     return "<unset>";
   }
-  if (key === "token" || key === "refreshToken" || key === "minecraftAccessToken") {
+  if (
+    key === "token" ||
+    key === "refreshToken" ||
+    key === "minecraftAccessToken"
+  ) {
     return "[REDACTED]";
   }
   if (typeof value === "string") {
-    return value.length > 80 ? `"${value.slice(0, 77)}..."` : JSON.stringify(value);
+    return value.length > 80
+      ? `"${value.slice(0, 77)}..."`
+      : JSON.stringify(value);
   }
   if (typeof value === "object") {
     const serialized = JSON.stringify(value);
-    return serialized.length > 80 ? `${serialized.slice(0, 77)}...` : serialized;
+    return serialized.length > 80
+      ? `${serialized.slice(0, 77)}...`
+      : serialized;
   }
   return String(value);
 }
@@ -97,7 +126,8 @@ export class ConfigManager {
         if (creds) {
           ConfigManager.cachedConfig.token = creds.token;
           ConfigManager.cachedConfig.refreshToken = creds.refreshToken;
-          ConfigManager.cachedConfig.minecraftAccessToken = creds.minecraftAccessToken;
+          ConfigManager.cachedConfig.minecraftAccessToken =
+            creds.minecraftAccessToken;
           ConfigManager.cachedConfig.sessionPortalUrl = creds.portalUrl;
         } else {
           delete ConfigManager.cachedConfig.token;
@@ -129,12 +159,19 @@ export class ConfigManager {
         // Legacy migration: automatically regard existing configuration or existing installation as configured
         if (parsed.gameDirConfigured === undefined) {
           const resolvedDir =
-            typeof parsed.gameDir === "string" && parsed.gameDir.trim().length > 0
+            typeof parsed.gameDir === "string" &&
+            parsed.gameDir.trim().length > 0
               ? parsed.gameDir
               : defaultGameDir;
-          const hasInstallation = fs.existsSync(path.join(resolvedDir, ".lampas", "installation.json"));
+          const hasInstallation = fs.existsSync(
+            path.join(resolvedDir, ".lampas", "installation.json"),
+          );
 
-          if ((typeof parsed.gameDir === "string" && parsed.gameDir.trim().length > 0) || hasInstallation) {
+          if (
+            (typeof parsed.gameDir === "string" &&
+              parsed.gameDir.trim().length > 0) ||
+            hasInstallation
+          ) {
             loaded.gameDirConfigured = true;
           } else {
             loaded.gameDirConfigured = false;
@@ -145,7 +182,9 @@ export class ConfigManager {
       }
     } else {
       loaded = { ...DEFAULT_CONFIG };
-      const hasInstallation = fs.existsSync(path.join(defaultGameDir, ".lampas", "installation.json"));
+      const hasInstallation = fs.existsSync(
+        path.join(defaultGameDir, ".lampas", "installation.json"),
+      );
       loaded.gameDirConfigured = hasInstallation;
     }
 
@@ -169,6 +208,7 @@ export class ConfigManager {
     }
 
     loaded.noSync = Boolean(loaded.noSync);
+    loaded.externalImages = Boolean(loaded.externalImages);
     this.cachedConfig = loaded;
     return this.cachedConfig;
   }
@@ -203,7 +243,9 @@ export class ConfigManager {
       // Phase 1 Security: Advance authentication generation on any actual active portal origin change,
       // independently of whether an active session was already established.
       const originChanged = priorCanonical !== nextCanonical;
-      const sessionMismatch = Boolean(current.sessionPortalUrl && nextCanonical !== current.sessionPortalUrl);
+      const sessionMismatch = Boolean(
+        current.sessionPortalUrl && nextCanonical !== current.sessionPortalUrl,
+      );
 
       if (originChanged || sessionMismatch) {
         SessionManager.onPortalUrlChanged(nextCanonical);
@@ -216,7 +258,11 @@ export class ConfigManager {
     }
 
     // Ensure sessionPortalUrl remains unset if there are no tokens
-    if (!updated.token && !updated.refreshToken && !updated.minecraftAccessToken) {
+    if (
+      !updated.token &&
+      !updated.refreshToken &&
+      !updated.minecraftAccessToken
+    ) {
       updated.sessionPortalUrl = undefined;
     }
 
@@ -244,15 +290,21 @@ export class ConfigManager {
       portalAccountId?: string;
       portalUsername?: string;
     },
-    extraSettings?: Partial<LauncherConfig>
+    extraSettings?: Partial<LauncherConfig>,
   ): LauncherConfig {
     this.initPath();
     const current = { ...this.get() };
 
     if (credentials.token) {
-      const tokenHash = crypto.createHash("sha256").update(credentials.token).digest("hex").slice(0, 10);
-      const portalAccountId = credentials.portalAccountId || `config-account-${tokenHash}`;
-      const portalUsername = credentials.portalUsername || `ConfigUser-${tokenHash.slice(0, 4)}`;
+      const tokenHash = crypto
+        .createHash("sha256")
+        .update(credentials.token)
+        .digest("hex")
+        .slice(0, 10);
+      const portalAccountId =
+        credentials.portalAccountId || `config-account-${tokenHash}`;
+      const portalUsername =
+        credentials.portalUsername || `ConfigUser-${tokenHash.slice(0, 4)}`;
       SessionManager.establishSession(issuingOrigin, {
         token: credentials.token,
         refreshToken: credentials.refreshToken,
@@ -307,7 +359,10 @@ export class ConfigManager {
     return this.persistAndEmit(current, updated);
   }
 
-  private static persistAndEmit(current: LauncherConfig, updated: LauncherConfig): LauncherConfig {
+  private static persistAndEmit(
+    current: LauncherConfig,
+    updated: LauncherConfig,
+  ): LauncherConfig {
     // Phase 3 Security: Settings persistence must NEVER serialize tokens or secret fields to disk
     const toPersist = { ...updated };
     delete (toPersist as any).token;
@@ -319,7 +374,11 @@ export class ConfigManager {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    writeAtomicFileSync(this.configPath, JSON.stringify(toPersist, null, 2), "utf-8");
+    writeAtomicFileSync(
+      this.configPath,
+      JSON.stringify(toPersist, null, 2),
+      "utf-8",
+    );
 
     // Only after persistence succeeds, log all changed configuration properties
     const allKeys = new Set([
@@ -329,11 +388,11 @@ export class ConfigManager {
 
     for (const key of allKeys) {
       if (!valuesEqual(current[key], updated[key])) {
-        const oldValStr = formatConfigValue(key, current[key]);
-        const newValStr = formatConfigValue(key, updated[key]);
-        LauncherLogger.info(`[Config] ${key} changed: ${oldValStr} -> ${newValStr}`);
+        LauncherLogger.info(`[Config] ${key} changed`);
         if (key === "noSync") {
-          LauncherLogger.info(`[Settings] No-sync mode ${updated.noSync ? "enabled" : "disabled"}`);
+          LauncherLogger.info(
+            `[Settings] No-sync mode ${updated.noSync ? "enabled" : "disabled"}`,
+          );
         }
       }
     }

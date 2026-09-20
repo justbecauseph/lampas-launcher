@@ -18,7 +18,7 @@ export class TextConfigAdapter implements ConfigPatchAdapter {
     for (const op of operations) {
       if (op.op !== "replaceLiteral") {
         throw new Error(
-          `Text adapter only supports 'replaceLiteral' operations, got '${(op as any).op}'`
+          `Text adapter only supports 'replaceLiteral' operations, got '${(op as any).op}'`,
         );
       }
 
@@ -27,7 +27,9 @@ export class TextConfigAdapter implements ConfigPatchAdapter {
         throw new Error("replaceLiteral requires a non-empty 'search' string");
       }
       if (typeof expectedMatches !== "number" || expectedMatches < 1) {
-        throw new Error("replaceLiteral requires 'expectedMatches' to be an integer >= 1");
+        throw new Error(
+          "replaceLiteral requires 'expectedMatches' to be an integer >= 1",
+        );
       }
 
       let count = 0;
@@ -50,19 +52,21 @@ export class TextConfigAdapter implements ConfigPatchAdapter {
         }
 
         throw new Error(
-          `replaceLiteral expected ${expectedMatches} matches for '${search}', but found 0 (and replacement not present)`
+          `replaceLiteral expected ${expectedMatches} matches for '${search}', but found 0 (and replacement not present)`,
         );
       }
 
       if (count !== expectedMatches) {
         throw new Error(
-          `replaceLiteral expected ${expectedMatches} matches for '${search}', but found ${count}`
+          `replaceLiteral expected ${expectedMatches} matches for '${search}', but found ${count}`,
         );
       }
 
       current = current.replaceAll(search, replacement);
       changed = true;
-      details.push(`'${search}' → '${replacement}' (${count} match${count > 1 ? "es" : ""})`);
+      details.push(
+        `'${search}' → '${replacement}' (${count} match${count > 1 ? "es" : ""})`,
+      );
     }
 
     return {

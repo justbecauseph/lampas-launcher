@@ -8,6 +8,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Validate (${{ matrix.os }})
@@ -19,10 +22,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
 
@@ -40,3 +45,25 @@ jobs:
 
       - name: Run test suite
         run: bun run test
+
+      - name: Package for security smoke
+        run: bun run package:dir
+
+      - name: Verify packaged fuses
+        run: node scripts/verify-fuses.cjs
+
+      - name: Windows packaged smoke
+        if: runner.os == 'Windows'
+        run: bun test/smoke/electron-smoke.ts --strict
+
+      - name: Linux packaged smoke
+        if: runner.os == 'Linux'
+        run: xvfb-run -a bun test/smoke/electron-smoke.ts --strict
+
+      - name: Windows packaged module workflow and repair restart
+        if: runner.os == 'Windows'
+        run: node node_modules/electron/cli.js test/smoke/packaged-workflow.cjs --asar=release/win-unpacked/resources/app.asar "--user-data-dir=$env:RUNNER_TEMP/lampas-packaged-workflow-ci"
+
+      - name: Linux packaged module workflow and repair restart
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node node_modules/electron/cli.js test/smoke/packaged-workflow.cjs --asar=release/linux-unpacked/resources/app.asar --user-data-dir="$RUNNER_TEMP/lampas-packaged-workflow-ci" --password-store=basic

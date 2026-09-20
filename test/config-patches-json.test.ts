@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-json-patch-test-"));
+const testRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "lampas-json-patch-test-"),
+);
 const userDataDir = path.join(testRoot, "user-data");
 
 mock.module("electron", () => ({
@@ -16,7 +18,8 @@ mock.module("electron", () => ({
 }));
 
 const { LauncherLogger } = await import("../src/logger");
-const { reconcileConfigPatches } = await import("../src/config-patches/reconciler");
+const { reconcileConfigPatches } =
+  await import("../src/config-patches/reconciler");
 const { jsonAdapter } = await import("../src/config-patches/adapters/json");
 import type { ConfigPatch, InstallationState } from "../src/types";
 
@@ -135,9 +138,7 @@ describe("JSON and JSONC config patch adapter & reconciliation", () => {
       adapter: "json",
       mode: "enforce",
       missingFile: "defer",
-      operations: [
-        { op: "set", path: ["hypixelOnlyChatTabs"], value: false },
-      ],
+      operations: [{ op: "set", path: ["hypixelOnlyChatTabs"], value: false }],
     };
 
     const prevState: InstallationState = {
@@ -162,7 +163,10 @@ describe("JSON and JSONC config patch adapter & reconciliation", () => {
     expect(contentAfterR1).toContain("// User personal comments");
 
     // Step 2: User changes unrelated value to 0.69
-    const userModified = contentAfterR1.replace('"volume": 0.42', '"volume": 0.69');
+    const userModified = contentAfterR1.replace(
+      '"volume": 0.42',
+      '"volume": 0.69',
+    );
     fs.writeFileSync(fullPath, userModified, "utf-8");
 
     // Next sync: user change survives and enforced value remains false
@@ -179,7 +183,10 @@ describe("JSON and JSONC config patch adapter & reconciliation", () => {
     expect(contentAfterR2).toContain('"customTheme": "dark"');
 
     // Step 3: User attempts to revert enforced value back to true
-    const userTampered = contentAfterR2.replace('"hypixelOnlyChatTabs": false', '"hypixelOnlyChatTabs": true');
+    const userTampered = contentAfterR2.replace(
+      '"hypixelOnlyChatTabs": false',
+      '"hypixelOnlyChatTabs": true',
+    );
     fs.writeFileSync(fullPath, userTampered, "utf-8");
 
     // Next sync: enforces false again
@@ -221,7 +228,7 @@ describe("JSON and JSONC config patch adapter & reconciliation", () => {
     };
 
     await expect(
-      reconcileConfigPatches({ gameDir: tempDir, patches: [patch], prevState })
+      reconcileConfigPatches({ gameDir: tempDir, patches: [patch], prevState }),
     ).rejects.toThrow(/target contained invalid syntax/);
 
     // Original bytes must remain completely intact

@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,6 +60,7 @@ let IpcValidationError: any;
 let validateConfigSet: any;
 let CredentialStore: any;
 let SessionManager: any;
+let FabricMetaResolver: any;
 
 beforeAll(async () => {
   fs.mkdirSync(userDataDir, { recursive: true });
@@ -63,7 +72,9 @@ beforeAll(async () => {
   validateWebUrl = configMod.validateWebUrl;
   PortalPolicy = configMod.PortalPolicy;
 
-  const authPath = path.resolve(__dirname, "../src/auth.ts").replace(/\\/g, "/");
+  const authPath = path
+    .resolve(__dirname, "../src/auth.ts")
+    .replace(/\\/g, "/");
   const authMod = await import(`file://${authPath}?sec_gates=${Date.now()}`);
   LauncherAuth = authMod.LauncherAuth;
 
@@ -91,6 +102,8 @@ beforeAll(async () => {
   CredentialStore = credMod.CredentialStore;
   const sessMod = await import("../src/session-manager");
   SessionManager = sessMod.SessionManager;
+  const fabricMetaMod = await import("../src/fabric-meta");
+  FabricMetaResolver = fabricMetaMod.FabricMetaResolver;
 });
 
 beforeEach(() => {
@@ -106,7 +119,10 @@ afterAll(async () => {
   try {
     await LauncherLogger?.close();
   } catch {}
-  if (testRoot && path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
+  if (
+    testRoot &&
+    path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))
+  ) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
 });
@@ -116,22 +132,39 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
     // Target invariant:
     // Only exact loopback origins (http://localhost or http://127.0.0.1 with port) may use HTTP.
     // Lookalike hosts, embedded IPs, and scheme case tricks must be rejected or upgraded to HTTPS.
-    expect(() => normalizePortalUrl("http://localhost.attacker.invalid")).toThrow();
-    expect(() => normalizePortalUrl("http://attacker.invalid/foo?bar=127.0.0.1")).toThrow();
-    expect(normalizePortalUrl("HTTP://portal.lampas.town")).toBe("https://portal.lampas.town");
+    expect(() =>
+      normalizePortalUrl("http://localhost.attacker.invalid"),
+    ).toThrow();
+    expect(() =>
+      normalizePortalUrl("http://attacker.invalid/foo?bar=127.0.0.1"),
+    ).toThrow();
+    expect(normalizePortalUrl("HTTP://portal.lampas.town")).toBe(
+      "https://portal.lampas.town",
+    );
     expect(() => normalizePortalUrl("https://attacker.invalid")).toThrow();
-    expect(() => normalizePortalUrl("https://user:pass@dev.lampas.town")).toThrow();
-    expect(() => normalizePortalUrl("https://dev.lampas.town/api/v1")).toThrow();
-    expect(() => normalizePortalUrl("https://dev.lampas.town?query=1")).toThrow();
+    expect(() =>
+      normalizePortalUrl("https://user:pass@dev.lampas.town"),
+    ).toThrow();
+    expect(() =>
+      normalizePortalUrl("https://dev.lampas.town/api/v1"),
+    ).toThrow();
+    expect(() =>
+      normalizePortalUrl("https://dev.lampas.town?query=1"),
+    ).toThrow();
     expect(() => normalizePortalUrl("https://dev.lampas.town#hash")).toThrow();
-    expect(normalizePortalUrl("http://localhost:3000")).toBe("http://localhost:3000");
-    expect(normalizePortalUrl("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+    expect(normalizePortalUrl("http://localhost:3000")).toBe(
+      "http://localhost:3000",
+    );
+    expect(normalizePortalUrl("http://127.0.0.1:8080")).toBe(
+      "http://127.0.0.1:8080",
+    );
   });
 
   test("[Phase 1 Gate] Production portal policy: packaged production rejects loopback destinations and ignores environment trust expansion", () => {
     try {
       PortalPolicy.setProductionOverride(true);
-      process.env.LAMPAS_ALLOWED_PORTAL_HOSTS = "attacker.invalid,custom-portal.test";
+      process.env.LAMPAS_ALLOWED_PORTAL_HOSTS =
+        "attacker.invalid,custom-portal.test";
       process.env.NODE_ENV = "development";
 
       // Packaged production rejects loopback destinations
@@ -143,8 +176,12 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
       expect(() => normalizePortalUrl("https://custom-portal.test")).toThrow();
 
       // Approved lampas.town contract remains valid in production
-      expect(normalizePortalUrl("https://portal.lampas.town")).toBe("https://portal.lampas.town");
-      expect(normalizePortalUrl("https://dev.lampas.town")).toBe("https://dev.lampas.town");
+      expect(normalizePortalUrl("https://portal.lampas.town")).toBe(
+        "https://portal.lampas.town",
+      );
+      expect(normalizePortalUrl("https://dev.lampas.town")).toBe(
+        "https://dev.lampas.town",
+      );
     } finally {
       PortalPolicy.setProductionOverride(null);
       delete process.env.LAMPAS_ALLOWED_PORTAL_HOSTS;
@@ -184,9 +221,15 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
 
   test("[Phase 1 Gate] Operation-level: Web link sink rejects non-HTTP protocols and never passes them to shell.openPath", () => {
     // validateWebUrl must strictly permit HTTP/HTTPS only
-    expect(validateWebUrl("https://lampas.town/mods")).toBe("https://lampas.town/mods");
-    expect(validateWebUrl("http://lampas.town/about")).toBe("http://lampas.town/about");
-    expect(() => validateWebUrl("file:///C:/Windows/System32/calc.exe")).toThrow();
+    expect(validateWebUrl("https://lampas.town/mods")).toBe(
+      "https://lampas.town/mods",
+    );
+    expect(validateWebUrl("http://lampas.town/about")).toBe(
+      "http://lampas.town/about",
+    );
+    expect(() =>
+      validateWebUrl("file:///C:/Windows/System32/calc.exe"),
+    ).toThrow();
     expect(() => validateWebUrl("javascript:alert(1)")).toThrow();
     expect(() => validateWebUrl("powershell -Command calc.exe")).toThrow();
     expect(() => validateWebUrl("data:text/html,<html>")).toThrow();
@@ -221,12 +264,15 @@ describe("Phase 1 Regression Gate — Portal Destinations & Web Link Sinks (SEC-
 
   test("[Phase 1 Gate] Legacy migration: ConfigManager.get invalidates unbound credentials from disk", () => {
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({
-      portalUrl: "https://dev.lampas.town",
-      token: "legacy-unbound-token",
-      refreshToken: "legacy-unbound-refresh",
-      minecraftAccessToken: "legacy-unbound-mc-token",
-    }));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        portalUrl: "https://dev.lampas.town",
+        token: "legacy-unbound-token",
+        refreshToken: "legacy-unbound-refresh",
+        minecraftAccessToken: "legacy-unbound-mc-token",
+      }),
+    );
 
     ConfigManager.resetForTesting();
     const loaded = ConfigManager.get();
@@ -249,10 +295,16 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     // 1. Missing or destroyed main window
     IpcBoundary.resetForTesting();
     IpcBoundary.setMainWindow(null);
-    expect(() => IpcBoundary.validateIpcSender({} as any)).toThrow(IpcSecurityError);
+    expect(() => IpcBoundary.validateIpcSender({} as any)).toThrow(
+      IpcSecurityError,
+    );
 
     // 2. Setup mock main window
-    const mockMainFrame = { parent: null, url: "http://localhost:5173", isDestroyed: () => false };
+    const mockMainFrame = {
+      parent: null,
+      url: "http://localhost:5173",
+      isDestroyed: () => false,
+    };
     const mockWebContents = {
       id: 1,
       url: "http://localhost:5173",
@@ -272,8 +324,12 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     expect(() =>
       IpcBoundary.validateIpcSender({
         sender: { id: 2, isDestroyed: () => false },
-        senderFrame: { parent: null, url: "http://localhost:5173", isDestroyed: () => false },
-      } as any)
+        senderFrame: {
+          parent: null,
+          url: "http://localhost:5173",
+          isDestroyed: () => false,
+        },
+      } as any),
     ).toThrow("caller webContents does not match main window");
 
     // 4. Missing or destroyed sender frame
@@ -281,15 +337,19 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
         senderFrame: null,
-      } as any)
+      } as any),
     ).toThrow("missing or destroyed sender frame");
 
     // 5. Child / iframe caller rejected
     expect(() =>
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
-        senderFrame: { parent: {}, url: "http://localhost:5173", isDestroyed: () => false },
-      } as any)
+        senderFrame: {
+          parent: {},
+          url: "http://localhost:5173",
+          isDestroyed: () => false,
+        },
+      } as any),
     ).toThrow("child frames and subdocuments are not permitted");
 
     // 6. Blank / uninitialized document rejected
@@ -298,7 +358,7 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
         senderFrame: mockMainFrame,
-      } as any)
+      } as any),
     ).toThrow("uninitialized or blank document");
 
     // 7. Unapproved document URL / origin rejected
@@ -307,7 +367,7 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
         senderFrame: mockMainFrame,
-      } as any)
+      } as any),
     ).toThrow("not an approved application document");
     mockMainFrame.url = "http://localhost:5173";
 
@@ -317,7 +377,7 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
       IpcBoundary.validateIpcSender({
         sender: mockWebContents,
         senderFrame: mockMainFrame,
-      } as any)
+      } as any),
     ).toThrow("document has navigated away from active frame URL");
     mockWebContents.getURL = () => "http://localhost:5173";
 
@@ -345,24 +405,56 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     expect(() => validateConfigSet([])).toThrow(IpcValidationError);
 
     // 2. Unapproved runtime fields rejected fail-closed (no blacklist leakage)
-    expect(() => validateConfigSet({ gameDir: "C:\\forbidden" })).toThrow("Unknown or unauthorized settings field");
-    expect(() => validateConfigSet({ gameDirConfigured: true })).toThrow("Unknown or unauthorized settings field");
-    expect(() => validateConfigSet({ token: "leaked_token" })).toThrow("Unknown or unauthorized settings field");
-    expect(() => validateConfigSet({ refreshToken: "leaked_refresh" })).toThrow("Unknown or unauthorized settings field");
-    expect(() => validateConfigSet({ minecraftAccessToken: "leaked_mc" })).toThrow("Unknown or unauthorized settings field");
-    expect(() => validateConfigSet({ sessionPortalUrl: "https://evil.com" })).toThrow("Unknown or unauthorized settings field");
-    expect(() => validateConfigSet({ unexpectedKey: "any" })).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ gameDir: "C:\\forbidden" })).toThrow(
+      "Unknown or unauthorized settings field",
+    );
+    expect(() => validateConfigSet({ gameDirConfigured: true })).toThrow(
+      "Unknown or unauthorized settings field",
+    );
+    expect(() => validateConfigSet({ token: "leaked_token" })).toThrow(
+      "Unknown or unauthorized settings field",
+    );
+    expect(() => validateConfigSet({ refreshToken: "leaked_refresh" })).toThrow(
+      "Unknown or unauthorized settings field",
+    );
+    expect(() =>
+      validateConfigSet({ minecraftAccessToken: "leaked_mc" }),
+    ).toThrow("Unknown or unauthorized settings field");
+    expect(() =>
+      validateConfigSet({ sessionPortalUrl: "https://evil.com" }),
+    ).toThrow("Unknown or unauthorized settings field");
+    expect(() => validateConfigSet({ unexpectedKey: "any" })).toThrow(
+      "Unknown or unauthorized settings field",
+    );
 
     // 3. Schema types enforced
-    expect(() => validateConfigSet({ portalUrl: "" })).toThrow("portalUrl must be a non-empty string");
-    expect(() => validateConfigSet({ portalUrl: 123 as any })).toThrow("portalUrl must be a non-empty string");
-    expect(() => validateConfigSet({ selectedChannel: "invalid" as any })).toThrow("selectedChannel must be one of");
-    expect(() => validateConfigSet({ allocatedRamGb: 1 })).toThrow("allocatedRamGb must be an integer between 2 and 64");
-    expect(() => validateConfigSet({ allocatedRamGb: 65 })).toThrow("allocatedRamGb must be an integer between 2 and 64");
-    expect(() => validateConfigSet({ allocatedRamGb: 4.5 })).toThrow("allocatedRamGb must be an integer between 2 and 64");
-    expect(() => validateConfigSet({ noSync: "false" as any })).toThrow("noSync must be a boolean");
-    expect(() => validateConfigSet({ javaPath: 123 as any })).toThrow("javaPath must be a string");
-    expect(() => validateConfigSet({ javaArgs: 123 as any })).toThrow("javaArgs must be a string");
+    expect(() => validateConfigSet({ portalUrl: "" })).toThrow(
+      "portalUrl must be a non-empty string",
+    );
+    expect(() => validateConfigSet({ portalUrl: 123 as any })).toThrow(
+      "portalUrl must be a non-empty string",
+    );
+    expect(() =>
+      validateConfigSet({ selectedChannel: "invalid" as any }),
+    ).toThrow("selectedChannel must be one of");
+    expect(() => validateConfigSet({ allocatedRamGb: 1 })).toThrow(
+      "allocatedRamGb must be an integer between 2 and 64",
+    );
+    expect(() => validateConfigSet({ allocatedRamGb: 65 })).toThrow(
+      "allocatedRamGb must be an integer between 2 and 64",
+    );
+    expect(() => validateConfigSet({ allocatedRamGb: 4.5 })).toThrow(
+      "allocatedRamGb must be an integer between 2 and 64",
+    );
+    expect(() => validateConfigSet({ noSync: "false" as any })).toThrow(
+      "noSync must be a boolean",
+    );
+    expect(() => validateConfigSet({ javaPath: 123 as any })).toThrow(
+      "javaPath must be a string",
+    );
+    expect(() => validateConfigSet({ javaArgs: 123 as any })).toThrow(
+      "javaArgs must be a string",
+    );
 
     // 4. Approved runtime fields accepted and sanitized
     const sanitized = validateConfigSet({
@@ -446,9 +538,15 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
 
   test("[Phase 3 Gate] Migration: Coexisting protected credentials and legacy plaintext prioritize protected record and scrub plaintext", () => {
     class MockGateSafeStorage {
-      isEncryptionAvailable() { return true; }
-      getSelectedStorageBackend() { return "gnome_libsecret"; }
-      encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
+      isEncryptionAvailable() {
+        return true;
+      }
+      getSelectedStorageBackend() {
+        return "gnome_libsecret";
+      }
+      encryptString(plain: string) {
+        return Buffer.from("ENC:" + plain);
+      }
       decryptString(buf: Buffer) {
         const s = buf.toString("utf-8");
         if (!s.startsWith("ENC:")) throw new Error("Invalid ciphertext");
@@ -460,13 +558,20 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
     CredentialStore.setCustomUserDataDirForTesting(userDataDir);
 
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({
-      portalUrl: "https://dev.lampas.town",
-      sessionPortalUrl: "https://dev.lampas.town",
-      token: "legacy-plaintext-token",
-      refreshToken: "legacy-plaintext-refresh",
-      minecraftAccessToken: "legacy-plaintext-mc",
-    }, null, 2));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          portalUrl: "https://dev.lampas.town",
+          sessionPortalUrl: "https://dev.lampas.town",
+          token: "legacy-plaintext-token",
+          refreshToken: "legacy-plaintext-refresh",
+          minecraftAccessToken: "legacy-plaintext-mc",
+        },
+        null,
+        2,
+      ),
+    );
 
     CredentialStore.saveCredentials({
       version: 1,
@@ -479,11 +584,16 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
 
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
 
     expect(outcome.protectedLoaded).toBe(true);
     expect(outcome.legacyScrubbed).toBe(true);
-    expect(SessionManager.getCredentials()?.token).toBe("protected-store-token");
+    expect(SessionManager.getCredentials()?.token).toBe(
+      "protected-store-token",
+    );
 
     const onDisk = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(onDisk.token).toBeUndefined();
@@ -493,25 +603,40 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
 
   test("[Phase 3 Gate] Migration: Interrupted migration crash boundary recovers on restart and scrubs plaintext", () => {
     class MockGateSafeStorage {
-      isEncryptionAvailable() { return true; }
-      getSelectedStorageBackend() { return "gnome_libsecret"; }
-      encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
+      isEncryptionAvailable() {
+        return true;
+      }
+      getSelectedStorageBackend() {
+        return "gnome_libsecret";
+      }
+      encryptString(plain: string) {
+        return Buffer.from("ENC:" + plain);
+      }
       decryptString(buf: Buffer) {
         const s = buf.toString("utf-8");
         if (!s.startsWith("ENC:")) throw new Error("Invalid ciphertext");
         return s.slice(4);
       }
     }
-    CredentialStore.setSafeStorageMockForTesting(new MockGateSafeStorage() as any);
+    CredentialStore.setSafeStorageMockForTesting(
+      new MockGateSafeStorage() as any,
+    );
     CredentialStore.setCustomUserDataDirForTesting(userDataDir);
 
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({
-      portalUrl: "https://dev.lampas.town",
-      sessionPortalUrl: "https://dev.lampas.town",
-      token: "leftover-plaintext-token",
-      refreshToken: "leftover-plaintext-refresh",
-    }, null, 2));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          portalUrl: "https://dev.lampas.town",
+          sessionPortalUrl: "https://dev.lampas.town",
+          token: "leftover-plaintext-token",
+          refreshToken: "leftover-plaintext-refresh",
+        },
+        null,
+        2,
+      ),
+    );
 
     CredentialStore.saveCredentials({
       version: 1,
@@ -524,11 +649,16 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
 
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
 
     expect(outcome.legacyScrubbed).toBe(true);
     expect(outcome.protectedLoaded).toBe(true);
-    expect(SessionManager.getCredentials()?.token).toBe("protected-interrupted-token");
+    expect(SessionManager.getCredentials()?.token).toBe(
+      "protected-interrupted-token",
+    );
 
     const diskRaw = fs.readFileSync(configPath, "utf-8");
     expect(diskRaw).not.toContain("leftover-plaintext-token");
@@ -536,28 +666,48 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
 
   test("[Phase 3 Gate] Migration: Failed protected record load with legacy plaintext fails closed and scrubs disk without restoring session", () => {
     class MockGateSafeStorage {
-      isEncryptionAvailable() { return true; }
-      getSelectedStorageBackend() { return "gnome_libsecret"; }
-      encryptString(plain: string) { return Buffer.from("ENC:" + plain); }
-      decryptString() { throw new Error("Decryption hardware key revoked"); }
+      isEncryptionAvailable() {
+        return true;
+      }
+      getSelectedStorageBackend() {
+        return "gnome_libsecret";
+      }
+      encryptString(plain: string) {
+        return Buffer.from("ENC:" + plain);
+      }
+      decryptString() {
+        throw new Error("Decryption hardware key revoked");
+      }
     }
-    CredentialStore.setSafeStorageMockForTesting(new MockGateSafeStorage() as any);
+    CredentialStore.setSafeStorageMockForTesting(
+      new MockGateSafeStorage() as any,
+    );
     CredentialStore.setCustomUserDataDirForTesting(userDataDir);
 
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({
-      portalUrl: "https://dev.lampas.town",
-      sessionPortalUrl: "https://dev.lampas.town",
-      token: "untrusted-resurrect-token",
-      refreshToken: "untrusted-resurrect-refresh",
-    }, null, 2));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          portalUrl: "https://dev.lampas.town",
+          sessionPortalUrl: "https://dev.lampas.town",
+          token: "untrusted-resurrect-token",
+          refreshToken: "untrusted-resurrect-refresh",
+        },
+        null,
+        2,
+      ),
+    );
 
     const credFile = CredentialStore.getCredentialsFilePath();
     fs.writeFileSync(credFile, Buffer.from("ENC:CORRUPT_OR_KEY_REVOKED"));
 
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
 
     expect(SessionManager.isAuthenticated()).toBe(false);
     expect(SessionManager.getCredentials()).toBeNull();
@@ -572,8 +722,12 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
   test("[Phase 3 Gate] Persistence & Deletion: SaveCredentialsResult and ClearCredentialsResult report explicit outcomes and failure handling", () => {
     class MockGateSafeStorage {
       failEncrypt = false;
-      isEncryptionAvailable() { return true; }
-      getSelectedStorageBackend() { return "gnome_libsecret"; }
+      isEncryptionAvailable() {
+        return true;
+      }
+      getSelectedStorageBackend() {
+        return "gnome_libsecret";
+      }
       encryptString(plain: string) {
         if (this.failEncrypt) throw new Error("Simulated storage write error");
         return Buffer.from("ENC:" + plain);
@@ -637,7 +791,9 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
       minecraftUsername: "AliceMC",
     });
 
-    expect(SessionManager.getCredentials()?.minecraftAccessToken).toBe("mc-token-acc-1");
+    expect(SessionManager.getCredentials()?.minecraftAccessToken).toBe(
+      "mc-token-acc-1",
+    );
     expect(SessionManager.getCurrentRecord()?.portalAccountId).toBe("acc-1");
 
     // 2. Switch to Account 2 without supplying optional tokens
@@ -688,8 +844,18 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
     };
 
     // 1. Same origin, account, epoch share single in-flight Promise
-    const p1 = SessionManager.getCoalescedRefresh("https://dev.lampas.town", "user-coalesce-1", currentEpoch, mockWorker);
-    const p2 = SessionManager.getCoalescedRefresh("https://dev.lampas.town", "user-coalesce-1", currentEpoch, mockWorker);
+    const p1 = SessionManager.getCoalescedRefresh(
+      "https://dev.lampas.town",
+      "user-coalesce-1",
+      currentEpoch,
+      mockWorker,
+    );
+    const p2 = SessionManager.getCoalescedRefresh(
+      "https://dev.lampas.town",
+      "user-coalesce-1",
+      currentEpoch,
+      mockWorker,
+    );
 
     expect(p1).toBe(p2);
     const [res1, res2] = await Promise.all([p1, p2]);
@@ -702,7 +868,12 @@ describe("Phase 3 Regression Gate — Keyring / Session Store & Race-Safe Auth (
     const newEpoch = SessionManager.getSessionEpoch();
     expect(newEpoch).not.toBe(currentEpoch);
 
-    const p3 = SessionManager.getCoalescedRefresh("https://dev.lampas.town", "user-coalesce-1", newEpoch, mockWorker);
+    const p3 = SessionManager.getCoalescedRefresh(
+      "https://dev.lampas.town",
+      "user-coalesce-1",
+      newEpoch,
+      mockWorker,
+    );
     expect(p3).not.toBe(p1);
     await p3;
     expect(invocationCount).toBe(2);
@@ -742,29 +913,51 @@ describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recover
 
   test("[Phase 4 Gate] Operation-level: Client sync pipeline blocks unauthorized file mutations in protected paths", async () => {
     // 1. Mock portal serving malicious manifest attempting mutation of protected path 'saves/stolen-world.txt'
-    const mockHash = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const mockHash =
+      "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
     const server = Bun.serve({
       port: 0,
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ version: "2.5.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.5.0",
+            release: "/api/v1/releases/2.5.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.5.0") {
-          return Response.json({ version: "2.5.0" });
-        }
-        if (url.pathname === "/api/v1/releases/2.5.0/client-manifest") {
           return Response.json({
-            pack: "Lampas Malicious Pack",
+            schemaVersion: 1,
+            pack: "Lampas 2",
             version: "2.5.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.5.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.5.0/server-manifest",
+          });
+        }
+        if (url.pathname === "/api/v1/releases/2.5.0/client-manifest") {
+          return Response.json({
+            schemaVersion: 2,
+            pack: "Lampas 2",
+            version: "2.5.0",
+            target: "client",
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [
               {
                 path: "saves/stolen-world.txt",
                 hashes: { sha256: mockHash },
                 size: 10,
-                download: { url: `/api/v1/blobs/${mockHash}` },
+                download: {
+                  url: `/api/v1/blobs/${mockHash}`,
+                  provider: "lampas",
+                },
                 policy: "MANAGED",
               },
             ],
@@ -777,23 +970,36 @@ describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recover
 
     try {
       ConfigManager.set({ gameDir, selectedChannel: "stable" });
-      ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "gate-token-123" });
+      ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+        token: "gate-token-123",
+      });
 
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-        /targets protected or reserved namespace/
+        /protected namespace/,
       );
 
       // Verify negative invariant: protected path was never written to on disk
-      expect(fs.existsSync(path.join(gameDir, "saves", "stolen-world.txt"))).toBe(false);
+      expect(
+        fs.existsSync(path.join(gameDir, "saves", "stolen-world.txt")),
+      ).toBe(false);
     } finally {
       server.stop(true);
     }
   });
 
   test("[Phase 4 Gate] Operation-level: Move recovery rejects unverified staging paths outside approved launcher staging", async () => {
-    const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-staging-"));
-    const outsideVictimFile = path.join(outsideVictimDir, "important-user-document.txt");
-    fs.writeFileSync(outsideVictimFile, "vital-user-data-do-not-delete", "utf-8");
+    const outsideVictimDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "lampas-victim-staging-"),
+    );
+    const outsideVictimFile = path.join(
+      outsideVictimDir,
+      "important-user-document.txt",
+    );
+    fs.writeFileSync(
+      outsideVictimFile,
+      "vital-user-data-do-not-delete",
+      "utf-8",
+    );
 
     const journalPath = path.join(userDataDir, "directory-move.json");
     const unverifiedJournal = {
@@ -805,21 +1011,31 @@ describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recover
       staging: outsideVictimDir,
       startTime: new Date().toISOString(),
     };
-    fs.writeFileSync(journalPath, JSON.stringify(unverifiedJournal, null, 2), "utf-8");
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify(unverifiedJournal, null, 2),
+      "utf-8",
+    );
 
     try {
       ConfigManager.set({ gameDir });
-      await GameDirectoryManager.recoverInterruptedMove();
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/quarantined/i);
 
       // Journal must be quarantined, not executed
       expect(fs.existsSync(journalPath)).toBe(false);
-      const quarantined = fs.readdirSync(userDataDir).filter((f: string) => f.startsWith("directory-move.json.quarantine."));
+      const quarantined = fs
+        .readdirSync(userDataDir)
+        .filter((f: string) => f.startsWith("directory-move.json.quarantine."));
       expect(quarantined.length).toBeGreaterThan(0);
 
       // Target invariant: victim directory and data outside launcher staging remain intact
       expect(fs.existsSync(outsideVictimDir)).toBe(true);
       expect(fs.existsSync(outsideVictimFile)).toBe(true);
-      expect(fs.readFileSync(outsideVictimFile, "utf-8")).toBe("vital-user-data-do-not-delete");
+      expect(fs.readFileSync(outsideVictimFile, "utf-8")).toBe(
+        "vital-user-data-do-not-delete",
+      );
     } finally {
       if (fs.existsSync(outsideVictimDir)) {
         fs.rmSync(outsideVictimDir, { recursive: true, force: true });
@@ -829,22 +1045,151 @@ describe("Phase 4 Regression Gate — Path Ownership, Containment & Safe Recover
 });
 
 describe("Phase 5 Regression Gate — Integrity Checks Fail Closed & Fallback Policy (SEC-06, SEC-07, SEC-11)", () => {
-  test.todo("[Phase 5 Gate] Operation-level: FabricMetaResolver fails closed when sidecar checksum resolution fails");
-  test.todo("[Phase 5 Gate] Operation-level: syncClient does not swallow 410 REVOKED releases into local pipeline fallback");
+  test("[Phase 5 Gate] Operation-level: FabricMetaResolver fails closed when sidecar checksum resolution fails", async () => {
+    const runtime = {
+      minecraft: "26.2",
+      loader: { type: "fabric" as const, version: "0.19.3" },
+    };
+    const fetchFn = async (input: string | URL | Request) => {
+      const url = input.toString();
+      if (url.endsWith(".sha256") || url.endsWith(".sha1")) {
+        return new Response("Not Found", { status: 404 });
+      }
+      return Response.json({
+        loader: {
+          maven: "net.fabricmc:fabric-loader:0.19.3",
+          version: "0.19.3",
+        },
+        intermediary: {
+          maven: "net.fabricmc:intermediary:26.2",
+          version: "26.2",
+        },
+        launcherMeta: {
+          libraries: {
+            common: [{ name: "net.fabricmc:sponge-mixin:0.15.3+mixin.0.8.7" }],
+            client: [],
+          },
+          mainClass: {
+            client: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+          },
+        },
+      });
+    };
+
+    await expect(
+      FabricMetaResolver.resolveFabricRuntime(runtime, undefined, { fetchFn }),
+    ).rejects.toThrow(/missing an expected SHA-1 or SHA-256 checksum/i);
+  });
+  test("[Phase 5 Gate] Operation-level: syncClient does not swallow 410 REVOKED releases into local pipeline fallback", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/v1/channels/stable") {
+          return Response.json({
+            channel: "stable",
+            version: "9.9.9",
+            release: "/api/v1/releases/9.9.9",
+          });
+        }
+        if (url.pathname === "/api/v1/releases/9.9.9") {
+          return new Response(
+            JSON.stringify({ error: "revoked", status: "REVOKED" }),
+            { status: 410 },
+          );
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+    try {
+      ConfigManager.set({ gameDir, selectedChannel: "stable" });
+      ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+        token: "gate-token-410",
+      });
+      await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
+        /REVOKED/,
+      );
+      expect(
+        fs.existsSync(path.join(gameDir, ".lampas", "installation.json")),
+      ).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 describe("Phase 6 Regression Gate — Log Minimization & Redaction (SEC-09, SEC-10)", () => {
-  test.skip("[Phase 6 Gate] Redaction helper: LauncherLoggerService.sanitize redacts underscore credential keys and URL query codes", () => {
+  test("[Phase 6 Gate] Redaction helper: LauncherLoggerService.sanitize redacts underscore credential keys and URL query codes", () => {
     // Target invariant:
     // Underscore fields (refresh_token, access_token) and URL query secrets (?code=..., ?token=...) must be redacted.
-    expect(LauncherLoggerService.sanitize('{"refresh_token": "secret123"}')).toContain("[REDACTED]");
-    expect(LauncherLoggerService.sanitize('https://auth.town/callback?code=secret123')).toContain("[REDACTED]");
-    expect(LauncherLoggerService.sanitize('--accessToken secret123')).toContain("[REDACTED]");
+    expect(
+      LauncherLoggerService.sanitize('{"refresh_token": "secret123"}'),
+    ).toContain("[REDACTED]");
+    expect(
+      LauncherLoggerService.sanitize(
+        "https://auth.town/callback?code=secret123",
+      ),
+    ).not.toContain("secret123");
+    expect(LauncherLoggerService.sanitize("--accessToken secret123")).toContain(
+      "[REDACTED]",
+    );
   });
 
-  test.todo("[Phase 6 Gate] Operation-level: ProcessLogFramer sanitizes bounded records before truncation");
+  test("[Phase 6 Gate] Operation-level: ProcessLogFramer discards oversized raw records", async () => {
+    const { ProcessLogFramer } = await import("../src/game-log-stream");
+    const output: string[] = [];
+    const framer = new ProcessLogFramer(
+      "INFO",
+      (entry) => output.push(entry.message),
+      { maxLineLength: 64 },
+    );
+    framer.pushChunk('{"access_token":"' + "secret".repeat(30));
+    framer.pushChunk('"}\n');
+    framer.finishOnce();
+    expect(output).toEqual(["[Oversized log record discarded]"]);
+  });
 });
 
 describe("Phase 7 Regression Gate — Release Pipeline, Artifact Signing & CI Controls (SEC-12)", () => {
-  test.todo("[Phase 7 Gate] Operation-level: Production release workflow enforces signed checksum manifests and build provenance");
+  test("[Phase 7 Gate] Release publication requires validated builds, signatures, checksums and provenance", async () => {
+    const { parse } = await import("yaml");
+    const workflow = parse(
+      fs.readFileSync(
+        path.resolve(__dirname, "../.github/workflows/release-pack.yml"),
+        "utf8",
+      ),
+    );
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.release.needs).toBe("build");
+    const steps = workflow.jobs.build.steps;
+    expect(
+      steps.find((step: any) => step.uses?.startsWith("actions/checkout@"))
+        .with,
+    ).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
+    expect(steps.some((step: any) => step.run === "bun test")).toBe(true);
+    expect(
+      steps.some(
+        (step: any) =>
+          step.run?.includes("Get-AuthenticodeSignature") &&
+          step.run.includes("throw"),
+      ),
+    ).toBe(true);
+    const release = workflow.jobs.release.steps;
+    expect(
+      release.findIndex((step: any) => step.run?.includes("sha256sum --check")),
+    ).toBeLessThan(
+      release.findIndex((step: any) =>
+        step.uses?.startsWith("softprops/action-gh-release@"),
+      ),
+    );
+    expect(
+      release.some((step: any) =>
+        step.uses?.startsWith("actions/attest-build-provenance@"),
+      ),
+    ).toBe(true);
+    for (const job of Object.values(workflow.jobs) as any[])
+      for (const step of job.steps) {
+        if (step.uses) expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
+      }
+  });
 });

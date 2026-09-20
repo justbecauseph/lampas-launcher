@@ -1,4 +1,13 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -59,17 +68,28 @@ let normalizePathKey: any;
 let GameDirectoryManager: any;
 let validateMoveJournal: any;
 let MOVE_RECEIPT_FILENAME: any;
+let STAGING_MARKER_FILENAME: any;
+let RECOVERY_HOLD_FILENAME: any;
 let writeStagingMarker: any;
+let classifyMoveMetadata: any;
+let quarantineJournal: any;
 let ClientModManager: any;
 let LauncherSync: any;
 let reconcileRequiredResourcePacks: any;
 let reconcileConfigPatches: any;
+let OperationCoordinator: any;
+let replaceFile: any;
+let replaceFileSync: any;
 
 class MockSafeStorage {
   available = true;
   failEncrypt = false;
-  isEncryptionAvailable() { return this.available; }
-  getSelectedStorageBackend() { return process.platform === "win32" ? "windows_dpapi" : "gnome_libsecret"; }
+  isEncryptionAvailable() {
+    return this.available;
+  }
+  getSelectedStorageBackend() {
+    return process.platform === "win32" ? "windows_dpapi" : "gnome_libsecret";
+  }
   encryptString(plain: string) {
     if (this.failEncrypt) throw new Error("Disk full / encrypt failed");
     return Buffer.from("ENC:" + plain);
@@ -116,7 +136,11 @@ beforeAll(async () => {
   GameDirectoryManager = gameDirMod.GameDirectoryManager;
   validateMoveJournal = gameDirMod.validateMoveJournal;
   MOVE_RECEIPT_FILENAME = gameDirMod.MOVE_RECEIPT_FILENAME;
+  STAGING_MARKER_FILENAME = gameDirMod.STAGING_MARKER_FILENAME;
+  RECOVERY_HOLD_FILENAME = gameDirMod.RECOVERY_HOLD_FILENAME;
   writeStagingMarker = gameDirMod.writeStagingMarker;
+  classifyMoveMetadata = gameDirMod.classifyMoveMetadata;
+  quarantineJournal = gameDirMod.quarantineJournal;
 
   const clientModsMod = await import("../src/client-mods");
   ClientModManager = clientModsMod.ClientModManager;
@@ -129,6 +153,13 @@ beforeAll(async () => {
 
   const cfgPatchMod = await import("../src/config-patches/reconciler");
   reconcileConfigPatches = cfgPatchMod.reconcileConfigPatches;
+
+  const opsMod = await import("../src/operations");
+  OperationCoordinator = opsMod.OperationCoordinator;
+
+  const ftMod = await import("../src/file-transfer");
+  replaceFile = ftMod.replaceFile;
+  replaceFileSync = ftMod.replaceFileSync;
 });
 
 beforeEach(() => {
@@ -137,6 +168,7 @@ beforeEach(() => {
   SessionManager?.resetForTesting();
   ConfigManager?.resetForTesting();
   GameDirectoryManager?.resetForTesting();
+  OperationCoordinator?.resetForTesting();
   CredentialStore?.setSafeStorageMockForTesting(new MockSafeStorage() as any);
   CredentialStore?.setCustomUserDataDirForTesting(userDataDir);
 });
@@ -156,7 +188,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     LauncherAuth.cancelLogin();
     expect(LauncherAuth.activeLoginContext).toBeNull();
-    await expect(loginPromise1).rejects.toThrow("Authentication cancelled by user");
+    await expect(loginPromise1).rejects.toThrow(
+      "Authentication cancelled by user",
+    );
 
     // 2. Supersession path
     const loginPromise2 = LauncherAuth.loginWithPortal();
@@ -231,12 +265,15 @@ describe("Phase 3 Failure Path Reproductions", () => {
     CredentialStore.setSafeStorageMockForTesting(mockStorage as any);
 
     // When save fails, establishNewSession must clean up disk so Account A does NOT resurrect
-    const result = SessionManager.establishNewSession("https://dev.lampas.town", {
-      token: "token-acc-b",
-      refreshToken: "refresh-acc-b",
-      portalAccountId: "acc-b",
-      portalUsername: "Bob",
-    });
+    const result = SessionManager.establishNewSession(
+      "https://dev.lampas.town",
+      {
+        token: "token-acc-b",
+        refreshToken: "refresh-acc-b",
+        portalAccountId: "acc-b",
+        portalUsername: "Bob",
+      },
+    );
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -252,12 +289,19 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce: Duplicate encrypted and plaintext records prioritize protected record and scrub plaintext", () => {
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({
-      portalUrl: "https://dev.lampas.town",
-      sessionPortalUrl: "https://dev.lampas.town",
-      token: "plaintext-token-old",
-      refreshToken: "plaintext-refresh-old",
-    }, null, 2));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          portalUrl: "https://dev.lampas.town",
+          sessionPortalUrl: "https://dev.lampas.town",
+          token: "plaintext-token-old",
+          refreshToken: "plaintext-refresh-old",
+        },
+        null,
+        2,
+      ),
+    );
 
     CredentialStore.saveCredentials({
       version: 1,
@@ -270,11 +314,16 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
 
     expect(outcome.protectedLoaded).toBe(true);
     expect(outcome.legacyScrubbed).toBe(true);
-    expect(SessionManager.getCredentials()?.token).toBe("encrypted-token-active");
+    expect(SessionManager.getCredentials()?.token).toBe(
+      "encrypted-token-active",
+    );
 
     const onDisk = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(onDisk.token).toBeUndefined();
@@ -283,41 +332,62 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce: Scrub-write failure on config.json is tracked and retried on restart", () => {
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({
-      portalUrl: "https://dev.lampas.town",
-      sessionPortalUrl: "https://dev.lampas.town",
-      token: "plaintext-scrub-target",
-    }, null, 2));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          portalUrl: "https://dev.lampas.town",
+          sessionPortalUrl: "https://dev.lampas.town",
+          token: "plaintext-scrub-target",
+        },
+        null,
+        2,
+      ),
+    );
 
     // Simulate write error when attempting to scrub config.json
-    const origWrite = fs.writeFileSync.bind(fs);
+    const origOpen = fs.openSync.bind(fs);
     let failScrub = true;
-    const writeSpy = spyOn(fs, "writeFileSync").mockImplementation((p: any, data: any, opts: any) => {
+    const openSpy = spyOn(fs, "openSync").mockImplementation(((
+      p: any,
+      flags: any,
+      mode?: any,
+    ) => {
       if (failScrub && p.toString().includes("config.json")) {
         const err: any = new Error("EPERM: permission denied");
         err.code = "EPERM";
         throw err;
       }
-      return origWrite(p, data, opts);
-    });
+      return origOpen(p, flags, mode);
+    }) as any);
 
     try {
       SessionManager.resetForTesting();
-      const outcome1 = SessionManager.initialize(configPath, "https://dev.lampas.town");
+      const outcome1 = SessionManager.initialize(
+        configPath,
+        "https://dev.lampas.town",
+      );
       expect(outcome1.legacyScrubbed).toBe(false);
       expect(outcome1.error).toContain("EPERM");
 
       // Disk still has plaintext because scrub failed
-      expect(fs.readFileSync(configPath, "utf-8")).toContain("plaintext-scrub-target");
+      expect(fs.readFileSync(configPath, "utf-8")).toContain(
+        "plaintext-scrub-target",
+      );
 
       // Restart: Write permission is restored
       failScrub = false;
       SessionManager.resetForTesting();
-      const outcome2 = SessionManager.initialize(configPath, "https://dev.lampas.town");
+      const outcome2 = SessionManager.initialize(
+        configPath,
+        "https://dev.lampas.town",
+      );
       expect(outcome2.legacyScrubbed).toBe(true);
-      expect(fs.readFileSync(configPath, "utf-8")).not.toContain("plaintext-scrub-target");
+      expect(fs.readFileSync(configPath, "utf-8")).not.toContain(
+        "plaintext-scrub-target",
+      );
     } finally {
-      writeSpy.mockRestore();
+      openSpy.mockRestore();
     }
   });
 
@@ -333,7 +403,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
       minecraftUsername: "AliceMC",
     });
 
-    expect(SessionManager.getCredentials()?.minecraftAccessToken).toBe("mc-token-acc-a-secret");
+    expect(SessionManager.getCredentials()?.minecraftAccessToken).toBe(
+      "mc-token-acc-a-secret",
+    );
 
     // 2. Account B logs in without minecraftAccessToken
     SessionManager.establishNewSession("https://dev.lampas.town", {
@@ -379,7 +451,10 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce Defect 1: Persist A, restart with provider unavailable, establish B in session-only mode, restore provider and restart — A must not resurrect", () => {
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({ portalUrl: "https://dev.lampas.town" }));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ portalUrl: "https://dev.lampas.town" }),
+    );
 
     // Step 1: Persist A
     const mockStorage = new MockSafeStorage();
@@ -423,7 +498,10 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce Defect 1b: When unlink, overwrite, and marker creation all fail during replacement, replacement account B must NOT be published", () => {
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({ portalUrl: "https://dev.lampas.town" }));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ portalUrl: "https://dev.lampas.town" }),
+    );
 
     // Step 1: Persist Account A
     const mockStorage = new MockSafeStorage();
@@ -457,14 +535,20 @@ describe("Phase 3 Failure Path Reproductions", () => {
       return origUnlink(p);
     });
 
-    const writeSpy = spyOn(fs, "writeFileSync").mockImplementation((p: any, data: any, opts: any) => {
-      if (simulateCatastrophe && (p.toString().includes("credentials.enc") || p.toString().includes("credentials.invalidated"))) {
-        const err: any = new Error("EPERM: disk write protected");
-        err.code = "EPERM";
-        throw err;
-      }
-      return origWrite(p, data, opts);
-    });
+    const writeSpy = spyOn(fs, "writeFileSync").mockImplementation(
+      (p: any, data: any, opts: any) => {
+        if (
+          simulateCatastrophe &&
+          (p.toString().includes("credentials.enc") ||
+            p.toString().includes("credentials.invalidated"))
+        ) {
+          const err: any = new Error("EPERM: disk write protected");
+          err.code = "EPERM";
+          throw err;
+        }
+        return origWrite(p, data, opts);
+      },
+    );
 
     try {
       // Step 4: Clear credentials directly under catastrophe -> durablyInvalidated must be FALSE
@@ -533,7 +617,10 @@ describe("Phase 3 Failure Path Reproductions", () => {
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({ portalUrl: "https://dev.lampas.town" }));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ portalUrl: "https://dev.lampas.town" }),
+    );
     SessionManager.initialize(configPath, "https://dev.lampas.town");
     const restoredUser = SessionManager.getCurrentUser();
     expect(restoredUser?.id).toBe("portal-id-789");
@@ -578,23 +665,25 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     // 3. Token exchange rejection for literal 'player' username
     const origFetch = globalThis.fetch;
-    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
-      if (url.toString().includes("/api/v1/auth/exchange")) {
-        return new Response(
-          JSON.stringify({
-            token: "syn-token-exchange",
-            user: {
-              id: "user-legit-id",
-              name: "player", // Rejected synthetic identity
-              minecraftUuid: "11111111-1111-1111-1111-111111111111",
-              minecraftUsername: "PlayerMC",
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-      return origFetch(url, init);
-    });
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      async (url: any, init: any) => {
+        if (url.toString().includes("/api/v1/auth/exchange")) {
+          return new Response(
+            JSON.stringify({
+              token: "syn-token-exchange",
+              user: {
+                id: "user-legit-id",
+                name: "player", // Rejected synthetic identity
+                minecraftUuid: "11111111-1111-1111-1111-111111111111",
+                minecraftUsername: "PlayerMC",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return origFetch(url, init);
+      },
+    );
 
     try {
       SessionManager.clearSession();
@@ -646,18 +735,28 @@ describe("Phase 3 Failure Path Reproductions", () => {
   test("Reproduce Defect 3: Malformed legacy data is ineligible without bypassing cleanup; preserves settings", () => {
     CredentialStore.clearCredentials();
     const configPath = path.join(userDataDir, "config.json");
-    fs.writeFileSync(configPath, JSON.stringify({
-      portalUrl: "https://dev.lampas.town",
-      sessionPortalUrl: ":::not-a-valid-url:::", // Malformed URL throws in normalizePortalUrl
-      token: 12345, // Malformed non-string token
-      refreshToken: true,
-      ram: 6,
-      gameDir: "C:\\CustomGames",
-    }, null, 2));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          portalUrl: "https://dev.lampas.town",
+          sessionPortalUrl: ":::not-a-valid-url:::", // Malformed URL throws in normalizePortalUrl
+          token: 12345, // Malformed non-string token
+          refreshToken: true,
+          ram: 6,
+          gameDir: "C:\\CustomGames",
+        },
+        null,
+        2,
+      ),
+    );
 
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
 
     // Legacy data is ineligible
     expect(outcome.migrated).toBe(false);
@@ -686,7 +785,10 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
 
     expect(outcome.legacyPlaintextDetected).toBe(true);
     expect(outcome.legacyScrubbed).toBe(true);
@@ -700,16 +802,26 @@ describe("Phase 3 Failure Path Reproductions", () => {
     expect(parsed.token).toBeUndefined();
 
     // Case 2: Present-but-falsy secret fields (e.g. token: "") must be detected and scrubbed
-    fs.writeFileSync(configPath, JSON.stringify({
-      allocatedRamGb: 6,
-      portalUrl: "https://dev.lampas.town",
-      token: "", // present-but-falsy
-      refreshToken: false, // present-but-falsy
-    }, null, 2));
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(
+        {
+          allocatedRamGb: 6,
+          portalUrl: "https://dev.lampas.town",
+          token: "", // present-but-falsy
+          refreshToken: false, // present-but-falsy
+        },
+        null,
+        2,
+      ),
+    );
 
     SessionManager.resetForTesting();
     ConfigManager.resetForTesting();
-    const outcome2 = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome2 = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
     expect(outcome2.legacyPlaintextDetected).toBe(true);
     expect(outcome2.legacyScrubbed).toBe(true);
 
@@ -722,7 +834,11 @@ describe("Phase 3 Failure Path Reproductions", () => {
   test("Reproduce Defect 4: Short write and invalidation marker persistence contract", () => {
     // 1. Invalidation marker exists and cannot be unlinked -> saveCredentials must NOT report success!
     const markerPath = CredentialStore.getInvalidationMarkerPath();
-    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now() }), "utf-8");
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({ invalidatedAt: Date.now() }),
+      "utf-8",
+    );
 
     const origUnlink = fs.unlinkSync.bind(fs);
     const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((p: any) => {
@@ -748,17 +864,21 @@ describe("Phase 3 Failure Path Reproductions", () => {
       expect(result.error).toBeDefined();
     } finally {
       unlinkSpy.mockRestore();
-      try { fs.unlinkSync(markerPath); } catch {}
+      try {
+        fs.unlinkSync(markerPath);
+      } catch {}
     }
   });
 
   test("Reproduce Defect 4b: Independent write failure path unlinks temp and fails cleanly", () => {
     const origWrite = fs.writeSync.bind(fs);
-    const writeSpy = spyOn(fs, "writeSync").mockImplementation((...args: any[]) => {
-      const err: any = new Error("EIO: I/O error during write");
-      err.code = "EIO";
-      throw err;
-    });
+    const writeSpy = spyOn(fs, "writeSync").mockImplementation(
+      (...args: any[]) => {
+        const err: any = new Error("EIO: I/O error during write");
+        err.code = "EIO";
+        throw err;
+      },
+    );
 
     try {
       const result = CredentialStore.saveCredentials({
@@ -782,11 +902,13 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce Defect 4c: Independent flush failure path unlinks temp and fails cleanly", () => {
     const origFsync = fs.fsyncSync.bind(fs);
-    const fsyncSpy = spyOn(fs, "fsyncSync").mockImplementation((...args: any[]) => {
-      const err: any = new Error("EIO: I/O error during fsync");
-      err.code = "EIO";
-      throw err;
-    });
+    const fsyncSpy = spyOn(fs, "fsyncSync").mockImplementation(
+      (...args: any[]) => {
+        const err: any = new Error("EIO: I/O error during fsync");
+        err.code = "EIO";
+        throw err;
+      },
+    );
 
     try {
       const result = CredentialStore.saveCredentials({
@@ -810,14 +932,16 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce Defect 4d: Independent rename failure path unlinks temp and fails cleanly", () => {
     const origRename = fs.renameSync.bind(fs);
-    const renameSpy = spyOn(fs, "renameSync").mockImplementation((oldP: any, newP: any) => {
-      if (oldP.toString().includes("credentials.enc.tmp")) {
-        const err: any = new Error("EBUSY: resource busy or locked");
-        err.code = "EBUSY";
-        throw err;
-      }
-      return origRename(oldP, newP);
-    });
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation(
+      (oldP: any, newP: any) => {
+        if (oldP.toString().includes("credentials.enc.tmp")) {
+          const err: any = new Error("EBUSY: resource busy or locked");
+          err.code = "EBUSY";
+          throw err;
+        }
+        return origRename(oldP, newP);
+      },
+    );
 
     try {
       const result = CredentialStore.saveCredentials({
@@ -872,26 +996,28 @@ describe("Phase 3 Failure Path Reproductions", () => {
     let exchangeStarted = false;
     let exchangeDone = false;
 
-    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
-      if (url.toString().includes("/api/v1/auth/exchange")) {
-        exchangeStarted = true;
-        await barrierPromise;
-        exchangeDone = true;
-        return new Response(
-          JSON.stringify({
-            token: "late-token-should-not-publish",
-            user: {
-              id: "late-user-id",
-              name: "LateUser",
-              minecraftUuid: "11111111-1111-1111-1111-111111111111",
-              minecraftUsername: "LateUserMC",
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-      return origFetch(url, init);
-    });
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      async (url: any, init: any) => {
+        if (url.toString().includes("/api/v1/auth/exchange")) {
+          exchangeStarted = true;
+          await barrierPromise;
+          exchangeDone = true;
+          return new Response(
+            JSON.stringify({
+              token: "late-token-should-not-publish",
+              user: {
+                id: "late-user-id",
+                name: "LateUser",
+                minecraftUuid: "11111111-1111-1111-1111-111111111111",
+                minecraftUsername: "LateUserMC",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return origFetch(url, init);
+      },
+    );
 
     try {
       // Start login flow with error capture
@@ -962,25 +1088,27 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     let exchangeStarted = false;
     const origFetch = globalThis.fetch;
-    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
-      if (url.toString().includes("/api/v1/auth/exchange")) {
-        exchangeStarted = true;
-        await barrierPromise;
-        return new Response(
-          JSON.stringify({
-            token: "timed-out-token-should-not-publish",
-            user: {
-              id: "timed-out-user-id",
-              name: "TimedOutUser",
-              minecraftUuid: "22222222-2222-2222-2222-222222222222",
-              minecraftUsername: "TimedOutMC",
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-      return origFetch(url, init);
-    });
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      async (url: any, init: any) => {
+        if (url.toString().includes("/api/v1/auth/exchange")) {
+          exchangeStarted = true;
+          await barrierPromise;
+          return new Response(
+            JSON.stringify({
+              token: "timed-out-token-should-not-publish",
+              user: {
+                id: "timed-out-user-id",
+                name: "TimedOutUser",
+                minecraftUuid: "22222222-2222-2222-2222-222222222222",
+                minecraftUsername: "TimedOutMC",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return origFetch(url, init);
+      },
+    );
 
     try {
       let loginErr: any = null;
@@ -1049,42 +1177,45 @@ describe("Phase 3 Failure Path Reproductions", () => {
     let exchangeBStarted = false;
     const origFetch = globalThis.fetch;
 
-    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (url: any, init: any) => {
-      if (url.toString().includes("/api/v1/auth/exchange")) {
-        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
-        if (body.code === "code-A") {
-          exchangeAStarted = true;
-          await barrierPromiseA;
-          return new Response(
-            JSON.stringify({
-              token: "token-A-superseded",
-              user: {
-                id: "user-A",
-                name: "UserA",
-                minecraftUuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                minecraftUsername: "UserAMC",
-              },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          );
-        } else if (body.code === "code-B") {
-          exchangeBStarted = true;
-          return new Response(
-            JSON.stringify({
-              token: "token-B-active",
-              user: {
-                id: "user-B",
-                name: "UserB",
-                minecraftUuid: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                minecraftUsername: "UserBMC",
-              },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          );
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      async (url: any, init: any) => {
+        if (url.toString().includes("/api/v1/auth/exchange")) {
+          const body =
+            typeof init?.body === "string" ? JSON.parse(init.body) : {};
+          if (body.code === "code-A") {
+            exchangeAStarted = true;
+            await barrierPromiseA;
+            return new Response(
+              JSON.stringify({
+                token: "token-A-superseded",
+                user: {
+                  id: "user-A",
+                  name: "UserA",
+                  minecraftUuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  minecraftUsername: "UserAMC",
+                },
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            );
+          } else if (body.code === "code-B") {
+            exchangeBStarted = true;
+            return new Response(
+              JSON.stringify({
+                token: "token-B-active",
+                user: {
+                  id: "user-B",
+                  name: "UserB",
+                  minecraftUuid: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  minecraftUsername: "UserBMC",
+                },
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            );
+          }
         }
-      }
-      return origFetch(url, init);
-    });
+        return origFetch(url, init);
+      },
+    );
 
     try {
       // 1. Start Login Attempt A
@@ -1102,7 +1233,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
       }
 
       const portA = parseInt(contextA.authUrl.match(/port=(\d+)/)![1], 10);
-      const stateA = decodeURIComponent(contextA.authUrl.match(/state=([^&]+)/)![1]);
+      const stateA = decodeURIComponent(
+        contextA.authUrl.match(/state=([^&]+)/)![1],
+      );
 
       // Trigger callback A
       const reqA = http.request({
@@ -1137,7 +1270,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
       }
 
       const portB = parseInt(contextB.authUrl.match(/port=(\d+)/)![1], 10);
-      const stateB = decodeURIComponent(contextB.authUrl.match(/state=([^&]+)/)![1]);
+      const stateB = decodeURIComponent(
+        contextB.authUrl.match(/state=([^&]+)/)![1],
+      );
 
       // Complete Login Attempt B successfully
       const reqB = http.request({
@@ -1188,7 +1323,14 @@ describe("Phase 3 Failure Path Reproductions", () => {
     // Old target exists (Account A), truncation failed (still contains Account A ciphertext),
     // invalidation marker written.
     const markerPath = CredentialStore.getInvalidationMarkerPath();
-    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now(), reason: "logout_cleanup_degraded" }), "utf-8");
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({
+        invalidatedAt: Date.now(),
+        reason: "logout_cleanup_degraded",
+      }),
+      "utf-8",
+    );
     expect(fs.existsSync(CredentialStore.getCredentialsFilePath())).toBe(true);
     expect(fs.existsSync(markerPath)).toBe(true);
 
@@ -1232,7 +1374,11 @@ describe("Phase 3 Failure Path Reproductions", () => {
     expect(saveA.success).toBe(true);
 
     const markerPath = CredentialStore.getInvalidationMarkerPath();
-    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now() }), "utf-8");
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({ invalidatedAt: Date.now() }),
+      "utf-8",
+    );
 
     const renameSpy = spyOn(fs, "renameSync").mockImplementation(() => {
       const err: any = new Error("EBUSY: resource locked during rename");
@@ -1272,13 +1418,19 @@ describe("Phase 3 Failure Path Reproductions", () => {
     });
 
     const markerPath = CredentialStore.getInvalidationMarkerPath();
-    fs.writeFileSync(markerPath, JSON.stringify({ invalidatedAt: Date.now() }), "utf-8");
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify({ invalidatedAt: Date.now() }),
+      "utf-8",
+    );
 
     // Interruption after renameSync: simulate process crash before marker is unlinked
     const originalUnlink = fs.unlinkSync.bind(fs);
     const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((p: any) => {
       if (p.toString().includes("credentials.invalidated")) {
-        throw new Error("Simulated interruption after rename but before marker removal");
+        throw new Error(
+          "Simulated interruption after rename but before marker removal",
+        );
       }
       return originalUnlink(p);
     });
@@ -1325,7 +1477,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
         minecraftUuid: userA.minecraftUuid,
         minecraftUsername: userA.minecraftUsername,
       },
-      userA
+      userA,
     );
 
     expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
@@ -1353,13 +1505,15 @@ describe("Phase 3 Failure Path Reproductions", () => {
         SessionManager.updateSessionFromRefresh(
           "https://dev.lampas.town",
           { token: "new-refresh-token-player" },
-          refreshCandidatePlayer
+          refreshCandidatePlayer,
         );
       }).toThrow();
 
       // Assert state was NOT altered
       expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
-      expect(SessionManager.getCredentials()?.token).toBe("valid-initial-token");
+      expect(SessionManager.getCredentials()?.token).toBe(
+        "valid-initial-token",
+      );
       expect(notifiedCreds).toBeNull();
 
       // 3. Attempt same-account refresh returning name: "Player"
@@ -1372,29 +1526,36 @@ describe("Phase 3 Failure Path Reproductions", () => {
         SessionManager.updateSessionFromRefresh(
           "https://dev.lampas.town",
           { token: "new-refresh-token-Player" },
-          refreshCandidateTitlePlayer
+          refreshCandidateTitlePlayer,
         );
       }).toThrow();
 
       // Assert state was NOT altered
       expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
-      expect(SessionManager.getCredentials()?.token).toBe("valid-initial-token");
+      expect(SessionManager.getCredentials()?.token).toBe(
+        "valid-initial-token",
+      );
       expect(notifiedCreds).toBeNull();
 
       // 4. Exercise LauncherAuth.refreshSession integration:
       // Mock portalFetch to return status 200 with user name "Player"
-      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
-        return new Response(JSON.stringify({
-          valid: true,
-          token: "syn-refresh-token-200",
-          user: {
-            id: userA.id,
-            name: "Player",
-            minecraftUuid: userA.minecraftUuid,
-            minecraftUsername: userA.minecraftUsername,
-          },
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      });
+      const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+        async () => {
+          return new Response(
+            JSON.stringify({
+              valid: true,
+              token: "syn-refresh-token-200",
+              user: {
+                id: userA.id,
+                name: "Player",
+                minecraftUuid: userA.minecraftUuid,
+                minecraftUsername: userA.minecraftUsername,
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      );
 
       try {
         ConfigManager.set({ portalUrl: "https://dev.lampas.town" });
@@ -1404,7 +1565,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
         // Published user remains GenuineUser
         expect(SessionManager.getCurrentUser()?.name).toBe("GenuineUser");
-        expect(SessionManager.getCredentials()?.token).toBe("valid-initial-token");
+        expect(SessionManager.getCredentials()?.token).toBe(
+          "valid-initial-token",
+        );
       } finally {
         fetchSpy.mockRestore();
       }
@@ -1434,7 +1597,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
         minecraftUuid: userA.minecraftUuid,
         minecraftUsername: userA.minecraftUsername,
       },
-      userA
+      userA,
     );
 
     expect(SessionManager.getCurrentUser()?.name).toBe("TypeSafetyUser");
@@ -1447,7 +1610,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
           token: "new-token",
           minecraftAccessToken: 12345 as any,
         },
-        userA
+        userA,
       );
     }).toThrow();
 
@@ -1470,7 +1633,10 @@ describe("Phase 3 Failure Path Reproductions", () => {
     fs.writeFileSync(configPath, escapedTruncatedJson, "utf-8");
 
     // Initialize session manager
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
 
     // Must detect legacy plaintext despite unicode escapes and truncated JSON!
     expect(outcome.legacyPlaintextDetected).toBe(true);
@@ -1506,7 +1672,10 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     fs.writeFileSync(configPath, mixedMalformed, "utf-8");
 
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
     expect(outcome.legacyPlaintextDetected).toBe(true);
     expect(outcome.legacyScrubbed).toBe(true);
     expect(outcome.migrated).toBe(false);
@@ -1537,7 +1706,10 @@ describe("Phase 3 Failure Path Reproductions", () => {
     const initialJson = JSON.stringify(safeConfig, null, 2);
     fs.writeFileSync(configPath, initialJson, "utf-8");
 
-    const outcome = SessionManager.initialize(configPath, "https://dev.lampas.town");
+    const outcome = SessionManager.initialize(
+      configPath,
+      "https://dev.lampas.town",
+    );
     expect(outcome.legacyPlaintextDetected).toBe(false);
     expect(outcome.legacyScrubbed).toBe(false);
     expect(outcome.migrated).toBe(false);
@@ -1555,21 +1727,25 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce Defect 2e: Numeric identities violate strict schema and are rejected across validateRecord, saveCredentials, loadCredentials, and validateCandidateSession", () => {
     // 1. validateRecord rejects numeric portalAccountId and portalUsername
-    expect(CredentialStore.validateRecord({
-      version: 1,
-      portalUrl: "https://dev.lampas.town",
-      token: "secret-token",
-      portalAccountId: 12345,
-      portalUsername: 67890,
-    } as any)).toBe(false);
+    expect(
+      CredentialStore.validateRecord({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "secret-token",
+        portalAccountId: 12345,
+        portalUsername: 67890,
+      } as any),
+    ).toBe(false);
 
-    expect(CredentialStore.validateRecord({
-      version: 1,
-      portalUrl: "https://dev.lampas.town",
-      token: "secret-token",
-      accountId: 99999,
-      accountUsername: 88888,
-    } as any)).toBe(false);
+    expect(
+      CredentialStore.validateRecord({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "secret-token",
+        accountId: 99999,
+        accountUsername: 88888,
+      } as any),
+    ).toBe(false);
 
     // 2. saveCredentials fails cleanly
     const saveRes = CredentialStore.saveCredentials({
@@ -1585,13 +1761,15 @@ describe("Phase 3 Failure Path Reproductions", () => {
     // 3. Directly encrypted numeric payload cannot be loaded via loadCredentials
     const targetFile = CredentialStore.getCredentialsFilePath();
     const mock = new MockSafeStorage();
-    const encryptedNumeric = mock.encryptString(JSON.stringify({
-      version: 1,
-      portalUrl: "https://dev.lampas.town",
-      token: "secret-token",
-      portalAccountId: 12345,
-      portalUsername: 67890,
-    }));
+    const encryptedNumeric = mock.encryptString(
+      JSON.stringify({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "secret-token",
+        portalAccountId: 12345,
+        portalUsername: 67890,
+      }),
+    );
     fs.writeFileSync(targetFile, encryptedNumeric);
 
     const loaded = CredentialStore.loadCredentials();
@@ -1609,16 +1787,18 @@ describe("Phase 3 Failure Path Reproductions", () => {
     expect(candidateValidation.error).toBeDefined();
 
     // 5. setCurrentUser rejects numeric IDs or names
-    expect(() => SessionManager.setCurrentUser({
-      id: 12345 as any,
-      name: 67890 as any,
-      minecraftUuid: "12345678-1234-1234-1234-123456789abc",
-      minecraftUsername: "ValidMcUser",
-      isAdmin: false,
-      isTech: false,
-      roles: [],
-      allowedChannels: [],
-    })).toThrow("user ID and name must be strings");
+    expect(() =>
+      SessionManager.setCurrentUser({
+        id: 12345 as any,
+        name: 67890 as any,
+        minecraftUuid: "12345678-1234-1234-1234-123456789abc",
+        minecraftUsername: "ValidMcUser",
+        isAdmin: false,
+        isTech: false,
+        roles: [],
+        allowedChannels: [],
+      }),
+    ).toThrow("user ID and name must be strings");
   });
 
   test("Reproduce Defect 5b: sessionPersisted accurately tracks active session and resets to false on logout and resetForTesting", () => {
@@ -1659,13 +1839,19 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
   test("Reproduce Defect 2f: Minecraft UUID format enforcement accepts canonical and compact UUIDs and rejects garbage/non-UUID strings", () => {
     // Valid canonical dashed UUID
-    expect(isValidMinecraftUuid("550e8400-e29b-41d4-a716-446655440000")).toBe(true);
+    expect(isValidMinecraftUuid("550e8400-e29b-41d4-a716-446655440000")).toBe(
+      true,
+    );
     // Valid 32-hex compact UUID
     expect(isValidMinecraftUuid("550e8400e29b41d4a716446655440000")).toBe(true);
 
     // Rejected: All-zero UUIDs
-    expect(isValidMinecraftUuid("00000000-0000-0000-0000-000000000000")).toBe(false);
-    expect(isValidMinecraftUuid("00000000000000000000000000000000")).toBe(false);
+    expect(isValidMinecraftUuid("00000000-0000-0000-0000-000000000000")).toBe(
+      false,
+    );
+    expect(isValidMinecraftUuid("00000000000000000000000000000000")).toBe(
+      false,
+    );
 
     // Rejected: Non-UUID garbage strings
     expect(isValidMinecraftUuid("garbage")).toBe(false);
@@ -1693,39 +1879,42 @@ describe("Phase 3 Failure Path Reproductions", () => {
         isTech: false,
         roles: [],
         allowedChannels: [],
-      }
+      },
     );
     expect(garbageCandidate.valid).toBe(false);
     expect(garbageCandidate.error).toContain("UUID format");
 
     // validateCandidateSession with garbage record UUID fails with schema error
-    const garbageRecordCandidate = SessionManager.validateCandidateSession(
-      {
-        version: 1,
-        portalUrl: "https://dev.lampas.town",
-        token: "secret-token",
-        portalAccountId: "acc-1",
-        portalUsername: "user-1",
-        minecraftUuid: "garbage",
-      }
-    );
-    expect(garbageRecordCandidate.valid).toBe(false);
-    expect(garbageRecordCandidate.error).toContain("credential store schema validation");
-
-    // CredentialStore.validateRecord rejects garbage UUID
-    expect(CredentialStore.validateRecord({
+    const garbageRecordCandidate = SessionManager.validateCandidateSession({
       version: 1,
       portalUrl: "https://dev.lampas.town",
       token: "secret-token",
       portalAccountId: "acc-1",
       portalUsername: "user-1",
       minecraftUuid: "garbage",
-    })).toBe(false);
+    });
+    expect(garbageRecordCandidate.valid).toBe(false);
+    expect(garbageRecordCandidate.error).toContain(
+      "credential store schema validation",
+    );
+
+    // CredentialStore.validateRecord rejects garbage UUID
+    expect(
+      CredentialStore.validateRecord({
+        version: 1,
+        portalUrl: "https://dev.lampas.town",
+        token: "secret-token",
+        portalAccountId: "acc-1",
+        portalUsername: "user-1",
+        minecraftUuid: "garbage",
+      }),
+    ).toBe(false);
   });
 });
 
 describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
-  const dummySha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const dummySha256 =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
   test("Defect 4a: Manifest traversal vectors (leading .., embedded .., absolute, UNC) are rejected during preflight", () => {
     const maliciousPaths = [
@@ -1740,7 +1929,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     ];
 
     for (const malPath of maliciousPaths) {
-      expect(() => canonicalizeRelativePath(malPath)).toThrow(PathContainmentError);
+      expect(() => canonicalizeRelativePath(malPath)).toThrow(
+        PathContainmentError,
+      );
 
       const maliciousManifest = {
         pack: "AttackPack",
@@ -1755,7 +1946,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
           },
         ],
       };
-      expect(() => validateManifestMetadata(maliciousManifest)).toThrow(PathContainmentError);
+      expect(() => validateManifestMetadata(maliciousManifest)).toThrow(
+        PathContainmentError,
+      );
     }
   });
 
@@ -1779,7 +1972,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     ];
 
     for (const name of dosNames) {
-      expect(() => canonicalizeRelativePath(name)).toThrow(PathContainmentError);
+      expect(() => canonicalizeRelativePath(name)).toThrow(
+        PathContainmentError,
+      );
 
       const manifest = {
         pack: "DosDevicePack",
@@ -1794,7 +1989,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
           },
         ],
       };
-      expect(() => validateManifestMetadata(manifest)).toThrow(PathContainmentError);
+      expect(() => validateManifestMetadata(manifest)).toThrow(
+        PathContainmentError,
+      );
     }
   });
 
@@ -1804,11 +2001,23 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       pack: "DupPack",
       version: "1.0.0",
       files: [
-        { path: "mods/example.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/1" } },
-        { path: "mods/example.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/2" } },
+        {
+          path: "mods/example.jar",
+          hashes: { sha256: dummySha256 },
+          size: 10,
+          download: { url: "/b/1" },
+        },
+        {
+          path: "mods/example.jar",
+          hashes: { sha256: dummySha256 },
+          size: 10,
+          download: { url: "/b/2" },
+        },
       ],
     };
-    expect(() => validateManifestMetadata(exactDupManifest)).toThrow(/Duplicate manifest destination/);
+    expect(() => validateManifestMetadata(exactDupManifest)).toThrow(
+      /Duplicate manifest destination/,
+    );
 
     // Case-equivalent collision on Windows (e.g. mods/Mod.jar vs mods/mod.jar)
     if (process.platform === "win32") {
@@ -1816,30 +2025,60 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         pack: "CaseDupPack",
         version: "1.0.0",
         files: [
-          { path: "mods/ImportantMod.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/1" } },
-          { path: "mods/importantmod.jar", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/2" } },
+          {
+            path: "mods/ImportantMod.jar",
+            hashes: { sha256: dummySha256 },
+            size: 10,
+            download: { url: "/b/1" },
+          },
+          {
+            path: "mods/importantmod.jar",
+            hashes: { sha256: dummySha256 },
+            size: 10,
+            download: { url: "/b/2" },
+          },
         ],
       };
-      expect(() => validateManifestMetadata(caseDupManifest)).toThrow(/Duplicate manifest destination/);
+      expect(() => validateManifestMetadata(caseDupManifest)).toThrow(
+        /Duplicate manifest destination/,
+      );
     }
   });
 
   test("Defect 4d: Malformed or non-canonical cryptographic digest strings fail validation", () => {
     // SHA-256 validation
     expect(validateDigestString(dummySha256, "sha256")).toBe(dummySha256);
-    expect(() => validateDigestString("abc", "sha256")).toThrow(PathContainmentError);
-    expect(() => validateDigestString("a".repeat(63), "sha256")).toThrow(PathContainmentError);
-    expect(() => validateDigestString("a".repeat(65), "sha256")).toThrow(PathContainmentError);
-    expect(() => validateDigestString("g".repeat(64), "sha256")).toThrow(PathContainmentError);
-    expect(() => validateDigestString("../" + "a".repeat(61), "sha256")).toThrow(PathContainmentError);
-    expect(() => validateDigestString(12345 as any, "sha256")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("abc", "sha256")).toThrow(
+      PathContainmentError,
+    );
+    expect(() => validateDigestString("a".repeat(63), "sha256")).toThrow(
+      PathContainmentError,
+    );
+    expect(() => validateDigestString("a".repeat(65), "sha256")).toThrow(
+      PathContainmentError,
+    );
+    expect(() => validateDigestString("g".repeat(64), "sha256")).toThrow(
+      PathContainmentError,
+    );
+    expect(() =>
+      validateDigestString("../" + "a".repeat(61), "sha256"),
+    ).toThrow(PathContainmentError);
+    expect(() => validateDigestString(12345 as any, "sha256")).toThrow(
+      PathContainmentError,
+    );
 
     // SHA-1 validation
     const dummySha1 = "0123456789abcdef0123456789abcdef01234567";
     expect(validateDigestString(dummySha1, "sha1")).toBe(dummySha1);
-    expect(() => validateDigestString("a".repeat(39), "sha1")).toThrow(PathContainmentError);
-    expect(() => validateDigestString("a".repeat(41), "sha1")).toThrow(PathContainmentError);
-    expect(() => validateDigestString("z".repeat(40), "sha1")).toThrow(PathContainmentError);
+    expect(() => validateDigestString("a".repeat(39), "sha1")).toThrow(
+      PathContainmentError,
+    );
+    expect(() => validateDigestString("a".repeat(41), "sha1")).toThrow(
+      PathContainmentError,
+    );
+    expect(() => validateDigestString("z".repeat(40), "sha1")).toThrow(
+      PathContainmentError,
+    );
   });
 
   test("Defect 4e: Corrupted prevState.files with traversal and protected keys are quarantined", () => {
@@ -1848,16 +2087,34 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       version: "1.0.0",
       installedAt: new Date().toISOString(),
       files: {
-        "../../outside-file.txt": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
-        "saves/world1/level.dat": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
-        ".lampas/installation.json": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "../../outside-file.txt": {
+          policy: "MANAGED",
+          hashes: { sha256: dummySha256 },
+        },
+        "saves/world1/level.dat": {
+          policy: "MANAGED",
+          hashes: { sha256: dummySha256 },
+        },
+        ".lampas/installation.json": {
+          policy: "MANAGED",
+          hashes: { sha256: dummySha256 },
+        },
         "options.txt": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
-        "screenshots/first.png": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
-        "mods/legit-mod.jar": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "screenshots/first.png": {
+          policy: "MANAGED",
+          hashes: { sha256: dummySha256 },
+        },
+        "mods/legit-mod.jar": {
+          policy: "MANAGED",
+          hashes: { sha256: dummySha256 },
+        },
       },
     };
 
-    const { files, quarantinedKeys } = sanitizeInstallationState(rawState, gameDir);
+    const { files, quarantinedKeys } = sanitizeInstallationState(
+      rawState,
+      gameDir,
+    );
 
     expect(quarantinedKeys).toContain("../../outside-file.txt");
     expect(quarantinedKeys).toContain("saves/world1/level.dat");
@@ -1897,9 +2154,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       ],
     };
 
-    expect(() => validateManifestMetadata(collidingManifest, releaseData)).toThrow(
-      /is managed both as a whole file and by config patch/
-    );
+    expect(() =>
+      validateManifestMetadata(collidingManifest, releaseData),
+    ).toThrow(/is managed both as a whole file and by config patch/);
 
     // Config patch targeting protected namespace
     const protectedPatchRelease = {
@@ -1911,9 +2168,12 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         },
       ],
     };
-    expect(() => validateManifestMetadata({ pack: "P", version: "1", files: [] }, protectedPatchRelease)).toThrow(
-      /targets protected namespace/
-    );
+    expect(() =>
+      validateManifestMetadata(
+        { pack: "P", version: "1", files: [] },
+        protectedPatchRelease,
+      ),
+    ).toThrow(/targets protected namespace/);
   });
 
   test("Defect 4g: Client mod management rejects non-jar extensions, symlink inputs, and symlink destination squatting", () => {
@@ -1924,7 +2184,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     // 1. Non-jar rejected
     const exeFile = path.join(testRoot, "payload.exe");
     fs.writeFileSync(exeFile, "MZ-fake-exe");
-    expect(() => ClientModManager.add([exeFile])).toThrow(/Only local \.jar files/);
+    expect(() => ClientModManager.add([exeFile])).toThrow(
+      /Only local \.jar files/,
+    );
 
     // 2. Symlink mod source rejected
     const realJar = path.join(testRoot, "real-source.jar");
@@ -1941,7 +2203,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     }
 
     if (symlinkSupported) {
-      expect(() => ClientModManager.add([symlinkSource])).toThrow(/symbolic link/);
+      expect(() => ClientModManager.add([symlinkSource])).toThrow(
+        /symbolic link/,
+      );
 
       // 3. Symlink at destination in mods folder rejected
       const squattedDest = path.join(modsDir, "squatted.jar");
@@ -1951,10 +2215,12 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         const newModJar = path.join(testRoot, "squatted.jar");
         fs.writeFileSync(newModJar, "PK-new-jar");
         expect(() => ClientModManager.add([newModJar])).toThrow(
-          /symbolic link|Path containment violation/
+          /symbolic link|Path containment violation/,
         );
       } finally {
-        try { fs.unlinkSync(squattedDest); } catch {}
+        try {
+          fs.unlinkSync(squattedDest);
+        } catch {}
       }
     }
 
@@ -1967,18 +2233,25 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       try {
         if (fs.existsSync(junctionDir)) fs.rmdirSync(junctionDir);
         fs.symlinkSync(realTargetDir, junctionDir, "junction");
-        expect(() => ClientModManager.add([path.join(junctionDir, "dummy.jar")])).toThrow(
-          /symbolic link|Path containment violation/
-        );
+        expect(() =>
+          ClientModManager.add([path.join(junctionDir, "dummy.jar")]),
+        ).toThrow(/symbolic link|Path containment violation/);
       } finally {
-        try { fs.rmdirSync(junctionDir); } catch {}
+        try {
+          fs.rmdirSync(junctionDir);
+        } catch {}
       }
     }
   });
 
   test("Defect 4h: Move recovery strictly bounds staging and quarantines unverified staging locations", async () => {
-    const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-staging-4h-"));
-    const outsideVictimFile = path.join(outsideVictimDir, "secret-user-data.txt");
+    const outsideVictimDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "lampas-victim-staging-4h-"),
+    );
+    const outsideVictimFile = path.join(
+      outsideVictimDir,
+      "secret-user-data.txt",
+    );
     fs.writeFileSync(outsideVictimFile, "vital-user-data", "utf-8");
 
     // Case 1: Staging set to filesystem root
@@ -1991,7 +2264,11 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       staging: process.platform === "win32" ? "C:\\" : "/",
       startTime: new Date().toISOString(),
     };
-    const validationRoot = validateMoveJournal(rootJournal, gameDir, userDataDir);
+    const validationRoot = validateMoveJournal(
+      rootJournal,
+      gameDir,
+      userDataDir,
+    );
     expect(validationRoot.valid).toBe(false);
     expect(validationRoot.reason).toContain("root directory");
 
@@ -2005,26 +2282,49 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       staging: outsideVictimDir,
       startTime: new Date().toISOString(),
     };
-    const validationVictim = validateMoveJournal(victimJournal, gameDir, userDataDir);
+    const validationVictim = validateMoveJournal(
+      victimJournal,
+      gameDir,
+      userDataDir,
+    );
     expect(validationVictim.valid).toBe(false);
-    expect(validationVictim.reason).toMatch(/is not located in the parent directory|does not match approved launcher staging/);
+    expect(validationVictim.reason).toMatch(
+      /is not located in the parent directory|does not match approved launcher staging/,
+    );
 
     // Case 3: recoverInterruptedMove preserves outside staging directory and quarantines journal
     const journalPath = path.join(userDataDir, "directory-move.json");
-    fs.writeFileSync(journalPath, JSON.stringify(victimJournal, null, 2), "utf-8");
+    const holdPath = path.join(userDataDir, "recovery-hold.json");
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify(victimJournal, null, 2),
+      "utf-8",
+    );
 
     try {
       ConfigManager.set({ gameDir });
-      await GameDirectoryManager.recoverInterruptedMove();
+      // quarantineJournal now throws to ensure blockMutations is called by main.ts
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/quarantined/i);
 
-      expect(fs.existsSync(journalPath)).toBe(false);
       expect(fs.existsSync(outsideVictimFile)).toBe(true);
       expect(fs.existsSync(outsideVictimDir)).toBe(true);
-      expect(fs.readFileSync(outsideVictimFile, "utf-8")).toBe("vital-user-data");
+      expect(fs.readFileSync(outsideVictimFile, "utf-8")).toBe(
+        "vital-user-data",
+      );
 
-      const quarantined = fs.readdirSync(userDataDir).filter((f: string) => f.startsWith("directory-move.json.quarantine."));
+      const quarantined = fs
+        .readdirSync(userDataDir)
+        .filter((f: string) => f.startsWith("directory-move.json.quarantine."));
       expect(quarantined.length).toBeGreaterThan(0);
+
+      // Hold file was written by quarantineJournal
+      expect(fs.existsSync(holdPath)).toBe(true);
     } finally {
+      try {
+        fs.unlinkSync(holdPath);
+      } catch {}
       if (fs.existsSync(outsideVictimDir)) {
         fs.rmSync(outsideVictimDir, { recursive: true, force: true });
       }
@@ -2047,7 +2347,10 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     fs.writeFileSync(dstFile1, "content-of-file-1", "utf-8");
 
     const opId = "op-inventory-mismatch-test";
-    const stagingDir = path.resolve(path.dirname(dstDir), `.lampas-moving-${opId}`);
+    const stagingDir = path.resolve(
+      path.dirname(dstDir),
+      `.lampas-moving-${opId}`,
+    );
 
     // Create receipt claiming 2 files / 34 bytes
     const receiptPath = path.join(dstDir, MOVE_RECEIPT_FILENAME);
@@ -2067,21 +2370,27 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
             {
               relativePath: "save-data.txt",
               size: 17,
-              sha256: crypto.createHash("sha256").update("content-of-file-1").digest("hex"),
+              sha256: crypto
+                .createHash("sha256")
+                .update("content-of-file-1")
+                .digest("hex"),
             },
             {
               relativePath: "options.txt",
               size: 17,
-              sha256: crypto.createHash("sha256").update("content-of-file-2").digest("hex"),
+              sha256: crypto
+                .createHash("sha256")
+                .update("content-of-file-2")
+                .digest("hex"),
             },
           ],
           stagingVerified: true,
           timestamp: new Date().toISOString(),
         },
         null,
-        2
+        2,
       ),
-      "utf-8"
+      "utf-8",
     );
 
     const journalPath = path.join(userDataDir, "directory-move.json");
@@ -2094,13 +2403,17 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       staging: stagingDir,
       startTime: new Date().toISOString(),
     };
-    fs.writeFileSync(journalPath, JSON.stringify(cleaningJournal, null, 2), "utf-8");
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify(cleaningJournal, null, 2),
+      "utf-8",
+    );
 
     try {
       ConfigManager.set({ gameDir: srcDir });
-      await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-        /Recovery aborted: target file count mismatch/
-      );
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/Recovery aborted: target file count mismatch/);
 
       // Journal was preserved for inspection on failed recovery
       expect(fs.existsSync(journalPath)).toBe(true);
@@ -2112,8 +2425,10 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       expect(fs.readFileSync(sourceFile1, "utf-8")).toBe("content-of-file-1");
       expect(fs.readFileSync(sourceFile2, "utf-8")).toBe("content-of-file-2");
     } finally {
-      if (fs.existsSync(srcDir)) fs.rmSync(srcDir, { recursive: true, force: true });
-      if (fs.existsSync(dstDir)) fs.rmSync(dstDir, { recursive: true, force: true });
+      if (fs.existsSync(srcDir))
+        fs.rmSync(srcDir, { recursive: true, force: true });
+      if (fs.existsSync(dstDir))
+        fs.rmSync(dstDir, { recursive: true, force: true });
     }
   });
 
@@ -2121,7 +2436,11 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     ConfigManager.set({ gameDir });
     const savesWorldDir = path.join(gameDir, "saves", "world");
     fs.mkdirSync(savesWorldDir, { recursive: true });
-    fs.writeFileSync(path.join(savesWorldDir, "level.dat"), "precious-world-data", "utf-8");
+    fs.writeFileSync(
+      path.join(savesWorldDir, "level.dat"),
+      "precious-world-data",
+      "utf-8",
+    );
 
     const modsDir = path.join(gameDir, "mods");
     fs.mkdirSync(modsDir, { recursive: true });
@@ -2130,12 +2449,16 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     let linkCreated = false;
     try {
       if (fs.existsSync(redirectedModsDir)) {
-        try { fs.unlinkSync(redirectedModsDir); } catch { fs.rmdirSync(redirectedModsDir); }
+        try {
+          fs.unlinkSync(redirectedModsDir);
+        } catch {
+          fs.rmdirSync(redirectedModsDir);
+        }
       }
       fs.symlinkSync(
         savesWorldDir,
         redirectedModsDir,
-        process.platform === "win32" ? "junction" : "dir"
+        process.platform === "win32" ? "junction" : "dir",
       );
       linkCreated = true;
     } catch {
@@ -2146,17 +2469,25 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       try {
         const destPath = path.join(redirectedModsDir, "level.dat");
         // Physical ancestry check with enforceOwnership MUST detect that resolved path is inside protected saves/
-        await expect(checkPhysicalAncestry(gameDir, destPath, { enforceOwnership: true })).rejects.toThrow(
-          /resolves into protected or reserved namespace|targets protected or reserved path/
+        await expect(
+          checkPhysicalAncestry(gameDir, destPath, { enforceOwnership: true }),
+        ).rejects.toThrow(
+          /resolves into protected or reserved namespace|targets protected or reserved path/,
         );
 
         // Synchronous check must also fail closed
-        expect(() => checkPhysicalAncestrySync(gameDir, destPath, { enforceOwnership: true })).toThrow(
-          /resolves into protected or reserved namespace|targets protected or reserved path/
+        expect(() =>
+          checkPhysicalAncestrySync(gameDir, destPath, {
+            enforceOwnership: true,
+          }),
+        ).toThrow(
+          /resolves into protected or reserved namespace|targets protected or reserved path/,
         );
 
         // Level.dat MUST NOT be modified or deleted
-        expect(fs.readFileSync(path.join(savesWorldDir, "level.dat"), "utf-8")).toBe("precious-world-data");
+        expect(
+          fs.readFileSync(path.join(savesWorldDir, "level.dat"), "utf-8"),
+        ).toBe("precious-world-data");
       } finally {
         try {
           if (process.platform === "win32") {
@@ -2171,16 +2502,26 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
   test("Finding 1: Subordinate roots (.lampas, runtime, natives, mods) aliased outside instance root fail closed", () => {
     // Normal subordinate root inside gameDir succeeds
-    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, "mods"))).not.toThrow();
-    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, ".lampas"))).not.toThrow();
-    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, "runtime"))).not.toThrow();
-    expect(() => assertSubordinateRoot(gameDir, path.join(gameDir, "natives"))).not.toThrow();
+    expect(() =>
+      assertSubordinateRoot(gameDir, path.join(gameDir, "mods")),
+    ).not.toThrow();
+    expect(() =>
+      assertSubordinateRoot(gameDir, path.join(gameDir, ".lampas")),
+    ).not.toThrow();
+    expect(() =>
+      assertSubordinateRoot(gameDir, path.join(gameDir, "runtime")),
+    ).not.toThrow();
+    expect(() =>
+      assertSubordinateRoot(gameDir, path.join(gameDir, "natives")),
+    ).not.toThrow();
 
     // Subordinate root pointing outside instance root throws PathContainmentError
-    expect(() => assertSubordinateRoot(gameDir, path.join(testRoot, "outside-mods"))).toThrow(
-      PathContainmentError
+    expect(() =>
+      assertSubordinateRoot(gameDir, path.join(testRoot, "outside-mods")),
+    ).toThrow(PathContainmentError);
+    expect(() => assertSubordinateRoot(gameDir, os.tmpdir())).toThrow(
+      PathContainmentError,
     );
-    expect(() => assertSubordinateRoot(gameDir, os.tmpdir())).toThrow(PathContainmentError);
   });
 
   test("Finding 1: Leaf hardlink squatting is broken before file replacement", async () => {
@@ -2215,11 +2556,17 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         fs.writeFileSync(squattedFile, "new-mod-payload", "utf-8");
 
         // Target invariant: victimFile bytes were NOT clobbered!
-        expect(fs.readFileSync(victimFile, "utf-8")).toBe("original-secret-bytes");
+        expect(fs.readFileSync(victimFile, "utf-8")).toBe(
+          "original-secret-bytes",
+        );
         expect(fs.readFileSync(squattedFile, "utf-8")).toBe("new-mod-payload");
       } finally {
-        try { fs.unlinkSync(squattedFile); } catch {}
-        try { fs.unlinkSync(victimFile); } catch {}
+        try {
+          fs.unlinkSync(squattedFile);
+        } catch {}
+        try {
+          fs.unlinkSync(victimFile);
+        } catch {}
       }
     }
   });
@@ -2229,13 +2576,17 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
     // Case 2a: Unrelated sibling folder with staging prefix
     const parentDir = path.dirname(gameDir);
-    const unrelatedStaging = path.join(parentDir, ".lampas-moving-unrelated-attack");
+    const unrelatedStaging = path.join(
+      parentDir,
+      ".lampas-moving-unrelated-attack",
+    );
     fs.mkdirSync(unrelatedStaging, { recursive: true });
     const victimDoc = path.join(unrelatedStaging, "important-data.txt");
     fs.writeFileSync(victimDoc, "do-not-delete", "utf-8");
 
     const opId = "op-valid-syntax-id";
     const journalPath = path.join(userDataDir, "directory-move.json");
+    const holdPath = path.join(userDataDir, "recovery-hold.json");
     const attackJournal = {
       version: 2,
       operationId: opId,
@@ -2245,20 +2596,31 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       phase: "copying",
       startTime: new Date().toISOString(),
     };
-    fs.writeFileSync(journalPath, JSON.stringify(attackJournal, null, 2), "utf-8");
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify(attackJournal, null, 2),
+      "utf-8",
+    );
 
     try {
       ConfigManager.set({ gameDir });
-      await GameDirectoryManager.recoverInterruptedMove();
+      // quarantineJournal now throws to ensure blockMutations is called by main.ts
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/quarantined/i);
 
-      // Journal was quarantined
-      expect(fs.existsSync(journalPath)).toBe(false);
       // Sibling folder and victim files were PRESERVED intact!
       expect(fs.existsSync(unrelatedStaging)).toBe(true);
       expect(fs.existsSync(victimDoc)).toBe(true);
       expect(fs.readFileSync(victimDoc, "utf-8")).toBe("do-not-delete");
+      // Hold file was created
+      expect(fs.existsSync(holdPath)).toBe(true);
     } finally {
-      if (fs.existsSync(unrelatedStaging)) fs.rmSync(unrelatedStaging, { recursive: true, force: true });
+      try {
+        fs.unlinkSync(holdPath);
+      } catch {}
+      if (fs.existsSync(unrelatedStaging))
+        fs.rmSync(unrelatedStaging, { recursive: true, force: true });
     }
 
     // Case 2b: Staging folder name matches operationId, but lacks staging marker
@@ -2276,17 +2638,28 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       phase: "copying",
       startTime: new Date().toISOString(),
     };
-    fs.writeFileSync(journalPath, JSON.stringify(unverifiedJournal, null, 2), "utf-8");
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify(unverifiedJournal, null, 2),
+      "utf-8",
+    );
 
     try {
       ConfigManager.set({ gameDir });
-      await GameDirectoryManager.recoverInterruptedMove();
+      // Case 4 staging marker mismatch now throws to ensure caller calls blockMutations
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/could not be authorized for removal/i);
 
-      // Recovery must NOT delete staging because staging ownership marker is missing!
+      // Recovery must NOT have deleted staging because staging ownership marker is missing!
       expect(fs.existsSync(validNamedStaging)).toBe(true);
       expect(fs.existsSync(stagedFile)).toBe(true);
     } finally {
-      if (fs.existsSync(validNamedStaging)) fs.rmSync(validNamedStaging, { recursive: true, force: true });
+      try {
+        fs.unlinkSync(journalPath);
+      } catch {}
+      if (fs.existsSync(validNamedStaging))
+        fs.rmSync(validNamedStaging, { recursive: true, force: true });
     }
   });
 
@@ -2294,7 +2667,10 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     const srcDir = path.join(gameDir, "completeness-src");
     const dstDir = path.join(gameDir, "completeness-dst");
     const opId = "op-completeness-tests";
-    const stagingDir = path.resolve(path.dirname(dstDir), `.lampas-moving-${opId}`);
+    const stagingDir = path.resolve(
+      path.dirname(dstDir),
+      `.lampas-moving-${opId}`,
+    );
     const journalPath = path.join(userDataDir, "directory-move.json");
 
     fs.mkdirSync(srcDir, { recursive: true });
@@ -2322,8 +2698,8 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
           timestamp: new Date().toISOString(),
         },
         null,
-        2
-      )
+        2,
+      ),
     );
 
     fs.writeFileSync(
@@ -2336,29 +2712,37 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         target: dstDir,
         staging: stagingDir,
         startTime: new Date().toISOString(),
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: srcDir });
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /content SHA-256 mismatch/
+      /content SHA-256 mismatch/,
     );
     // Source preserved!
     expect(fs.existsSync(srcDir)).toBe(true);
-    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe("ABCD");
+    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe(
+      "ABCD",
+    );
 
     // 2. Source drift rejection
     // Make target match receipt
     fs.writeFileSync(path.join(dstDir, "options.txt"), "ABCD", "utf-8");
     // Mutate source on disk (source drift)
-    fs.writeFileSync(path.join(srcDir, "options.txt"), "MODIFIED-SOURCE-CONTENT", "utf-8");
+    fs.writeFileSync(
+      path.join(srcDir, "options.txt"),
+      "MODIFIED-SOURCE-CONTENT",
+      "utf-8",
+    );
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /source file size changed|source file content changed/
+      /source file size changed|source file content changed/,
     );
     // Source preserved with user's modified content!
     expect(fs.existsSync(srcDir)).toBe(true);
-    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe("MODIFIED-SOURCE-CONTENT");
+    expect(fs.readFileSync(path.join(srcDir, "options.txt"), "utf-8")).toBe(
+      "MODIFIED-SOURCE-CONTENT",
+    );
 
     // 3. Missing empty directory rejection
     fs.writeFileSync(path.join(srcDir, "options.txt"), "ABCD", "utf-8");
@@ -2379,12 +2763,12 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
           timestamp: new Date().toISOString(),
         },
         null,
-        2
-      )
+        2,
+      ),
     );
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /missing expected directory 'saves\/EmptyWorld'|Target directory 'saves\/EmptyWorld' is missing/
+      /missing expected directory 'saves\/EmptyWorld'|Target directory 'saves\/EmptyWorld' is missing/,
     );
     expect(fs.existsSync(srcDir)).toBe(true);
 
@@ -2401,19 +2785,25 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
           stagingVerified: true,
         },
         null,
-        2
-      )
+        2,
+      ),
     );
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /legacy or incomplete receipt/
+      /legacy or incomplete receipt/,
     );
     expect(fs.existsSync(srcDir)).toBe(true);
 
     // Clean up test directories
-    try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(dstDir, { recursive: true, force: true }); } catch {}
-    try { fs.unlinkSync(journalPath); } catch {}
+    try {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+    } catch {}
+    try {
+      fs.rmSync(dstDir, { recursive: true, force: true });
+    } catch {}
+    try {
+      fs.unlinkSync(journalPath);
+    } catch {}
   });
 
   test("Finding 4: Malformed metadata in previous state loses authority and custom client mods are never deleted", () => {
@@ -2424,15 +2814,27 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       files: {
         "mods/null-entry.jar": null,
         "mods/empty-entry.jar": {},
-        "mods/bad-policy.jar": { policy: "SUPERUSER", hashes: { sha256: dummySha256 } },
+        "mods/bad-policy.jar": {
+          policy: "SUPERUSER",
+          hashes: { sha256: dummySha256 },
+        },
         "mods/missing-hash.jar": { policy: "MANAGED" },
-        "mods/invalid-hash.jar": { policy: "MANAGED", hashes: { sha256: "not-a-hash" } },
-        "mods/legit.jar": { policy: "MANAGED", hashes: { sha256: dummySha256 } },
+        "mods/invalid-hash.jar": {
+          policy: "MANAGED",
+          hashes: { sha256: "not-a-hash" },
+        },
+        "mods/legit.jar": {
+          policy: "MANAGED",
+          hashes: { sha256: dummySha256 },
+        },
         "options.txt": { policy: "PRESERVE" },
       },
     };
 
-    const { files, quarantinedKeys } = sanitizeInstallationState(malformedState, gameDir);
+    const { files, quarantinedKeys } = sanitizeInstallationState(
+      malformedState,
+      gameDir,
+    );
     expect(quarantinedKeys).toContain("mods/null-entry.jar");
     expect(quarantinedKeys).toContain("mods/empty-entry.jar");
     expect(quarantinedKeys).toContain("mods/bad-policy.jar");
@@ -2446,17 +2848,23 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
     // 2. Manifest missing files array throws PathContainmentError
     expect(() => validateManifestMetadata({ pack: "P", version: "1" })).toThrow(
-      /files.*mandatory/
+      /files.*mandatory/,
     );
-    expect(() => validateManifestMetadata({ pack: "P", version: "1", files: "not-an-array" })).toThrow(
-      /files.*mandatory/
-    );
+    expect(() =>
+      validateManifestMetadata({
+        pack: "P",
+        version: "1",
+        files: "not-an-array",
+      }),
+    ).toThrow(/files.*mandatory/);
   });
 
   test("Finding 5: Windows case-only rename between releases and mixed slash manifest entries", () => {
     // 1. Windows case-only rename key equivalence
     if (process.platform === "win32") {
-      expect(normalizePathKey("mods/ExampleMod.jar")).toBe(normalizePathKey("mods/examplemod.jar"));
+      expect(normalizePathKey("mods/ExampleMod.jar")).toBe(
+        normalizePathKey("mods/examplemod.jar"),
+      );
     }
 
     // 2. Mixed forward-slash and backslash duplicate detection
@@ -2464,11 +2872,23 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       pack: "Pack",
       version: "1.0",
       files: [
-        { path: "config/options.txt", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/1" } },
-        { path: "config\\options.txt", hashes: { sha256: dummySha256 }, size: 10, download: { url: "/b/2" } },
+        {
+          path: "config/options.txt",
+          hashes: { sha256: dummySha256 },
+          size: 10,
+          download: { url: "/b/1" },
+        },
+        {
+          path: "config\\options.txt",
+          hashes: { sha256: dummySha256 },
+          size: 10,
+          download: { url: "/b/2" },
+        },
       ],
     };
-    expect(() => validateManifestMetadata(mixedSlashManifest)).toThrow(/Duplicate manifest destination/);
+    expect(() => validateManifestMetadata(mixedSlashManifest)).toThrow(
+      /Duplicate manifest destination/,
+    );
   });
 
   test("Finding 6: Custom client mod replacement failure rolls back original mod bytes cleanly", async () => {
@@ -2481,7 +2901,11 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
     ConfigManager.set({
       customClientMods: [
-        { filename: "tool.jar", enabled: true, addedAt: new Date().toISOString() },
+        {
+          filename: "tool.jar",
+          enabled: true,
+          addedAt: new Date().toISOString(),
+        },
       ],
     });
 
@@ -2491,34 +2915,50 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     // Inject failure during promotion
     const origRenameSync = fs.renameSync.bind(fs);
     let failedPromotion = false;
-    const renameSpy = spyOn(fs, "renameSync").mockImplementation((oldP: any, newP: any) => {
-      // Fail only the promotion from temp to dest
-      if (oldP.toString().includes(".importing-") && newP.toString() === modPath && !failedPromotion) {
-        failedPromotion = true;
-        throw new Error("Simulated disk failure during mod replacement promotion");
-      }
-      return origRenameSync(oldP, newP);
-    });
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation(
+      (oldP: any, newP: any) => {
+        // Fail only the promotion from temp to dest
+        if (
+          oldP.toString().includes(".importing-") &&
+          newP.toString() === modPath &&
+          !failedPromotion
+        ) {
+          failedPromotion = true;
+          throw new Error(
+            "Simulated disk failure during mod replacement promotion",
+          );
+        }
+        return origRenameSync(oldP, newP);
+      },
+    );
 
     try {
       expect(() => ClientModManager.add([newVersionSource])).toThrow(
-        "Simulated disk failure during mod replacement promotion"
+        "Simulated disk failure during mod replacement promotion",
       );
 
       // Rollback invariant: original content is restored!
       expect(fs.readFileSync(modPath, "utf-8")).toBe("ORIGINAL-VERSION-1");
 
       // No leftover .mod-backup files
-      const leftoverBackups = fs.readdirSync(modsDir).filter((f: string) => f.startsWith(".mod-backup-"));
+      const leftoverBackups = fs
+        .readdirSync(modsDir)
+        .filter((f: string) => f.startsWith(".mod-backup-"));
       expect(leftoverBackups.length).toBe(0);
 
       // Config retains original mod
       const cfgMods = ConfigManager.get().customClientMods;
       expect(cfgMods.some((m: any) => m.filename === "tool.jar")).toBe(true);
     } finally {
-      try { renameSpy.mockRestore(); } catch {}
-      try { fs.unlinkSync(modPath); } catch {}
-      try { fs.unlinkSync(newVersionSource); } catch {}
+      try {
+        renameSpy.mockRestore();
+      } catch {}
+      try {
+        fs.unlinkSync(modPath);
+      } catch {}
+      try {
+        fs.unlinkSync(newVersionSource);
+      } catch {}
     }
   });
 
@@ -2531,18 +2971,36 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     const journalPath = path.join(userDataDir, "directory-move.json");
 
     fs.mkdirSync(srcDir, { recursive: true });
-    fs.writeFileSync(path.join(srcDir, "important-data.txt"), "PRESERVE-THIS-DATA", "utf-8");
+    fs.writeFileSync(
+      path.join(srcDir, "important-data.txt"),
+      "PRESERVE-THIS-DATA",
+      "utf-8",
+    );
 
     // 1. validateTarget rejects target that is a symlink to source
-    if (fs.existsSync(dstDir)) fs.rmSync(dstDir, { recursive: true, force: true });
+    if (fs.existsSync(dstDir))
+      fs.rmSync(dstDir, { recursive: true, force: true });
     try {
-      fs.symlinkSync(srcDir, dstDir, process.platform === "win32" ? "junction" : "dir");
-      const targetValidation = GameDirectoryManager.validateTarget(dstDir, srcDir);
+      fs.symlinkSync(
+        srcDir,
+        dstDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const targetValidation = GameDirectoryManager.validateTarget(
+        dstDir,
+        srcDir,
+      );
       expect(targetValidation.valid).toBe(false);
-      expect(targetValidation.reason).toMatch(/symbolic link|Target directory physically aliases/i);
+      expect(targetValidation.reason).toMatch(
+        /symbolic link|Target directory physically aliases/i,
+      );
     } finally {
-      try { fs.unlinkSync(dstDir); } catch {}
-      try { fs.rmdirSync(dstDir); } catch {}
+      try {
+        fs.unlinkSync(dstDir);
+      } catch {}
+      try {
+        fs.rmdirSync(dstDir);
+      } catch {}
     }
 
     // 2. validateMoveJournal rejects target that physically aliases source or is a symlink
@@ -2559,18 +3017,36 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
       // Create symlink target pointing to source
       fs.rmdirSync(dstDir);
-      fs.symlinkSync(srcDir, dstDir, process.platform === "win32" ? "junction" : "dir");
+      fs.symlinkSync(
+        srcDir,
+        dstDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
 
-      const journalValidation = validateMoveJournal(journalData, srcDir, userDataDir);
+      const journalValidation = validateMoveJournal(
+        journalData,
+        srcDir,
+        userDataDir,
+      );
       expect(journalValidation.valid).toBe(false);
-      expect(journalValidation.reason).toMatch(/symbolic link|physically alias/i);
+      expect(journalValidation.reason).toMatch(
+        /symbolic link|physically alias/i,
+      );
     } finally {
-      try { fs.unlinkSync(dstDir); } catch {}
-      try { fs.rmdirSync(dstDir); } catch {}
+      try {
+        fs.unlinkSync(dstDir);
+      } catch {}
+      try {
+        fs.rmdirSync(dstDir);
+      } catch {}
     }
 
     // 3. recoverInterruptedMove in cleaning phase aborts and preserves source if target physically aliases source
-    fs.symlinkSync(srcDir, dstDir, process.platform === "win32" ? "junction" : "dir");
+    fs.symlinkSync(
+      srcDir,
+      dstDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const validReceipt = {
       version: 2,
       operationId: opId,
@@ -2580,11 +3056,23 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       fileCount: 1,
       totalBytes: 18,
       directories: [],
-      files: [{ relativePath: "important-data.txt", size: 18, sha256: crypto.createHash("sha256").update("PRESERVE-THIS-DATA").digest("hex") }],
+      files: [
+        {
+          relativePath: "important-data.txt",
+          size: 18,
+          sha256: crypto
+            .createHash("sha256")
+            .update("PRESERVE-THIS-DATA")
+            .digest("hex"),
+        },
+      ],
       stagingVerified: true,
       timestamp: new Date().toISOString(),
     };
-    fs.writeFileSync(path.join(srcDir, MOVE_RECEIPT_FILENAME), JSON.stringify(validReceipt, null, 2));
+    fs.writeFileSync(
+      path.join(srcDir, MOVE_RECEIPT_FILENAME),
+      JSON.stringify(validReceipt, null, 2),
+    );
 
     fs.writeFileSync(
       journalPath,
@@ -2595,22 +3083,37 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         target: dstDir,
         staging: stagingDir,
         phase: "cleaning",
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: srcDir, gameDirConfigured: true });
+    const holdPath = path.join(userDataDir, "recovery-hold.json");
 
     try {
-      await GameDirectoryManager.recoverInterruptedMove();
-      // Should quarantine journal because target is symlink
-      expect(fs.existsSync(journalPath)).toBe(false);
+      // quarantineJournal now throws (target is symlink → journal invalid)
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/quarantined/i);
       // Source must be preserved intact!
       expect(fs.existsSync(srcDir)).toBe(true);
-      expect(fs.readFileSync(path.join(srcDir, "important-data.txt"), "utf-8")).toBe("PRESERVE-THIS-DATA");
+      expect(
+        fs.readFileSync(path.join(srcDir, "important-data.txt"), "utf-8"),
+      ).toBe("PRESERVE-THIS-DATA");
+      // Hold file was created
+      expect(fs.existsSync(holdPath)).toBe(true);
     } finally {
-      try { fs.unlinkSync(dstDir); } catch {}
-      try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch {}
-      try { fs.unlinkSync(journalPath); } catch {}
+      try {
+        fs.unlinkSync(holdPath);
+      } catch {}
+      try {
+        fs.unlinkSync(dstDir);
+      } catch {}
+      try {
+        fs.rmSync(srcDir, { recursive: true, force: true });
+      } catch {}
+      try {
+        fs.unlinkSync(journalPath);
+      } catch {}
     }
   });
 
@@ -2618,7 +3121,10 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     const srcDir = path.join(gameDir, "f2-src");
     const dstDir = path.join(gameDir, "f2-dst");
     const opId = "op-gate4-finding2";
-    const stagingDir = path.resolve(path.dirname(dstDir), `.lampas-moving-${opId}`);
+    const stagingDir = path.resolve(
+      path.dirname(dstDir),
+      `.lampas-moving-${opId}`,
+    );
     const journalPath = path.join(userDataDir, "directory-move.json");
 
     fs.mkdirSync(srcDir, { recursive: true });
@@ -2647,7 +3153,10 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       stagingVerified: true,
       timestamp: new Date().toISOString(),
     };
-    fs.writeFileSync(path.join(dstDir, MOVE_RECEIPT_FILENAME), JSON.stringify(dupReceipt, null, 2));
+    fs.writeFileSync(
+      path.join(dstDir, MOVE_RECEIPT_FILENAME),
+      JSON.stringify(dupReceipt, null, 2),
+    );
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
@@ -2657,11 +3166,11 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         target: dstDir,
         staging: stagingDir,
         phase: "cleaning",
-      })
+      }),
     );
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /duplicate file entry/i
+      /duplicate file entry/i,
     );
     expect(fs.existsSync(srcDir)).toBe(true);
 
@@ -2679,14 +3188,17 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       stagingVerified: true,
       timestamp: new Date().toISOString(),
     };
-    fs.writeFileSync(path.join(dstDir, MOVE_RECEIPT_FILENAME), JSON.stringify(validReceipt, null, 2));
+    fs.writeFileSync(
+      path.join(dstDir, MOVE_RECEIPT_FILENAME),
+      JSON.stringify(validReceipt, null, 2),
+    );
 
     // Create newly added empty directory in source
     const newEmptyDir = path.join(srcDir, "saves", "NewEmptyWorld");
     fs.mkdirSync(newEmptyDir, { recursive: true });
 
     await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
-      /source directory structure changed|unexpected directory/i
+      /source directory structure changed|unexpected directory/i,
     );
     // Source preserved!
     expect(fs.existsSync(srcDir)).toBe(true);
@@ -2696,7 +3208,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     fs.rmSync(path.join(srcDir, "data.txt"), { force: true });
     fs.rmSync(path.join(dstDir, "data.txt"), { force: true });
     fs.rmSync(newEmptyDir, { recursive: true, force: true });
-    try { fs.rmSync(path.join(srcDir, "saves"), { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(path.join(srcDir, "saves"), { recursive: true, force: true });
+    } catch {}
 
     const emptyReceipt = {
       version: 2,
@@ -2711,7 +3225,10 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       stagingVerified: true,
       timestamp: new Date().toISOString(),
     };
-    fs.writeFileSync(path.join(dstDir, MOVE_RECEIPT_FILENAME), JSON.stringify(emptyReceipt, null, 2));
+    fs.writeFileSync(
+      path.join(dstDir, MOVE_RECEIPT_FILENAME),
+      JSON.stringify(emptyReceipt, null, 2),
+    );
     fs.writeFileSync(
       journalPath,
       JSON.stringify({
@@ -2721,7 +3238,7 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         target: dstDir,
         staging: stagingDir,
         phase: "cleaning",
-      })
+      }),
     );
 
     // Recovery succeeds with valid empty payload
@@ -2730,9 +3247,15 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     expect(ConfigManager.get().gameDir).toBe(dstDir);
 
     // Cleanup
-    try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(dstDir, { recursive: true, force: true }); } catch {}
-    try { fs.unlinkSync(journalPath); } catch {}
+    try {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+    } catch {}
+    try {
+      fs.rmSync(dstDir, { recursive: true, force: true });
+    } catch {}
+    try {
+      fs.unlinkSync(journalPath);
+    } catch {}
   });
 
   test("Gate 4 Amendment Finding 3: Staging directory deletion requires matching marker in all recovery branches", async () => {
@@ -2740,8 +3263,10 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     const opId = "op-gate4-staging-marker-branches";
     const stagingDir = path.resolve(parentDir, `.lampas-moving-${opId}`);
     const journalPath = path.join(userDataDir, "directory-move.json");
+    const holdPath = path.join(userDataDir, "recovery-hold.json");
 
     // Case 3a: targetExists && !sourceExists (Case 1 in recovery)
+    // Staging exists but has no marker — recovery must throw, not silently proceed or delete staging
     const dstDir = path.join(parentDir, "dst-case1");
     const nonExistentSrc = path.join(parentDir, "non-existent-src");
     fs.mkdirSync(dstDir, { recursive: true });
@@ -2759,11 +3284,14 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         target: dstDir,
         staging: stagingDir,
         phase: "preparing",
-      })
+      }),
     );
 
     ConfigManager.set({ gameDir: dstDir, gameDirConfigured: true });
-    await GameDirectoryManager.recoverInterruptedMove();
+    // Case 1 now throws when staging marker is missing
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /could not be authorized for removal/i,
+    );
 
     // Staging without marker was NOT deleted!
     expect(fs.existsSync(stagingDir)).toBe(true);
@@ -2771,9 +3299,18 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     expect(fs.readFileSync(victimFile, "utf-8")).toBe("DO-NOT-DELETE-VICTIM");
 
     // Clean up
-    try { fs.rmSync(dstDir, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch {}
-    try { fs.unlinkSync(journalPath); } catch {}
+    try {
+      fs.unlinkSync(holdPath);
+    } catch {}
+    try {
+      fs.rmSync(dstDir, { recursive: true, force: true });
+    } catch {}
+    try {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    } catch {}
+    try {
+      fs.unlinkSync(journalPath);
+    } catch {}
   });
 
   test("Gate 4 Amendment Finding 4: Callers strictly enforce ownership and reject link attacks", async () => {
@@ -2792,17 +3329,27 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       ConfigManager.set({
         gameDir,
         customClientMods: [
-          { filename: "hardlink-test.jar", enabled: true, addedAt: new Date().toISOString() },
+          {
+            filename: "hardlink-test.jar",
+            enabled: true,
+            addedAt: new Date().toISOString(),
+          },
         ],
       });
       ClientModManager.add([newModSource]);
 
       // Hardlink was broken before write; victim file unchanged!
-      expect(fs.readFileSync(victimFile, "utf-8")).toBe("ORIGINAL-VICTIM-CONTENT");
+      expect(fs.readFileSync(victimFile, "utf-8")).toBe(
+        "ORIGINAL-VICTIM-CONTENT",
+      );
       expect(fs.readFileSync(modDest, "utf-8")).toBe("NEW-MOD-BYTES");
     } finally {
-      try { fs.unlinkSync(modDest); } catch {}
-      try { fs.unlinkSync(victimFile); } catch {}
+      try {
+        fs.unlinkSync(modDest);
+      } catch {}
+      try {
+        fs.unlinkSync(victimFile);
+      } catch {}
     }
 
     // 4b. reconcileRequiredResourcePacks rejects symlinked options.txt fail-closed
@@ -2817,14 +3364,18 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
         reconcileRequiredResourcePacks(gameDir, {
           required: [{ id: "rp1", filename: "pack.zip", sha256: "" }],
           previousManaged: [],
-        })
+        }),
       ).rejects.toThrow(/symbolic link/i);
 
       // Victim file outside was NOT overwritten!
       expect(fs.readFileSync(targetOutside, "utf-8")).toBe("SECRET-PAYLOAD");
     } finally {
-      try { fs.unlinkSync(optionsPath); } catch {}
-      try { fs.unlinkSync(targetOutside); } catch {}
+      try {
+        fs.unlinkSync(optionsPath);
+      } catch {}
+      try {
+        fs.unlinkSync(targetOutside);
+      } catch {}
     }
   });
 
@@ -2834,7 +3385,11 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
     const dirC = path.join(testRoot, "move-chain-C");
 
     fs.mkdirSync(dirA, { recursive: true });
-    fs.writeFileSync(path.join(dirA, "payload.txt"), "CHAINED-MOVE-PAYLOAD", "utf-8");
+    fs.writeFileSync(
+      path.join(dirA, "payload.txt"),
+      "CHAINED-MOVE-PAYLOAD",
+      "utf-8",
+    );
 
     ConfigManager.set({ gameDir: dirA, gameDirConfigured: true });
 
@@ -2854,7 +3409,9 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
       // Verify metadata files were cleaned from target!
       expect(fs.existsSync(path.join(dirB, MOVE_RECEIPT_FILENAME))).toBe(false);
-      expect(fs.existsSync(path.join(dirB, ".lampas_staging_marker.json"))).toBe(false);
+      expect(
+        fs.existsSync(path.join(dirB, ".lampas_staging_marker.json")),
+      ).toBe(false);
 
       // Second cross-volume move from new location: dirB -> dirC
       const res2 = await GameDirectoryManager.moveInstallation(dirC);
@@ -2863,13 +3420,423 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
       // Verify metadata files were cleaned from second target as well!
       expect(fs.existsSync(path.join(dirC, MOVE_RECEIPT_FILENAME))).toBe(false);
-      expect(fs.existsSync(path.join(dirC, ".lampas_staging_marker.json"))).toBe(false);
+      expect(
+        fs.existsSync(path.join(dirC, ".lampas_staging_marker.json")),
+      ).toBe(false);
     } finally {
       GameDirectoryManager._renameFn = origRename;
-      try { fs.rmSync(dirA, { recursive: true, force: true }); } catch {}
-      try { fs.rmSync(dirB, { recursive: true, force: true }); } catch {}
-      try { fs.rmSync(dirC, { recursive: true, force: true }); } catch {}
+      try {
+        fs.rmSync(dirA, { recursive: true, force: true });
+      } catch {}
+      try {
+        fs.rmSync(dirB, { recursive: true, force: true });
+      } catch {}
+      try {
+        fs.rmSync(dirC, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  // ─── Amendment 3: Finding 2 — classifyMoveMetadata rejects malformed/foreign files ───────────────
+
+  test("Gate 4 Amendment 3 Finding 2a: classifyMoveMetadata returns NOT_METADATA for normal files", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-cls-2a-"));
+    try {
+      const normalFile = path.join(tmpDir, "world-save.dat");
+      fs.writeFileSync(normalFile, "PLAYER-DATA", "utf-8");
+      const scanned = {
+        relativePath: "world-save.dat",
+        absolutePath: normalFile,
+        size: 11,
+        mode: 0o644,
+        atimeMs: 0,
+        mtimeMs: 0,
+      };
+      expect(classifyMoveMetadata(scanned, tmpDir)).toBe("NOT_METADATA");
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 2b: classifyMoveMetadata returns LEGITIMATE for correctly-owned staging marker", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-cls-2b-"));
+    try {
+      const markerPath = path.join(tmpDir, STAGING_MARKER_FILENAME);
+      const marker = {
+        operationId: "op-abc1234",
+        source: tmpDir,
+        target: path.join(os.tmpdir(), "target"),
+        staging: path.join(os.tmpdir(), ".lampas-moving-op-abc1234"),
+        timestamp: new Date().toISOString(),
+      };
+      fs.writeFileSync(markerPath, JSON.stringify(marker), "utf-8");
+      const scanned = {
+        relativePath: STAGING_MARKER_FILENAME,
+        absolutePath: markerPath,
+        size: 100,
+        mode: 0o644,
+        atimeMs: 0,
+        mtimeMs: 0,
+      };
+      expect(classifyMoveMetadata(scanned, tmpDir)).toBe("LEGITIMATE");
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 2c: classifyMoveMetadata returns MALFORMED_OR_FOREIGN for foreign staging marker (source/target don't match baseDir)", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-cls-2c-"));
+    const foreignDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "lampas-foreign-2c-"),
+    );
+    try {
+      const markerPath = path.join(tmpDir, STAGING_MARKER_FILENAME);
+      // source and target point to foreign directories, not tmpDir
+      const foreignMarker = {
+        operationId: "op-foreign",
+        source: foreignDir,
+        target: path.join(os.tmpdir(), "other-target"),
+        staging: path.join(os.tmpdir(), ".lampas-moving-op-foreign"),
+        timestamp: new Date().toISOString(),
+      };
+      fs.writeFileSync(markerPath, JSON.stringify(foreignMarker), "utf-8");
+      const scanned = {
+        relativePath: STAGING_MARKER_FILENAME,
+        absolutePath: markerPath,
+        size: 100,
+        mode: 0o644,
+        atimeMs: 0,
+        mtimeMs: 0,
+      };
+      expect(classifyMoveMetadata(scanned, tmpDir)).toBe(
+        "MALFORMED_OR_FOREIGN",
+      );
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+      try {
+        fs.rmSync(foreignDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 2d: classifyMoveMetadata returns MALFORMED_OR_FOREIGN for malformed JSON metadata file", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-cls-2d-"));
+    try {
+      const markerPath = path.join(tmpDir, STAGING_MARKER_FILENAME);
+      fs.writeFileSync(markerPath, "NOT-VALID-JSON", "utf-8");
+      const scanned = {
+        relativePath: STAGING_MARKER_FILENAME,
+        absolutePath: markerPath,
+        size: 14,
+        mode: 0o644,
+        atimeMs: 0,
+        mtimeMs: 0,
+      };
+      expect(classifyMoveMetadata(scanned, tmpDir)).toBe(
+        "MALFORMED_OR_FOREIGN",
+      );
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 2e: moveInstallation rejects source with foreign staging-marker file (fail-closed)", async () => {
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-2e-"));
+    const srcDir = path.join(parentDir, "src");
+    const dstDir = path.join(parentDir, "dst");
+    const origRename = GameDirectoryManager._renameFn;
+    try {
+      fs.mkdirSync(path.join(srcDir, "saves"), { recursive: true });
+      fs.writeFileSync(path.join(srcDir, "saves", "world.dat"), "WORLD-DATA");
+      // Foreign staging marker — source/target don't belong to srcDir
+      const foreignMarker = {
+        operationId: "foreign-op",
+        source: "/some/other/dir",
+        target: "/some/other/target",
+        staging: "/some/other/.lampas-moving-foreign-op",
+        timestamp: new Date().toISOString(),
+      };
+      fs.writeFileSync(
+        path.join(srcDir, STAGING_MARKER_FILENAME),
+        JSON.stringify(foreignMarker),
+      );
+
+      ConfigManager.set({ gameDir: srcDir, gameDirConfigured: true });
+
+      // Force staged copy to exercise payload filter
+      GameDirectoryManager._renameFn = (_src: string, _dest: string) => {
+        const err: any = new Error("EXDEV");
+        err.code = "EXDEV";
+        throw err;
+      };
+
+      await expect(
+        GameDirectoryManager.moveInstallation(dstDir),
+      ).rejects.toThrow(/foreign or malformed/i);
+
+      // Source must still exist and be intact
+      expect(fs.existsSync(path.join(srcDir, "saves", "world.dat"))).toBe(true);
+      expect(
+        fs.readFileSync(path.join(srcDir, "saves", "world.dat"), "utf-8"),
+      ).toBe("WORLD-DATA");
+    } finally {
+      GameDirectoryManager._renameFn = origRename;
+      try {
+        fs.rmSync(parentDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  // ─── Amendment 3: Finding 3 — replaceFile/replaceFileSync safely handle hardlinks ────────────────
+
+  test("Gate 4 Amendment 3 Finding 3a: replaceFileSync replaces a hardlinked destination without modifying the hardlink alias", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-3a-"));
+    try {
+      const original = path.join(tmpDir, "original.txt");
+      const hardlinkAlias = path.join(tmpDir, "alias.txt");
+      const tempContent = path.join(tmpDir, "new-content.tmp");
+
+      fs.writeFileSync(original, "ORIGINAL-CONTENT", "utf-8");
+      fs.linkSync(original, hardlinkAlias);
+
+      // Verify the hardlink is set up correctly
+      const stat = fs.statSync(original);
+      expect(stat.nlink).toBeGreaterThanOrEqual(2);
+
+      // Write new content to a temp file and replace 'original' atomically via replaceFileSync
+      fs.writeFileSync(tempContent, "NEW-CONTENT", "utf-8");
+      replaceFileSync(tempContent, original);
+
+      // original now has new content
+      expect(fs.readFileSync(original, "utf-8")).toBe("NEW-CONTENT");
+      // hardlink alias retains old content (the hardlink was NOT broken by pre-delete)
+      expect(fs.readFileSync(hardlinkAlias, "utf-8")).toBe("ORIGINAL-CONTENT");
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 3b: replaceFile (async) replaces a hardlinked destination without modifying the hardlink alias", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-3b-"));
+    try {
+      const original = path.join(tmpDir, "original.txt");
+      const hardlinkAlias = path.join(tmpDir, "alias.txt");
+      const tempContent = path.join(tmpDir, "new-content.tmp");
+
+      fs.writeFileSync(original, "ORIGINAL-ASYNC", "utf-8");
+      fs.linkSync(original, hardlinkAlias);
+
+      fs.writeFileSync(tempContent, "NEW-ASYNC-CONTENT", "utf-8");
+      await replaceFile(tempContent, original);
+
+      expect(fs.readFileSync(original, "utf-8")).toBe("NEW-ASYNC-CONTENT");
+      expect(fs.readFileSync(hardlinkAlias, "utf-8")).toBe("ORIGINAL-ASYNC");
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  // ─── Amendment 3: Finding 4 — Durable recovery hold blocks mutations across restarts ─────────────
+
+  test("Gate 4 Amendment 3 Finding 4a: quarantineJournal writes recovery-hold.json and throws", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-4a-"));
+    const fakeJournalPath = path.join(tmpDir, "directory-move.json");
+    const holdPath = path.join(userDataDir, RECOVERY_HOLD_FILENAME);
+    try {
+      fs.writeFileSync(
+        fakeJournalPath,
+        JSON.stringify({
+          version: 2,
+          phase: "copying",
+          operationId: "bad-op",
+          source: tmpDir,
+          target: tmpDir,
+          staging: tmpDir,
+        }),
+      );
+
+      // quarantineJournal should throw
+      expect(() => {
+        quarantineJournal(
+          fakeJournalPath,
+          "Test quarantine reason for finding 4a",
+        );
+      }).toThrow(/quarantined/i);
+
+      // recovery-hold.json must exist in userDataDir
+      expect(fs.existsSync(holdPath)).toBe(true);
+      const holdData = JSON.parse(fs.readFileSync(holdPath, "utf-8"));
+      expect(holdData.reason).toContain(
+        "Test quarantine reason for finding 4a",
+      );
+    } finally {
+      // Clean up the hold so subsequent tests aren't blocked
+      try {
+        fs.unlinkSync(holdPath);
+      } catch {}
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 4b: recoverInterruptedMove with corrupted journal writes hold and throws (blockMutations)", async () => {
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const holdPath = path.join(userDataDir, RECOVERY_HOLD_FILENAME);
+    // Ensure clean state
+    try {
+      fs.unlinkSync(journalPath);
+    } catch {}
+    try {
+      fs.unlinkSync(holdPath);
+    } catch {}
+
+    try {
+      fs.writeFileSync(journalPath, "NOT-VALID-JSON-AT-ALL");
+
+      // recoverInterruptedMove should propagate quarantineJournal's throw
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/quarantined/i);
+
+      // Hold file must exist
+      expect(fs.existsSync(holdPath)).toBe(true);
+    } finally {
+      try {
+        fs.unlinkSync(journalPath);
+      } catch {}
+      try {
+        fs.unlinkSync(holdPath);
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 4c: recoverInterruptedMove blocks on durable hold across two consecutive restarts", async () => {
+    const holdPath = path.join(userDataDir, RECOVERY_HOLD_FILENAME);
+    // Ensure clean state
+    try {
+      fs.unlinkSync(holdPath);
+    } catch {}
+
+    try {
+      // Write a durable hold manually (simulating a prior quarantine)
+      fs.writeFileSync(
+        holdPath,
+        JSON.stringify({
+          reason: "manual-hold-4c",
+          quarantinedAt: new Date().toISOString(),
+        }),
+      );
+
+      // First "restart" — should throw due to hold
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/durable recovery hold/i);
+
+      // Hold file must still exist after the throw (it was not removed)
+      expect(fs.existsSync(holdPath)).toBe(true);
+
+      // Second "restart" — still blocked
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/durable recovery hold/i);
+      expect(fs.existsSync(holdPath)).toBe(true);
+
+      // After resolveRecoveryHold, the hold is gone and recovery can proceed normally
+      GameDirectoryManager.resolveRecoveryHold();
+      expect(fs.existsSync(holdPath)).toBe(false);
+
+      // Third call — no journal, no hold: returns normally
+      await GameDirectoryManager.recoverInterruptedMove();
+    } finally {
+      try {
+        fs.unlinkSync(holdPath);
+      } catch {}
+    }
+  });
+
+  test("Gate 4 Amendment 3 Finding 4d: staging marker mismatch in recovery Case 4 throws (no silent journal deletion)", async () => {
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-4d-"));
+    const srcDir = path.join(parentDir, "source");
+    const dstDir = path.join(parentDir, "target");
+    const opId = "op-4d-staging-mismatch";
+    const stagingDir = path.join(parentDir, `.lampas-moving-${opId}`);
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const holdPath = path.join(userDataDir, RECOVERY_HOLD_FILENAME);
+
+    try {
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.mkdirSync(stagingDir, { recursive: true });
+      fs.writeFileSync(path.join(srcDir, "payload.txt"), "PAYLOAD");
+      // Staging has a marker with a DIFFERENT operationId
+      const mismatchedMarker = {
+        operationId: "op-DIFFERENT",
+        source: srcDir,
+        target: dstDir,
+        staging: stagingDir,
+        timestamp: new Date().toISOString(),
+      };
+      fs.writeFileSync(
+        path.join(stagingDir, STAGING_MARKER_FILENAME),
+        JSON.stringify(mismatchedMarker),
+      );
+
+      // Write a journal that is in "copying" phase (Case 4)
+      const victimFile = path.join(stagingDir, "precious-data.txt");
+      fs.writeFileSync(victimFile, "DO-NOT-DELETE");
+
+      fs.writeFileSync(
+        journalPath,
+        JSON.stringify({
+          version: 2,
+          operationId: opId,
+          source: srcDir,
+          target: dstDir,
+          staging: stagingDir,
+          phase: "copying",
+          timestamp: new Date().toISOString(),
+        }),
+      );
+
+      ConfigManager.set({ gameDir: srcDir, gameDirConfigured: true });
+
+      // Recovery should throw because staging marker operationId doesn't match journal operationId
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/could not be authorized for removal/i);
+
+      // Staging must still exist — it was NOT deleted
+      expect(fs.existsSync(stagingDir)).toBe(true);
+      expect(fs.existsSync(victimFile)).toBe(true);
+      expect(fs.readFileSync(victimFile, "utf-8")).toBe("DO-NOT-DELETE");
+
+      // Journal must still exist (NOT unlinked on failure)
+      expect(fs.existsSync(journalPath)).toBe(true);
+
+      // Source is intact
+      expect(fs.existsSync(path.join(srcDir, "payload.txt"))).toBe(true);
+    } finally {
+      try {
+        fs.unlinkSync(journalPath);
+      } catch {}
+      try {
+        fs.unlinkSync(holdPath);
+      } catch {}
+      try {
+        fs.rmSync(parentDir, { recursive: true, force: true });
+      } catch {}
     }
   });
 });
-

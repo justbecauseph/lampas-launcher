@@ -1,10 +1,20 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sync-patches-test-"));
+const testRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "lampas-sync-patches-test-"),
+);
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
 
@@ -55,20 +65,35 @@ describe("LauncherSync config patches and protocol integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "3.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "3.0.0",
+            release: "/api/v1/releases/3.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/3.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "3.0.0",
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
             protocol: 4,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/3.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/3.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/3.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "3.0.0",
+            target: "client",
             protocol: 4,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
             files: [],
             mods: [],
           });
@@ -77,10 +102,12 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, {
+      token: "mock-token",
+    });
 
     await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-      /Unsupported modpack protocol: release requires protocol 4, but this launcher only supports up to protocol 3/
+      /Unsupported modpack protocol: release requires protocol 4, but this launcher only supports up to protocol 3/,
     );
 
     server.stop(true);
@@ -92,21 +119,35 @@ describe("LauncherSync config patches and protocol integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.1.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.1.0",
+            release: "/api/v1/releases/2.1.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.1.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.1.0",
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
             protocol: 3,
             minimumLauncherVersion: "99.0.0",
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.1.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.1.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.1.0",
+            target: "client",
             protocol: 3,
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
             files: [],
             mods: [],
           });
@@ -115,10 +156,12 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, {
+      token: "mock-token",
+    });
 
     await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-      /Launcher update required: release requires launcher version 99.0.0 or newer/
+      /Launcher update required: release requires launcher version 99.0.0 or newer/,
     );
 
     server.stop(true);
@@ -128,12 +171,19 @@ describe("LauncherSync config patches and protocol integration", () => {
     const configPath = path.join(gameDir, "config/chatting.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
 
-    const initialConfig = "// My custom chatting settings\n" + JSON.stringify({
-      volume: 0.42,
-      chatTabs: true,
-      hypixelOnlyChatTabs: true,
-      customFavoriteChannel: "#general"
-    }, null, 2) + "\n";
+    const initialConfig =
+      "// My custom chatting settings\n" +
+      JSON.stringify(
+        {
+          volume: 0.42,
+          chatTabs: true,
+          hypixelOnlyChatTabs: true,
+          customFavoriteChannel: "#general",
+        },
+        null,
+        2,
+      ) +
+      "\n";
     fs.writeFileSync(configPath, initialConfig, "utf-8");
 
     const server = Bun.serve({
@@ -141,15 +191,24 @@ describe("LauncherSync config patches and protocol integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.1.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.1.0",
+            release: "/api/v1/releases/2.1.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.1.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.1.0",
             protocol: 3,
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.1.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.1.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
@@ -157,6 +216,7 @@ describe("LauncherSync config patches and protocol integration", () => {
             schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.1.0",
+            target: "client",
             protocol: 3,
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
@@ -181,7 +241,9 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, {
+      token: "mock-token",
+    });
 
     // 1. Sync
     const syncRes = await LauncherSync.syncClient(() => {});
@@ -207,7 +269,10 @@ describe("LauncherSync config patches and protocol integration", () => {
     expect(afterSync2).toContain('"hypixelOnlyChatTabs": false');
 
     // 3. User reverts hypixelOnlyChatTabs to true
-    const userReverted = afterSync2.replace('"hypixelOnlyChatTabs": false', '"hypixelOnlyChatTabs": true');
+    const userReverted = afterSync2.replace(
+      '"hypixelOnlyChatTabs": false',
+      '"hypixelOnlyChatTabs": true',
+    );
     fs.writeFileSync(configPath, userReverted, "utf-8");
 
     // Next sync: restores false
@@ -231,15 +296,24 @@ describe("LauncherSync config patches and protocol integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.1.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.1.0",
+            release: "/api/v1/releases/2.1.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.1.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.1.0",
             protocol: 3,
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.1.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.1.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
@@ -247,6 +321,7 @@ describe("LauncherSync config patches and protocol integration", () => {
             schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.1.0",
+            target: "client",
             protocol: 3,
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
@@ -261,7 +336,11 @@ describe("LauncherSync config patches and protocol integration", () => {
                 mode: "once",
                 missingFile: "defer",
                 operations: [
-                  { op: "set", path: ["recommendation"], value: "recommended_v" + currentRevision },
+                  {
+                    op: "set",
+                    path: ["recommendation"],
+                    value: "recommended_v" + currentRevision,
+                  },
                 ],
               },
             ],
@@ -271,18 +350,26 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, {
+      token: "mock-token",
+    });
 
     // Sync rev 1
     await LauncherSync.syncClient(() => {});
     expect(fs.readFileSync(configPath, "utf-8")).toContain('"recommended_v1"');
 
     // User changes recommendation
-    fs.writeFileSync(configPath, '{"recommendation": "my_custom_choice"}\n', "utf-8");
+    fs.writeFileSync(
+      configPath,
+      '{"recommendation": "my_custom_choice"}\n',
+      "utf-8",
+    );
 
     // Sync rev 1 again: user change MUST remain untouched
     await LauncherSync.syncClient(() => {});
-    expect(fs.readFileSync(configPath, "utf-8")).toContain('"my_custom_choice"');
+    expect(fs.readFileSync(configPath, "utf-8")).toContain(
+      '"my_custom_choice"',
+    );
 
     // Server bumps to rev 2
     currentRevision = 2;
@@ -302,15 +389,24 @@ describe("LauncherSync config patches and protocol integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.1.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.1.0",
+            release: "/api/v1/releases/2.1.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.1.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.1.0",
             protocol: 3,
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.1.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.1.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
@@ -318,6 +414,7 @@ describe("LauncherSync config patches and protocol integration", () => {
             schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.1.0",
+            target: "client",
             protocol: 3,
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
@@ -340,7 +437,9 @@ describe("LauncherSync config patches and protocol integration", () => {
       },
     });
 
-    ConfigManager.establishSession("http://127.0.0.1:" + server.port, { token: "mock-token" });
+    ConfigManager.establishSession("http://127.0.0.1:" + server.port, {
+      token: "mock-token",
+    });
 
     // Sync when file does not exist
     const res1 = await LauncherSync.syncClient(() => {});

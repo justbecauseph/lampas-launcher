@@ -29,7 +29,9 @@ export class PortalRedirectPolicyError extends Error {
   readonly endpointUrl: string;
 
   constructor(status: number, location: string | null, endpointUrl: string) {
-    super(`[PortalRedirectPolicy] Authenticated metadata endpoint '${endpointUrl}' rejected redirect (${status}) to '${location || "unknown"}'`);
+    super(
+      `[PortalRedirectPolicy] Authenticated metadata endpoint '${endpointUrl}' rejected redirect (${status}) to '${location || "unknown"}'`,
+    );
     this.name = "PortalRedirectPolicyError";
     this.status = status;
     this.location = location;
@@ -102,10 +104,17 @@ export const PortalPolicy = {
       return false;
     }
     // Explicit development portal hosts configured via development policy
-    if (developmentPolicy?.allowedRemoteHosts?.map((h) => h.toLowerCase()).includes(lower)) {
+    if (
+      developmentPolicy?.allowedRemoteHosts
+        ?.map((h) => h.toLowerCase())
+        .includes(lower)
+    ) {
       return true;
     }
-    const envHosts = process.env.LAMPAS_ALLOWED_PORTAL_HOSTS?.split(",").map((h) => h.trim().toLowerCase()) || [];
+    const envHosts =
+      process.env.LAMPAS_ALLOWED_PORTAL_HOSTS?.split(",").map((h) =>
+        h.trim().toLowerCase(),
+      ) || [];
     if (envHosts.includes(lower)) {
       return true;
     }
@@ -139,18 +148,55 @@ export function isApprovedRemoteHost(hostname: string): boolean {
  * Restricted Portal transport path for authenticated metadata requests.
  * Enforces manual redirect policy (redirect: "manual") and rejects any redirect status (301, 302, 307, 308).
  */
-export async function portalFetch(url: string, init?: RequestInit): Promise<Response> {
-  const resp = await fetch(url, {
-    ...init,
-    redirect: "manual",
-  });
-
-  if ((resp.status >= 300 && resp.status < 400) || resp.type === "opaqueredirect") {
-    const location = resp.headers.get("location");
-    throw new PortalRedirectPolicyError(resp.status, location, url);
+export async function portalFetch(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error("Portal request timed out")),
+    30_000,
+  );
+  const abort = () => controller.abort(init?.signal?.reason);
+  if (init?.signal?.aborted) abort();
+  init?.signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const resp = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      redirect: "manual",
+    });
+    if (
+      (resp.status >= 300 && resp.status < 400) ||
+      resp.type === "opaqueredirect"
+    ) {
+      await resp.body?.cancel().catch(() => undefined);
+      throw new PortalRedirectPolicyError(
+        resp.status,
+        resp.headers.get("location"),
+        url,
+      );
+    }
+    // Auth replies are small; bound the body before any caller can parse it.
+    const { readResponseBytes } = await import("./transfer-limits");
+    const bytes = await readResponseBytes(
+      resp,
+      1024 * 1024,
+      controller.signal,
+      "Portal auth response",
+    );
+    return new Response(
+      resp.status === 204 || resp.status === 205 ? null : Buffer.from(bytes),
+      {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+      },
+    );
+  } finally {
+    clearTimeout(timer);
+    init?.signal?.removeEventListener("abort", abort);
   }
-
-  return resp;
 }
 
 /**
@@ -168,7 +214,9 @@ export function normalizePortalUrl(url?: string): string {
 
   // Reject control characters immediately
   if (/[\x00-\x1f\x7f]/.test(raw)) {
-    throw new PortalPolicyError("Portal URL contains invalid control characters.");
+    throw new PortalPolicyError(
+      "Portal URL contains invalid control characters.",
+    );
   }
 
   // Prepend scheme if absent
@@ -190,17 +238,23 @@ export function normalizePortalUrl(url?: string): string {
   // Enforce supported schemes
   const scheme = parsed.protocol.toLowerCase();
   if (scheme !== "http:" && scheme !== "https:") {
-    throw new PortalPolicyError(`Unsupported protocol '${scheme}'. Portal endpoints require HTTP or HTTPS.`);
+    throw new PortalPolicyError(
+      `Unsupported protocol '${scheme}'. Portal endpoints require HTTP or HTTPS.`,
+    );
   }
 
   // Reject userinfo
   if (parsed.username || parsed.password) {
-    throw new PortalPolicyError("Portal URL must not contain embedded user credentials.");
+    throw new PortalPolicyError(
+      "Portal URL must not contain embedded user credentials.",
+    );
   }
 
   // Reject query parameters
   if (parsed.search && parsed.search !== "?") {
-    throw new PortalPolicyError("Portal URL must not contain query parameters.");
+    throw new PortalPolicyError(
+      "Portal URL must not contain query parameters.",
+    );
   }
 
   // Reject hash fragments
@@ -210,7 +264,9 @@ export function normalizePortalUrl(url?: string): string {
 
   // Enforce origin-only base path contract: path must be empty or "/"
   if (parsed.pathname && parsed.pathname !== "/") {
-    throw new PortalPolicyError(`Portal URL must not contain path components ('${parsed.pathname}').`);
+    throw new PortalPolicyError(
+      `Portal URL must not contain path components ('${parsed.pathname}').`,
+    );
   }
 
   const hostname = parsed.hostname;
@@ -219,7 +275,7 @@ export function normalizePortalUrl(url?: string): string {
   if (isLoopback) {
     if (!PortalPolicy.isLoopbackAllowed()) {
       throw new PortalPolicyError(
-        `Loopback portal destination '${hostname}' is not permitted without explicit development policy.`
+        `Loopback portal destination '${hostname}' is not permitted without explicit development policy.`,
       );
     }
     // Loopback development endpoints may use HTTP or HTTPS
@@ -234,11 +290,15 @@ export function normalizePortalUrl(url?: string): string {
       return parsed.origin;
     }
     // Remote HTTP to any unapproved host or lookalike is forbidden
-    throw new PortalPolicyError(`Remote portal destination '${hostname}' must use HTTPS.`);
+    throw new PortalPolicyError(
+      `Remote portal destination '${hostname}' must use HTTPS.`,
+    );
   }
 
   if (!isApprovedRemoteHost(hostname)) {
-    throw new PortalPolicyError(`Remote portal host '${hostname}' is not an approved Lampas Portal destination.`);
+    throw new PortalPolicyError(
+      `Remote portal host '${hostname}' is not an approved Lampas Portal destination.`,
+    );
   }
 
   return parsed.origin;
@@ -260,23 +320,31 @@ export function validateWebUrl(urlStr: string): string {
 
   // Reject control characters
   if (/[\x00-\x1f\x7f]/.test(trimmed)) {
-    throw new WebOpeningPolicyError("Web URL contains invalid control characters.");
+    throw new WebOpeningPolicyError(
+      "Web URL contains invalid control characters.",
+    );
   }
 
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
   } catch (err: any) {
-    throw new WebOpeningPolicyError(`Malformed web URL: ${err?.message || trimmed}`);
+    throw new WebOpeningPolicyError(
+      `Malformed web URL: ${err?.message || trimmed}`,
+    );
   }
 
   const scheme = parsed.protocol.toLowerCase();
   if (scheme !== "http:" && scheme !== "https:") {
-    throw new WebOpeningPolicyError(`Unsupported web protocol '${scheme}'. Only HTTP and HTTPS web URLs are permitted.`);
+    throw new WebOpeningPolicyError(
+      `Unsupported web protocol '${scheme}'. Only HTTP and HTTPS web URLs are permitted.`,
+    );
   }
 
   if (parsed.username || parsed.password) {
-    throw new WebOpeningPolicyError("Web URL must not contain embedded user credentials.");
+    throw new WebOpeningPolicyError(
+      "Web URL must not contain embedded user credentials.",
+    );
   }
 
   return parsed.href;

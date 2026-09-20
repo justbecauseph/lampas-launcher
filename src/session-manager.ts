@@ -1,7 +1,13 @@
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
 import * as jsonc from "jsonc-parser";
-import { CredentialStore, type StoredCredentialRecord, type SaveCredentialsResult, type ClearCredentialsResult, type StorageBackendType } from "./credential-store";
+import {
+  CredentialStore,
+  type StoredCredentialRecord,
+  type SaveCredentialsResult,
+  type ClearCredentialsResult,
+  type StorageBackendType,
+} from "./credential-store";
 import { normalizePortalUrl } from "./portal-policy";
 import { writeAtomicFileSync } from "./file-transfer";
 import { LauncherLogger } from "./logger";
@@ -44,7 +50,7 @@ function decodeJsonStringToken(content: string): string {
     return JSON.parse(`"${content.replace(/"/g, '\\"')}"`);
   } catch {
     return content.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
-      String.fromCharCode(parseInt(hex, 16))
+      String.fromCharCode(parseInt(hex, 16)),
     );
   }
 }
@@ -77,7 +83,8 @@ function detectPlaintextSecretKeys(parsed: any, raw?: string | null): boolean {
   return false;
 }
 
-const MINECRAFT_UUID_REGEX = /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$/;
+const MINECRAFT_UUID_REGEX =
+  /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$/;
 const ZERO_UUID_REGEX = /^(?:0{8}-0{4}-0{4}-0{4}-0{12}|0{32})$/;
 
 export function isValidMinecraftUuid(uuid: any): boolean {
@@ -94,15 +101,24 @@ export class SessionManager {
   private static currentUser: UserProfile | null = null;
   private static activeLoginEpoch: number = 0;
   private static isCurrentSessionPersisted: boolean = false;
-  private static refreshPromises = new Map<string, Promise<{ valid: boolean; user?: UserProfile; token?: string }>>();
+  private static refreshPromises = new Map<
+    string,
+    Promise<{ valid: boolean; user?: UserProfile; token?: string }>
+  >();
   private static initialized: boolean = false;
   private static lastMigrationOutcome: MigrationOutcome | null = null;
-  private static sessionListeners: Array<(creds: SessionCredentials | null) => void> = [];
+  private static sessionListeners: Array<
+    (creds: SessionCredentials | null) => void
+  > = [];
 
-  static addSessionListener(listener: (creds: SessionCredentials | null) => void): () => void {
+  static addSessionListener(
+    listener: (creds: SessionCredentials | null) => void,
+  ): () => void {
     this.sessionListeners.push(listener);
     return () => {
-      this.sessionListeners = this.sessionListeners.filter((l) => l !== listener);
+      this.sessionListeners = this.sessionListeners.filter(
+        (l) => l !== listener,
+      );
     };
   }
 
@@ -163,7 +179,9 @@ export class SessionManager {
   static setCurrentUser(user: UserProfile | null): void {
     if (user) {
       if (typeof user.id !== "string" || typeof user.name !== "string") {
-        throw new Error("Cannot set current user: user ID and name must be strings");
+        throw new Error(
+          "Cannot set current user: user ID and name must be strings",
+        );
       }
       const uName = user.name.trim();
       const uId = user.id.trim();
@@ -177,7 +195,9 @@ export class SessionManager {
         uId.toLowerCase() === "account" ||
         uId.toLowerCase() === "unverified-migration"
       ) {
-        throw new Error("Cannot set current user: placeholder or invalid identity");
+        throw new Error(
+          "Cannot set current user: placeholder or invalid identity",
+        );
       }
     }
 
@@ -192,7 +212,7 @@ export class SessionManager {
         this.currentUser.id !== user.id
       ) {
         throw new Error(
-          `Cannot relabel credentials: active session belongs to portal user ${this.currentUser.id}, not ${user.id}`
+          `Cannot relabel credentials: active session belongs to portal user ${this.currentUser.id}, not ${user.id}`,
         );
       }
 
@@ -206,7 +226,7 @@ export class SessionManager {
         existingPortalId !== user.id
       ) {
         throw new Error(
-          `Cannot relabel credentials: active session belongs to portal user ${existingPortalId}, not ${user.id}`
+          `Cannot relabel credentials: active session belongs to portal user ${existingPortalId}, not ${user.id}`,
         );
       }
 
@@ -217,17 +237,21 @@ export class SessionManager {
         existingMcUuid !== user.minecraftUuid
       ) {
         throw new Error(
-          `Cannot relabel credentials: active session belongs to Minecraft UUID ${existingMcUuid}, not ${user.minecraftUuid}`
+          `Cannot relabel credentials: active session belongs to Minecraft UUID ${existingMcUuid}, not ${user.minecraftUuid}`,
         );
       }
 
       this.currentUser = user;
       if (user.id) this.currentRecord.portalAccountId = user.id;
       if (user.name) this.currentRecord.portalUsername = user.name;
-      if (user.minecraftUuid) this.currentRecord.minecraftUuid = user.minecraftUuid;
-      if (user.minecraftUsername) this.currentRecord.minecraftUsername = user.minecraftUsername;
-      this.currentRecord.accountId = this.currentRecord.portalAccountId || this.currentRecord.accountId;
-      this.currentRecord.accountUsername = this.currentRecord.portalUsername || this.currentRecord.accountUsername;
+      if (user.minecraftUuid)
+        this.currentRecord.minecraftUuid = user.minecraftUuid;
+      if (user.minecraftUsername)
+        this.currentRecord.minecraftUsername = user.minecraftUsername;
+      this.currentRecord.accountId =
+        this.currentRecord.portalAccountId || this.currentRecord.accountId;
+      this.currentRecord.accountUsername =
+        this.currentRecord.portalUsername || this.currentRecord.accountUsername;
     } else {
       this.currentUser = user;
     }
@@ -239,28 +263,60 @@ export class SessionManager {
    */
   static validateCandidateSession(
     record: StoredCredentialRecord,
-    user?: UserProfile
+    user?: UserProfile,
   ): { valid: boolean; error?: string } {
     if (!CredentialStore.validateRecord(record)) {
-      return { valid: false, error: "Candidate record failed credential store schema validation" };
+      return {
+        valid: false,
+        error: "Candidate record failed credential store schema validation",
+      };
     }
 
-    if (record.portalAccountId !== undefined && typeof record.portalAccountId !== "string") {
-      return { valid: false, error: "Candidate record has malformed portalAccountId (must be string)" };
+    if (
+      record.portalAccountId !== undefined &&
+      typeof record.portalAccountId !== "string"
+    ) {
+      return {
+        valid: false,
+        error:
+          "Candidate record has malformed portalAccountId (must be string)",
+      };
     }
-    if (record.accountId !== undefined && typeof record.accountId !== "string") {
-      return { valid: false, error: "Candidate record has malformed accountId (must be string)" };
+    if (
+      record.accountId !== undefined &&
+      typeof record.accountId !== "string"
+    ) {
+      return {
+        valid: false,
+        error: "Candidate record has malformed accountId (must be string)",
+      };
     }
-    if (record.portalUsername !== undefined && typeof record.portalUsername !== "string") {
-      return { valid: false, error: "Candidate record has malformed portalUsername (must be string)" };
+    if (
+      record.portalUsername !== undefined &&
+      typeof record.portalUsername !== "string"
+    ) {
+      return {
+        valid: false,
+        error: "Candidate record has malformed portalUsername (must be string)",
+      };
     }
-    if (record.accountUsername !== undefined && typeof record.accountUsername !== "string") {
-      return { valid: false, error: "Candidate record has malformed accountUsername (must be string)" };
+    if (
+      record.accountUsername !== undefined &&
+      typeof record.accountUsername !== "string"
+    ) {
+      return {
+        valid: false,
+        error:
+          "Candidate record has malformed accountUsername (must be string)",
+      };
     }
 
     const rawAccountId = record.portalAccountId ?? record.accountId;
     if (typeof rawAccountId !== "string") {
-      return { valid: false, error: "Candidate record lacks valid string account ID" };
+      return {
+        valid: false,
+        error: "Candidate record lacks valid string account ID",
+      };
     }
     const portalAccountId = rawAccountId.trim();
     if (
@@ -269,12 +325,18 @@ export class SessionManager {
       portalAccountId.toLowerCase() === "unverified-migration" ||
       portalAccountId.toLowerCase() === "player"
     ) {
-      return { valid: false, error: `Invalid account identity '${portalAccountId}'` };
+      return {
+        valid: false,
+        error: `Invalid account identity '${portalAccountId}'`,
+      };
     }
 
     const rawUsername = record.portalUsername ?? record.accountUsername;
     if (typeof rawUsername !== "string") {
-      return { valid: false, error: "Candidate record lacks valid string username" };
+      return {
+        valid: false,
+        error: "Candidate record lacks valid string username",
+      };
     }
     const portalUsername = rawUsername.trim();
     if (
@@ -288,7 +350,10 @@ export class SessionManager {
 
     if (record.minecraftUuid !== undefined) {
       if (!isValidMinecraftUuid(record.minecraftUuid)) {
-        return { valid: false, error: "Candidate record has invalid Minecraft UUID format" };
+        return {
+          valid: false,
+          error: "Candidate record has invalid Minecraft UUID format",
+        };
       }
     }
 
@@ -297,28 +362,64 @@ export class SessionManager {
         return { valid: false, error: "User profile lacks valid string ID" };
       }
       const uId = user.id.trim();
-      if (!uId || uId.toLowerCase() === "player" || uId.toLowerCase() === "account" || uId.toLowerCase() === "unverified-migration") {
-        return { valid: false, error: `User profile has invalid or placeholder ID '${uId}'` };
+      if (
+        !uId ||
+        uId.toLowerCase() === "player" ||
+        uId.toLowerCase() === "account" ||
+        uId.toLowerCase() === "unverified-migration"
+      ) {
+        return {
+          valid: false,
+          error: `User profile has invalid or placeholder ID '${uId}'`,
+        };
       }
       if (typeof user.name !== "string") {
         return { valid: false, error: "User profile lacks valid string name" };
       }
       const uName = user.name.trim();
-      if (!uName || uName.toLowerCase() === "player" || uName.toLowerCase() === "account" || uName.toLowerCase() === "unverified-migration") {
-        return { valid: false, error: `User profile has invalid or placeholder name '${uName}'` };
+      if (
+        !uName ||
+        uName.toLowerCase() === "player" ||
+        uName.toLowerCase() === "account" ||
+        uName.toLowerCase() === "unverified-migration"
+      ) {
+        return {
+          valid: false,
+          error: `User profile has invalid or placeholder name '${uName}'`,
+        };
       }
       if (!isValidMinecraftUuid(user.minecraftUuid)) {
-        return { valid: false, error: "User profile lacks valid bound Minecraft UUID format" };
+        return {
+          valid: false,
+          error: "User profile lacks valid bound Minecraft UUID format",
+        };
       }
       if (typeof user.minecraftUsername !== "string") {
-        return { valid: false, error: "User profile lacks valid string Minecraft username" };
+        return {
+          valid: false,
+          error: "User profile lacks valid string Minecraft username",
+        };
       }
       const mcUsername = user.minecraftUsername.trim();
-      if (!mcUsername || mcUsername.toLowerCase() === "player" || mcUsername.toLowerCase() === "account") {
-        return { valid: false, error: "User profile lacks valid Minecraft username" };
+      if (
+        !mcUsername ||
+        mcUsername.toLowerCase() === "player" ||
+        mcUsername.toLowerCase() === "account"
+      ) {
+        return {
+          valid: false,
+          error: "User profile lacks valid Minecraft username",
+        };
       }
-      if (user.minecraftAccessToken !== undefined && typeof user.minecraftAccessToken !== "string") {
-        return { valid: false, error: "User profile has malformed Minecraft access token (must be string)" };
+      if (
+        user.minecraftAccessToken !== undefined &&
+        typeof user.minecraftAccessToken !== "string"
+      ) {
+        return {
+          valid: false,
+          error:
+            "User profile has malformed Minecraft access token (must be string)",
+        };
       }
     }
 
@@ -349,7 +450,9 @@ export class SessionManager {
     const backend = CredentialStore.detectStorageBackend();
     const persistenceAvailable = CredentialStore.isPersistenceAvailable();
     const hasActiveSession = Boolean(this.currentRecord);
-    const sessionOnly = !persistenceAvailable || (hasActiveSession && !this.isCurrentSessionPersisted);
+    const sessionOnly =
+      !persistenceAvailable ||
+      (hasActiveSession && !this.isCurrentSessionPersisted);
 
     return {
       backend,
@@ -370,7 +473,11 @@ export class SessionManager {
     portalUrl: string,
     accountId: string,
     epoch: number,
-    factory: () => Promise<{ valid: boolean; user?: UserProfile; token?: string }>
+    factory: () => Promise<{
+      valid: boolean;
+      user?: UserProfile;
+      token?: string;
+    }>,
   ): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
     const key = `${normalizePortalUrl(portalUrl)}::${accountId}::${epoch}`;
     const existing = this.refreshPromises.get(key);
@@ -411,15 +518,20 @@ export class SessionManager {
    *          - If save or verify fails: clear CredentialStore, scrub plaintext, fail closed.
    * 3. Explicit cleanup outcomes returned; never leaves plaintext un-scrubbed.
    */
-  static initialize(configPath: string, activePortalUrl: string): MigrationOutcome {
+  static initialize(
+    configPath: string,
+    activePortalUrl: string,
+  ): MigrationOutcome {
     if (this.initialized) {
-      return this.lastMigrationOutcome || {
-        protectedLoaded: Boolean(this.currentRecord),
-        failedProtectedLoad: false,
-        legacyPlaintextDetected: false,
-        legacyScrubbed: false,
-        migrated: false,
-      };
+      return (
+        this.lastMigrationOutcome || {
+          protectedLoaded: Boolean(this.currentRecord),
+          failedProtectedLoad: false,
+          legacyPlaintextDetected: false,
+          legacyScrubbed: false,
+          migrated: false,
+        }
+      );
     }
     this.initialized = true;
 
@@ -442,7 +554,10 @@ export class SessionManager {
             id: stored.portalAccountId || stored.accountId,
             name: stored.portalUsername || stored.accountUsername,
             minecraftUuid: stored.minecraftUuid,
-            minecraftUsername: stored.minecraftUsername || stored.accountUsername || stored.portalUsername,
+            minecraftUsername:
+              stored.minecraftUsername ||
+              stored.accountUsername ||
+              stored.portalUsername,
             isAdmin: false,
             isTech: false,
             roles: [],
@@ -450,9 +565,11 @@ export class SessionManager {
           };
           protectedLoaded = true;
           this.isCurrentSessionPersisted = true;
-          LauncherLogger.info(`[SessionManager] Restored protected session for ${stored.accountUsername} on ${stored.portalUrl}`);
+          LauncherLogger.info("[SessionManager] Restored protected session");
         } else {
-          LauncherLogger.warn(`[SessionManager] Stored credentials origin '${stored.portalUrl}' does not match active portal '${canonicalActivePortal}'. Purging wrong-origin credentials.`);
+          LauncherLogger.warn(
+            `[SessionManager] Stored credentials origin '${stored.portalUrl}' does not match active portal '${canonicalActivePortal}'. Purging wrong-origin credentials.`,
+          );
           CredentialStore.clearCredentials();
           this.isCurrentSessionPersisted = false;
           this.advanceSessionEpoch();
@@ -461,7 +578,9 @@ export class SessionManager {
         // File existed but loadCredentials returned null -> decryption failed, invalid JSON, or schema invalid!
         failedProtectedLoad = true;
         this.isCurrentSessionPersisted = false;
-        LauncherLogger.warn("[SessionManager] Protected credential file existed but failed to load/decrypt. Treating as corrupt and purged.");
+        LauncherLogger.warn(
+          "[SessionManager] Protected credential file existed but failed to load/decrypt. Treating as corrupt and purged.",
+        );
       }
     }
 
@@ -483,7 +602,10 @@ export class SessionManager {
         legacyPlaintextDetected = true;
 
         let legacySessionPortal: string | null = null;
-        if (parsed?.sessionPortalUrl && typeof parsed.sessionPortalUrl === "string") {
+        if (
+          parsed?.sessionPortalUrl &&
+          typeof parsed.sessionPortalUrl === "string"
+        ) {
           try {
             legacySessionPortal = normalizePortalUrl(parsed.sessionPortalUrl);
           } catch {
@@ -493,38 +615,72 @@ export class SessionManager {
 
         // Case A: Protected record already loaded -> protected record has precedence; scrub legacy plaintext
         if (protectedLoaded) {
-          LauncherLogger.info("[SessionManager] Both protected record and legacy plaintext existed. Scrubbing legacy plaintext (protected record takes precedence).");
-          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
+          LauncherLogger.info(
+            "[SessionManager] Both protected record and legacy plaintext existed. Scrubbing legacy plaintext (protected record takes precedence).",
+          );
+          const scrubResult = this.scrubPlaintextFromConfig(
+            configPath,
+            parsed,
+            raw,
+          );
           legacyScrubbed = scrubResult.success;
           if (!scrubResult.success) outcomeError = scrubResult.error;
         }
         // Case B: Protected record failed to load -> DO NOT silently restore legacy plaintext! Fail closed.
         else if (failedProtectedLoad) {
-          LauncherLogger.warn("[SessionManager] Protected record load failed; refusing to silently restore legacy plaintext. Scrubbing plaintext and requiring clean reauthentication.");
-          const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
+          LauncherLogger.warn(
+            "[SessionManager] Protected record load failed; refusing to silently restore legacy plaintext. Scrubbing plaintext and requiring clean reauthentication.",
+          );
+          const scrubResult = this.scrubPlaintextFromConfig(
+            configPath,
+            parsed,
+            raw,
+          );
           legacyScrubbed = scrubResult.success;
           if (!scrubResult.success) outcomeError = scrubResult.error;
           this.advanceSessionEpoch();
         }
         // Case C: No protected record file existed -> evaluate legacy migration eligibility
         else {
-          const rawAccountId = (parsed?.portalAccountId || parsed?.accountId || "").toString().trim();
-          const rawUsername = (parsed?.portalUsername || parsed?.accountUsername || "").toString().trim();
+          const rawAccountId = (
+            parsed?.portalAccountId ||
+            parsed?.accountId ||
+            ""
+          )
+            .toString()
+            .trim();
+          const rawUsername = (
+            parsed?.portalUsername ||
+            parsed?.accountUsername ||
+            ""
+          )
+            .toString()
+            .trim();
           const hasTrustedAccountEvidence = Boolean(
-            rawAccountId && rawUsername &&
+            rawAccountId &&
+            rawUsername &&
             rawAccountId.toLowerCase() !== "account" &&
             rawAccountId.toLowerCase() !== "unverified-migration" &&
             rawAccountId.toLowerCase() !== "player" &&
             rawUsername.toLowerCase() !== "player" &&
             rawUsername.toLowerCase() !== "account" &&
-            rawUsername.toLowerCase() !== "unverified-migration"
+            rawUsername.toLowerCase() !== "unverified-migration",
           );
-          const hasValidToken = typeof parsed?.token === "string" && parsed.token.trim().length > 0;
-          const originMatches = legacySessionPortal !== null && legacySessionPortal === canonicalActivePortal;
+          const hasValidToken =
+            typeof parsed?.token === "string" && parsed.token.trim().length > 0;
+          const originMatches =
+            legacySessionPortal !== null &&
+            legacySessionPortal === canonicalActivePortal;
 
           if (!hasValidToken || !originMatches || !hasTrustedAccountEvidence) {
-            LauncherLogger.warn("[SessionManager] Ineligible or unverified legacy credentials found in config.json. Scrubbing plaintext from disk and requiring clean reauthentication.");
-            const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
+            LauncherLogger.warn(
+              "[SessionManager] Ineligible or unverified legacy credentials found in config.json. Scrubbing plaintext from disk and requiring clean reauthentication.",
+            );
+            const scrubResult = this.scrubPlaintextFromConfig(
+              configPath,
+              parsed,
+              raw,
+            );
             legacyScrubbed = scrubResult.success;
             if (!scrubResult.success) outcomeError = scrubResult.error;
             this.advanceSessionEpoch();
@@ -539,18 +695,30 @@ export class SessionManager {
               accountId: rawAccountId,
               accountUsername: rawUsername,
               token: parsed.token,
-              refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : undefined,
-              minecraftAccessToken: typeof parsed.minecraftAccessToken === "string" ? parsed.minecraftAccessToken : undefined,
+              refreshToken:
+                typeof parsed.refreshToken === "string"
+                  ? parsed.refreshToken
+                  : undefined,
+              minecraftAccessToken:
+                typeof parsed.minecraftAccessToken === "string"
+                  ? parsed.minecraftAccessToken
+                  : undefined,
               createdAt: Date.now(),
               updatedAt: Date.now(),
             };
 
             if (this.isSessionOnlyMode()) {
-              LauncherLogger.info("[SessionManager] Migrating legacy credentials into session-only memory; scrubbing plaintext from disk.");
+              LauncherLogger.info(
+                "[SessionManager] Migrating legacy credentials into session-only memory; scrubbing plaintext from disk.",
+              );
               this.currentRecord = legacyRecord;
               this.isCurrentSessionPersisted = false;
               migrated = true;
-              const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
+              const scrubResult = this.scrubPlaintextFromConfig(
+                configPath,
+                parsed,
+                raw,
+              );
               legacyScrubbed = scrubResult.success;
               if (!scrubResult.success) outcomeError = scrubResult.error;
             } else {
@@ -561,19 +729,29 @@ export class SessionManager {
                   this.currentRecord = verified;
                   this.isCurrentSessionPersisted = true;
                   migrated = true;
-                  LauncherLogger.info("[SessionManager] Successfully migrated legacy credentials to encrypted store. Scrubbing plaintext config.");
+                  LauncherLogger.info(
+                    "[SessionManager] Successfully migrated legacy credentials to encrypted store. Scrubbing plaintext config.",
+                  );
                 } else {
-                  LauncherLogger.warn("[SessionManager] Migration read-back verification failed. Requiring reauthentication.");
+                  LauncherLogger.warn(
+                    "[SessionManager] Migration read-back verification failed. Requiring reauthentication.",
+                  );
                   CredentialStore.clearCredentials();
                   this.isCurrentSessionPersisted = false;
                   this.advanceSessionEpoch();
                 }
               } else {
-                LauncherLogger.warn("[SessionManager] Migration encryption failed. Requiring reauthentication.");
+                LauncherLogger.warn(
+                  "[SessionManager] Migration encryption failed. Requiring reauthentication.",
+                );
                 this.isCurrentSessionPersisted = false;
                 this.advanceSessionEpoch();
               }
-              const scrubResult = this.scrubPlaintextFromConfig(configPath, parsed, raw);
+              const scrubResult = this.scrubPlaintextFromConfig(
+                configPath,
+                parsed,
+                raw,
+              );
               legacyScrubbed = scrubResult.success;
               if (!scrubResult.success) outcomeError = scrubResult.error;
             }
@@ -594,7 +772,11 @@ export class SessionManager {
     return outcome;
   }
 
-  private static scrubPlaintextFromConfig(configPath: string, parsed: any, raw?: string | null): { success: boolean; error?: string } {
+  private static scrubPlaintextFromConfig(
+    configPath: string,
+    parsed: any,
+    raw?: string | null,
+  ): { success: boolean; error?: string } {
     try {
       const extracted: Record<string, any> = {};
 
@@ -609,7 +791,11 @@ export class SessionManager {
       if (raw && typeof raw === "string") {
         try {
           const jsoncParsed = jsonc.parse(raw);
-          if (jsoncParsed && typeof jsoncParsed === "object" && !Array.isArray(jsoncParsed)) {
+          if (
+            jsoncParsed &&
+            typeof jsoncParsed === "object" &&
+            !Array.isArray(jsoncParsed)
+          ) {
             for (const [k, v] of Object.entries(jsoncParsed)) {
               if (!SECRET_KEYS_SET.has(k)) {
                 extracted[k] = v;
@@ -618,7 +804,8 @@ export class SessionManager {
           }
         } catch {}
 
-        const kvRegex = /"((?:[^"\\]|\\.)*)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null|\[[^\]]*\]|\{[^}]*\})/g;
+        const kvRegex =
+          /"((?:[^"\\]|\\.)*)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null|\[[^\]]*\]|\{[^}]*\})/g;
         let match: RegExpExecArray | null;
         while ((match = kvRegex.exec(raw)) !== null) {
           const decodedKey = decodeJsonStringToken(match[1]);
@@ -635,9 +822,10 @@ export class SessionManager {
       }
 
       // Format output: never write ambiguous raw text! Always write valid JSON.
-      const scrubbedOutput = Object.keys(extracted).length > 0
-        ? JSON.stringify(extracted, null, 2)
-        : "{}\n";
+      const scrubbedOutput =
+        Object.keys(extracted).length > 0
+          ? JSON.stringify(extracted, null, 2)
+          : "{}\n";
 
       writeAtomicFileSync(configPath, scrubbedOutput, "utf-8");
 
@@ -652,10 +840,14 @@ export class SessionManager {
         writeAtomicFileSync(configPath, "{}\n", "utf-8");
       }
 
-      LauncherLogger.info("[SessionManager] Scrubbed plaintext credentials from config.json on disk.");
+      LauncherLogger.info(
+        "[SessionManager] Scrubbed plaintext credentials from config.json on disk.",
+      );
       return { success: true };
     } catch (err: any) {
-      LauncherLogger.error(`[SessionManager] Failed to scrub plaintext config: ${err.message}`);
+      LauncherLogger.error(
+        `[SessionManager] Failed to scrub plaintext config: ${err.message}`,
+      );
       return { success: false, error: err.message };
     }
   }
@@ -675,14 +867,18 @@ export class SessionManager {
       minecraftUuid?: string;
       minecraftUsername?: string;
     },
-    user?: UserProfile
+    user?: UserProfile,
   ): SaveCredentialsResult {
     const writeEpoch = ++this.sessionEpoch;
     this.refreshPromises.clear();
     const canonicalOrigin = normalizePortalUrl(issuingOrigin);
 
-    const portalAccountId = (user?.id || credentials.portalAccountId || "").toString().trim();
-    const portalUsername = (user?.name || credentials.portalUsername || "").toString().trim();
+    const portalAccountId = (user?.id || credentials.portalAccountId || "")
+      .toString()
+      .trim();
+    const portalUsername = (user?.name || credentials.portalUsername || "")
+      .toString()
+      .trim();
     const token = (credentials.token || "").toString().trim();
 
     // Reject invalid authentication data before publication
@@ -697,14 +893,20 @@ export class SessionManager {
       portalUsername.toLowerCase() === "account" ||
       portalUsername.toLowerCase() === "unverified-migration"
     ) {
-      throw new Error("Invalid authentication data: token, portalAccountId, and portalUsername are required and cannot be placeholders");
+      throw new Error(
+        "Invalid authentication data: token, portalAccountId, and portalUsername are required and cannot be placeholders",
+      );
     }
 
     const minecraftUuid = user?.minecraftUuid || credentials.minecraftUuid;
-    const minecraftUsername = user?.minecraftUsername || credentials.minecraftUsername;
+    const minecraftUsername =
+      user?.minecraftUsername || credentials.minecraftUsername;
 
     // If an older record exists for a different account, clear disk first to prevent resurrection
-    if (this.currentRecord && this.currentRecord.portalAccountId !== portalAccountId) {
+    if (
+      this.currentRecord &&
+      this.currentRecord.portalAccountId !== portalAccountId
+    ) {
       CredentialStore.clearCredentials();
     }
 
@@ -720,7 +922,8 @@ export class SessionManager {
       accountUsername: portalUsername,
       token,
       refreshToken: credentials.refreshToken, // Strictly from new login, NEVER inherited!
-      minecraftAccessToken: credentials.minecraftAccessToken || user?.minecraftAccessToken,
+      minecraftAccessToken:
+        credentials.minecraftAccessToken || user?.minecraftAccessToken,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -728,11 +931,15 @@ export class SessionManager {
     // 1. Complete candidate session validation BEFORE any publication or mutation of currentUser
     const candidateValidation = this.validateCandidateSession(record, user);
     if (!candidateValidation.valid) {
-      throw new Error(`Invalid authentication data: ${candidateValidation.error}`);
+      throw new Error(
+        `Invalid authentication data: ${candidateValidation.error}`,
+      );
     }
 
     if (this.sessionEpoch !== writeEpoch) {
-      LauncherLogger.warn("[SessionManager] Aborted credential write: session epoch advanced before write started.");
+      LauncherLogger.warn(
+        "[SessionManager] Aborted credential write: session epoch advanced before write started.",
+      );
       return {
         success: false,
         backend: CredentialStore.detectStorageBackend(),
@@ -744,7 +951,9 @@ export class SessionManager {
     const saveResult = CredentialStore.saveCredentials(record);
 
     if (this.sessionEpoch !== writeEpoch) {
-      LauncherLogger.warn("[SessionManager] Discarding credential write: session epoch advanced during write. Rolling back disk store.");
+      LauncherLogger.warn(
+        "[SessionManager] Discarding credential write: session epoch advanced during write. Rolling back disk store.",
+      );
       CredentialStore.clearCredentials();
       this.isCurrentSessionPersisted = false;
       return {
@@ -755,8 +964,13 @@ export class SessionManager {
       };
     }
 
-    if (!saveResult.success && saveResult.error === "Invalid credential record schema") {
-      throw new Error("Invalid authentication data: credential store rejected schema");
+    if (
+      !saveResult.success &&
+      saveResult.error === "Invalid credential record schema"
+    ) {
+      throw new Error(
+        "Invalid authentication data: credential store rejected schema",
+      );
     }
 
     if (saveResult.sessionOnly || !saveResult.success) {
@@ -765,12 +979,14 @@ export class SessionManager {
       if (!clearResult.durablyInvalidated) {
         this.advanceSessionEpoch();
         throw new Error(
-          `Failed to sanitize disk credentials: stale credentials could not be deleted or durably invalidated (${clearResult.error || "durable invalidation failed"})`
+          `Failed to sanitize disk credentials: stale credentials could not be deleted or durably invalidated (${clearResult.error || "durable invalidation failed"})`,
         );
       }
       this.isCurrentSessionPersisted = false;
       if (!saveResult.success) {
-        LauncherLogger.warn(`[SessionManager] Persistence failed (${saveResult.error}); operating in session-only mode for this session.`);
+        LauncherLogger.warn(
+          `[SessionManager] Persistence failed (${saveResult.error}); operating in session-only mode for this session.`,
+        );
       }
     } else {
       this.isCurrentSessionPersisted = true;
@@ -795,7 +1011,7 @@ export class SessionManager {
       refreshToken?: string;
       minecraftAccessToken?: string;
     },
-    user?: UserProfile
+    user?: UserProfile,
   ): SaveCredentialsResult {
     const writeEpoch = ++this.sessionEpoch;
     this.refreshPromises.clear();
@@ -806,12 +1022,16 @@ export class SessionManager {
     }
 
     if (this.currentRecord.portalUrl !== canonicalOrigin) {
-      throw new Error(`Cannot refresh session: origin mismatch ('${this.currentRecord.portalUrl}' vs '${canonicalOrigin}')`);
+      throw new Error(
+        `Cannot refresh session: origin mismatch ('${this.currentRecord.portalUrl}' vs '${canonicalOrigin}')`,
+      );
     }
 
     const token = (refreshedTokens.token || "").toString().trim();
     if (!token) {
-      throw new Error("Cannot refresh session: valid non-empty token is required");
+      throw new Error(
+        "Cannot refresh session: valid non-empty token is required",
+      );
     }
 
     if (
@@ -830,7 +1050,8 @@ export class SessionManager {
     if (
       user &&
       this.currentRecord.minecraftUuid &&
-      this.currentRecord.minecraftUuid !== "00000000-0000-0000-0000-000000000000" &&
+      this.currentRecord.minecraftUuid !==
+        "00000000-0000-0000-0000-000000000000" &&
       user.minecraftUuid &&
       this.currentRecord.minecraftUuid !== user.minecraftUuid
     ) {
@@ -844,8 +1065,12 @@ export class SessionManager {
       portalUrl: canonicalOrigin,
       token,
       // Retain omitted refresh token ONLY on same-account refresh
-      refreshToken: refreshedTokens.refreshToken ?? this.currentRecord.refreshToken,
-      minecraftAccessToken: refreshedTokens.minecraftAccessToken ?? user?.minecraftAccessToken ?? this.currentRecord.minecraftAccessToken,
+      refreshToken:
+        refreshedTokens.refreshToken ?? this.currentRecord.refreshToken,
+      minecraftAccessToken:
+        refreshedTokens.minecraftAccessToken ??
+        user?.minecraftAccessToken ??
+        this.currentRecord.minecraftAccessToken,
       updatedAt: Date.now(),
     };
 
@@ -853,7 +1078,8 @@ export class SessionManager {
       if (user.id) record.portalAccountId = user.id;
       if (user.name) record.portalUsername = user.name;
       if (user.minecraftUuid) record.minecraftUuid = user.minecraftUuid;
-      if (user.minecraftUsername) record.minecraftUsername = user.minecraftUsername;
+      if (user.minecraftUsername)
+        record.minecraftUsername = user.minecraftUsername;
       record.accountId = record.portalAccountId || record.accountId;
       record.accountUsername = record.portalUsername || record.accountUsername;
     }
@@ -861,11 +1087,15 @@ export class SessionManager {
     // 1. Complete candidate session validation BEFORE any publication or mutation of currentUser
     const candidateValidation = this.validateCandidateSession(record, user);
     if (!candidateValidation.valid) {
-      throw new Error(`Invalid authentication data on refresh: ${candidateValidation.error}`);
+      throw new Error(
+        `Invalid authentication data on refresh: ${candidateValidation.error}`,
+      );
     }
 
     if (this.sessionEpoch !== writeEpoch) {
-      LauncherLogger.warn("[SessionManager] Aborted token refresh commit: session epoch advanced before write.");
+      LauncherLogger.warn(
+        "[SessionManager] Aborted token refresh commit: session epoch advanced before write.",
+      );
       return {
         success: false,
         backend: CredentialStore.detectStorageBackend(),
@@ -877,7 +1107,9 @@ export class SessionManager {
     const saveResult = CredentialStore.saveCredentials(record);
 
     if (this.sessionEpoch !== writeEpoch) {
-      LauncherLogger.warn("[SessionManager] Discarding refreshed credentials: epoch advanced during write.");
+      LauncherLogger.warn(
+        "[SessionManager] Discarding refreshed credentials: epoch advanced during write.",
+      );
       CredentialStore.clearCredentials();
       this.isCurrentSessionPersisted = false;
       return {
@@ -888,8 +1120,13 @@ export class SessionManager {
       };
     }
 
-    if (!saveResult.success && saveResult.error === "Invalid credential record schema") {
-      throw new Error("Invalid authentication data: credential store rejected schema");
+    if (
+      !saveResult.success &&
+      saveResult.error === "Invalid credential record schema"
+    ) {
+      throw new Error(
+        "Invalid authentication data: credential store rejected schema",
+      );
     }
 
     if (saveResult.sessionOnly || !saveResult.success) {
@@ -897,12 +1134,14 @@ export class SessionManager {
       if (!clearResult.durablyInvalidated) {
         this.advanceSessionEpoch();
         throw new Error(
-          `Failed to sanitize disk credentials on refresh: stale credentials could not be deleted or durably invalidated (${clearResult.error || "durable invalidation failed"})`
+          `Failed to sanitize disk credentials on refresh: stale credentials could not be deleted or durably invalidated (${clearResult.error || "durable invalidation failed"})`,
         );
       }
       this.isCurrentSessionPersisted = false;
       if (!saveResult.success) {
-        LauncherLogger.warn(`[SessionManager] Failed to persist refreshed credentials (${saveResult.error}); continuing in session-only mode.`);
+        LauncherLogger.warn(
+          `[SessionManager] Failed to persist refreshed credentials (${saveResult.error}); continuing in session-only mode.`,
+        );
       }
     } else {
       this.isCurrentSessionPersisted = true;
@@ -928,7 +1167,7 @@ export class SessionManager {
       portalAccountId?: string;
       portalUsername?: string;
     },
-    user?: UserProfile
+    user?: UserProfile,
   ): SaveCredentialsResult {
     const canonicalOrigin = normalizePortalUrl(issuingOrigin);
     const incomingAccountId = user?.id || credentials.portalAccountId;
@@ -936,16 +1175,27 @@ export class SessionManager {
     if (
       this.currentRecord &&
       this.currentRecord.portalUrl === canonicalOrigin &&
-      (!incomingAccountId || incomingAccountId === this.currentRecord.portalAccountId)
+      (!incomingAccountId ||
+        incomingAccountId === this.currentRecord.portalAccountId)
     ) {
       return this.updateSessionFromRefresh(issuingOrigin, credentials, user);
     }
 
-    const tokenHash = crypto.createHash("sha256").update(credentials.token || "").digest("hex").slice(0, 10);
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(credentials.token || "")
+      .digest("hex")
+      .slice(0, 10);
     const adaptedCreds = {
       ...credentials,
-      portalAccountId: credentials.portalAccountId || user?.id || `session-account-${tokenHash}`,
-      portalUsername: credentials.portalUsername || user?.name || `SessionUser-${tokenHash.slice(0, 4)}`,
+      portalAccountId:
+        credentials.portalAccountId ||
+        user?.id ||
+        `session-account-${tokenHash}`,
+      portalUsername:
+        credentials.portalUsername ||
+        user?.name ||
+        `SessionUser-${tokenHash.slice(0, 4)}`,
     };
 
     return this.establishNewSession(issuingOrigin, adaptedCreds, user);
@@ -966,7 +1216,9 @@ export class SessionManager {
 
     const clearResult = CredentialStore.clearCredentials();
     this.notifySessionChange(null);
-    LauncherLogger.info("[SessionManager] Session cleared from memory and persistent store.");
+    LauncherLogger.info(
+      "[SessionManager] Session cleared from memory and persistent store.",
+    );
     return clearResult;
   }
 
@@ -978,7 +1230,9 @@ export class SessionManager {
     const nextCanonical = normalizePortalUrl(newPortalUrl);
     this.advanceSessionEpoch();
     if (this.currentRecord && this.currentRecord.portalUrl !== nextCanonical) {
-      LauncherLogger.info(`[SessionManager] Portal origin changed from '${this.currentRecord.portalUrl}' to '${nextCanonical}'. Clearing old session.`);
+      LauncherLogger.info(
+        `[SessionManager] Portal origin changed from '${this.currentRecord.portalUrl}' to '${nextCanonical}'. Clearing old session.`,
+      );
       this.clearSession();
     }
   }

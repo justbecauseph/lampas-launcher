@@ -45,7 +45,12 @@ describe("reconcileResourcePacks helper", () => {
   });
 
   test("replaces old managed version with new version and preserves user packs", () => {
-    const existing = ["vanilla", "file/Faithful32.zip", "file/Lampas-Resources-2.0.0.zip", "file/CustomAudio.zip"];
+    const existing = [
+      "vanilla",
+      "file/Faithful32.zip",
+      "file/Lampas-Resources-2.0.0.zip",
+      "file/CustomAudio.zip",
+    ];
     const current = ["file/Lampas-Resources-2.1.0.zip"];
     const old = ["file/Lampas-Resources-2.0.0.zip"];
     expect(reconcileResourcePacks(existing, current, old)).toEqual([
@@ -57,7 +62,11 @@ describe("reconcileResourcePacks helper", () => {
   });
 
   test("removes obsolete managed packs when required set becomes empty", () => {
-    const existing = ["vanilla", "file/Faithful32.zip", "file/Lampas-Resources-2.0.0.zip"];
+    const existing = [
+      "vanilla",
+      "file/Faithful32.zip",
+      "file/Lampas-Resources-2.0.0.zip",
+    ];
     const current: string[] = [];
     const old = ["file/Lampas-Resources-2.0.0.zip"];
     expect(reconcileResourcePacks(existing, current, old)).toEqual([
@@ -93,7 +102,9 @@ describe("reconcileResourcePacks helper", () => {
 
 describe("verifyRequiredResourcePacks SHA-256 verification", () => {
   function createTestEnvironment() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-rp-verify-test-"));
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "lampas-rp-verify-test-"),
+    );
     const rpDir = path.join(dir, "resourcepacks");
     fs.mkdirSync(rpDir, { recursive: true });
 
@@ -112,7 +123,10 @@ describe("verifyRequiredResourcePacks SHA-256 verification", () => {
   test("passes when file exists and hash matches", async () => {
     const env = createTestEnvironment();
     try {
-      const { hash } = env.createPackFile("test-pack.zip", "valid pack content");
+      const { hash } = env.createPackFile(
+        "test-pack.zip",
+        "valid pack content",
+      );
       const required: RequiredResourcePack[] = [
         {
           id: "test-pack",
@@ -121,7 +135,9 @@ describe("verifyRequiredResourcePacks SHA-256 verification", () => {
           sha256: hash,
         },
       ];
-      await expect(verifyRequiredResourcePacks(env.dir, required)).resolves.toBeUndefined();
+      await expect(
+        verifyRequiredResourcePacks(env.dir, required),
+      ).resolves.toBeUndefined();
     } finally {
       fs.rmSync(env.dir, { recursive: true, force: true });
     }
@@ -139,8 +155,10 @@ describe("verifyRequiredResourcePacks SHA-256 verification", () => {
           sha256: "0".repeat(64),
         },
       ];
-      await expect(verifyRequiredResourcePacks(env.dir, required)).rejects.toThrow(
-        /Required resource pack 'test-pack' failed integrity verification/
+      await expect(
+        verifyRequiredResourcePacks(env.dir, required),
+      ).rejects.toThrow(
+        /Required resource pack 'test-pack' failed integrity verification/,
       );
     } finally {
       fs.rmSync(env.dir, { recursive: true, force: true });
@@ -158,9 +176,9 @@ describe("verifyRequiredResourcePacks SHA-256 verification", () => {
           sha256: "a".repeat(64),
         },
       ];
-      await expect(verifyRequiredResourcePacks(env.dir, required)).rejects.toThrow(
-        /File missing at resourcepacks\/missing-pack\.zip/
-      );
+      await expect(
+        verifyRequiredResourcePacks(env.dir, required),
+      ).rejects.toThrow(/File missing at resourcepacks\/missing-pack\.zip/);
     } finally {
       fs.rmSync(env.dir, { recursive: true, force: true });
     }
@@ -210,7 +228,9 @@ describe("reconcileRequiredResourcePacks integration", () => {
       expect(result).toEqual(["Lampas-Resources-2.0.0.zip"]);
       expect(fs.existsSync(env.optionsPath)).toBe(true);
       const content = fs.readFileSync(env.optionsPath, "utf-8");
-      expect(content).toContain('resourcePacks:["vanilla","file/Lampas-Resources-2.0.0.zip"]');
+      expect(content).toContain(
+        'resourcePacks:["vanilla","file/Lampas-Resources-2.0.0.zip"]',
+      );
     } finally {
       fs.rmSync(env.dir, { recursive: true, force: true });
     }
@@ -233,7 +253,9 @@ describe("reconcileRequiredResourcePacks integration", () => {
       expect(result).toEqual([]);
       const content = fs.readFileSync(env.optionsPath, "utf-8");
       expect(content).not.toContain("Lampas-Resources-2.0.0.zip");
-      expect(content).toContain('resourcePacks:["vanilla","file/UserTexture.zip"]');
+      expect(content).toContain(
+        'resourcePacks:["vanilla","file/UserTexture.zip"]',
+      );
       expect(content).toContain("gamma:1.0");
     } finally {
       fs.rmSync(env.dir, { recursive: true, force: true });
@@ -244,7 +266,8 @@ describe("reconcileRequiredResourcePacks integration", () => {
     const env = createTestEnvironment();
     try {
       const { hash } = env.createPackFile("Lampas-Resources-2.1.0.zip");
-      const initialOptions = "gamma:1.0\r\nresourcePacks:[\"vanilla\"]\r\nfov:70.0\r\n";
+      const initialOptions =
+        'gamma:1.0\r\nresourcePacks:["vanilla"]\r\nfov:70.0\r\n';
       fs.writeFileSync(env.optionsPath, initialOptions, "utf-8");
 
       const required: RequiredResourcePack[] = [
@@ -263,7 +286,9 @@ describe("reconcileRequiredResourcePacks integration", () => {
 
       const content = fs.readFileSync(env.optionsPath, "utf-8");
       expect(content.includes("\r\n")).toBe(true);
-      expect(content).toContain('resourcePacks:["vanilla","file/Lampas-Resources-2.1.0.zip"]');
+      expect(content).toContain(
+        'resourcePacks:["vanilla","file/Lampas-Resources-2.1.0.zip"]',
+      );
       expect(content).toContain("fov:70.0");
     } finally {
       fs.rmSync(env.dir, { recursive: true, force: true });
@@ -274,7 +299,8 @@ describe("reconcileRequiredResourcePacks integration", () => {
     const env = createTestEnvironment();
     try {
       const { hash } = env.createPackFile("Lampas-Resources-2.0.0.zip");
-      const malformedOptions = "gamma:1.0\nresourcePacks:[MALFORMED_JSON{{\nfov:70.0\n";
+      const malformedOptions =
+        "gamma:1.0\nresourcePacks:[MALFORMED_JSON{{\nfov:70.0\n";
       fs.writeFileSync(env.optionsPath, malformedOptions, "utf-8");
 
       const required: RequiredResourcePack[] = [
@@ -296,7 +322,9 @@ describe("reconcileRequiredResourcePacks integration", () => {
       expect(fs.readFileSync(backupPath, "utf-8")).toBe(malformedOptions);
 
       const content = fs.readFileSync(env.optionsPath, "utf-8");
-      expect(content).toContain('resourcePacks:["vanilla","file/Lampas-Resources-2.0.0.zip"]');
+      expect(content).toContain(
+        'resourcePacks:["vanilla","file/Lampas-Resources-2.0.0.zip"]',
+      );
       expect(content).toContain("gamma:1.0");
       expect(content).toContain("fov:70.0");
     } finally {
@@ -304,4 +332,3 @@ describe("reconcileRequiredResourcePacks integration", () => {
     }
   });
 });
-

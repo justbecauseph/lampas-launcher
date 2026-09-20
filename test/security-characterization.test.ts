@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -22,14 +31,19 @@ mock.module("electron", () => ({
 
 // Load modules under test
 const { LauncherLogger, LauncherLoggerService } = await import("../src/logger");
-const { ConfigManager, normalizePortalUrl, PortalPolicy } = await import("../src/config");
-const { isPathProtected, isSafeRelativePath, sanitizeInstallationState } = await import("../src/sync");
+const { DISCARDED_LOG_RECORD } = await import("../src/privacy");
+const { ConfigManager, normalizePortalUrl, PortalPolicy } =
+  await import("../src/config");
+const { isPathProtected, isSafeRelativePath, sanitizeInstallationState } =
+  await import("../src/sync");
 const { GameDirectoryManager } = await import("../src/game-directory");
 const { FabricMetaResolver } = await import("../src/fabric-meta");
 const { downloadVerified } = await import("../src/file-transfer");
 const { ProcessLogFramer } = await import("../src/game-log-stream");
 
-let activeHttpServers: Array<{ stop: (closeActive?: boolean) => Promise<void> | void }> = [];
+let activeHttpServers: Array<{
+  stop: (closeActive?: boolean) => Promise<void> | void;
+}> = [];
 
 beforeAll(() => {
   fs.mkdirSync(userDataDir, { recursive: true });
@@ -98,7 +112,10 @@ describe("Phase 1 Security Verification — SEC-01: Portal Destination & Credent
 
 describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, SEC-02)", () => {
   test("Executes boundary characterizations in isolated child process with complete Electron mock", async () => {
-    const boundaryScript = path.resolve(__dirname, "security-boundary-characterization.ts");
+    const boundaryScript = path.resolve(
+      __dirname,
+      "security-boundary-characterization.ts",
+    );
     const proc = Bun.spawn([process.execPath, "run", boundaryScript], {
       cwd: path.resolve(__dirname, ".."),
       env: { ...process.env, NODE_ENV: "test" },
@@ -109,7 +126,9 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
     let timedOut = false;
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
-      try { proc.kill(); } catch {}
+      try {
+        proc.kill();
+      } catch {}
     }, 15000);
 
     const [stdoutBytes, stderrBytes, exitCode] = await Promise.all([
@@ -123,7 +142,9 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
     const stderr = Buffer.from(stderrBytes).toString("utf-8");
 
     if (timedOut) {
-      throw new Error(`Boundary test child process timed out after 15s. Stderr: ${stderr}\nStdout: ${stdout}`);
+      throw new Error(
+        `Boundary test child process timed out after 15s. Stderr: ${stderr}\nStdout: ${stdout}`,
+      );
     }
     if (exitCode !== 0) {
       console.error("[Boundary Child Process Stderr]", stderr);
@@ -134,7 +155,12 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
     const sentinel = "__BOUNDARY_RESULTS__:";
     const jsonStart = stdout.indexOf(sentinel);
     expect(jsonStart).toBeGreaterThanOrEqual(0);
-    const parsed = JSON.parse(stdout.slice(jsonStart + sentinel.length).trim().split("\n")[0]);
+    const parsed = JSON.parse(
+      stdout
+        .slice(jsonStart + sentinel.length)
+        .trim()
+        .split("\n")[0],
+    );
 
     expect(parsed.totalPassed).toBe(61);
     expect(parsed.totalSkipped).toBe(0);
@@ -202,8 +228,13 @@ describe("Phase 4 Security Verification — SEC-04: Path Containment & Ownership
   });
 
   test("Previous state obsolete deletion sanitizes unvalidated traversal keys outside gameDir", () => {
-    const outsideSentinelDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-outside-sentinel-"));
-    const outsideSentinelFile = path.join(outsideSentinelDir, "important-data.txt");
+    const outsideSentinelDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "lampas-outside-sentinel-"),
+    );
+    const outsideSentinelFile = path.join(
+      outsideSentinelDir,
+      "important-data.txt",
+    );
     fs.writeFileSync(outsideSentinelFile, "sentinel-payload");
 
     try {
@@ -211,7 +242,7 @@ describe("Phase 4 Security Verification — SEC-04: Path Containment & Ownership
       // Traversal key is quarantined by sanitizeInstallationState
       const sanitized = sanitizeInstallationState(
         { files: { [relTraversal]: { policy: "MANAGED" } } },
-        gameDir
+        gameDir,
       );
       expect(sanitized.quarantinedKeys).toContain(relTraversal);
       expect(sanitized.files[relTraversal]).toBeUndefined();
@@ -225,8 +256,13 @@ describe("Phase 4 Security Verification — SEC-04: Path Containment & Ownership
 
 describe("Phase 4 Security Verification — SEC-05: Move Recovery Staging Containment & Safe Recovery", () => {
   test("recoverInterruptedMove quarantines unvalidated staging path and preserves outside directories", async () => {
-    const outsideVictimDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-victim-dir-"));
-    const victimFile = path.join(outsideVictimDir, "important-user-document.txt");
+    const outsideVictimDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "lampas-victim-dir-"),
+    );
+    const victimFile = path.join(
+      outsideVictimDir,
+      "important-user-document.txt",
+    );
     fs.writeFileSync(victimFile, "do-not-delete-this-data", "utf-8");
 
     const journalPath = path.join(userDataDir, "directory-move.json");
@@ -239,18 +275,26 @@ describe("Phase 4 Security Verification — SEC-05: Move Recovery Staging Contai
       staging: outsideVictimDir,
       startTime: new Date().toISOString(),
     };
-    fs.writeFileSync(journalPath, JSON.stringify(maliciousJournal, null, 2), "utf-8");
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify(maliciousJournal, null, 2),
+      "utf-8",
+    );
 
     try {
       expect(fs.existsSync(victimFile)).toBe(true);
-      await GameDirectoryManager.recoverInterruptedMove();
+      await expect(
+        GameDirectoryManager.recoverInterruptedMove(),
+      ).rejects.toThrow(/quarantined/i);
       // Target invariant: outside victim directory and file are preserved intact
       expect(fs.existsSync(victimFile)).toBe(true);
       expect(fs.existsSync(outsideVictimDir)).toBe(true);
 
       // Journal was quarantined
       expect(fs.existsSync(journalPath)).toBe(false);
-      const quarantined = fs.readdirSync(userDataDir).filter((f: string) => f.startsWith("directory-move.json.quarantine."));
+      const quarantined = fs
+        .readdirSync(userDataDir)
+        .filter((f: string) => f.startsWith("directory-move.json.quarantine."));
       expect(quarantined.length).toBeGreaterThan(0);
     } finally {
       if (fs.existsSync(outsideVictimDir)) {
@@ -260,8 +304,8 @@ describe("Phase 4 Security Verification — SEC-05: Move Recovery Staging Contai
   });
 });
 
-describe("Phase 0 Security Characterization — SEC-06: Executable Verification Fails Open", () => {
-  test("FabricMetaResolver returns metadata without checksums when sidecar 404s", async () => {
+describe("Phase 5 Security Regression — SEC-06: Executable Verification Requires Digests", () => {
+  test("FabricMetaResolver rejects metadata when sidecar checksums are unavailable", async () => {
     const runtime = {
       minecraft: "26.2",
       loader: { type: "fabric" as const, version: "0.19.3" },
@@ -274,8 +318,16 @@ describe("Phase 0 Security Characterization — SEC-06: Executable Verification 
       }
       if (urlStr.includes("meta.fabricmc.net")) {
         return Response.json({
-          loader: { maven: "net.fabricmc:fabric-loader:0.19.3", version: "0.19.3", stable: true },
-          intermediary: { maven: "net.fabricmc:intermediary:26.2", version: "26.2", stable: true },
+          loader: {
+            maven: "net.fabricmc:fabric-loader:0.19.3",
+            version: "0.19.3",
+            stable: true,
+          },
+          intermediary: {
+            maven: "net.fabricmc:intermediary:26.2",
+            version: "26.2",
+            stable: true,
+          },
           launcherMeta: {
             libraries: {
               client: [],
@@ -286,24 +338,23 @@ describe("Phase 0 Security Characterization — SEC-06: Executable Verification 
                 },
               ],
             },
-            mainClass: { client: "net.fabricmc.loader.impl.launch.knot.KnotClient" },
+            mainClass: {
+              client: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            },
           },
         });
       }
       return new Response("Not Found", { status: 404 });
     };
 
-    const result = await FabricMetaResolver.resolveFabricRuntime(runtime, undefined, {
-      fetchFn: mockFetch as any,
-    });
-    expect(result.libraries.length).toBeGreaterThan(0);
-    const spongeLib = result.libraries.find((l: any) => l.name.includes("sponge-mixin"));
-    expect(spongeLib).toBeDefined();
-    expect(spongeLib?.sha256).toBeUndefined();
-    expect(spongeLib?.sha1).toBeUndefined();
+    await expect(
+      FabricMetaResolver.resolveFabricRuntime(runtime, undefined, {
+        fetchFn: mockFetch as any,
+      }),
+    ).rejects.toThrow(/missing an expected SHA-1 or SHA-256 checksum/i);
   });
 
-  test("downloadVerified completes without error when expectedHash is undefined", async () => {
+  test("downloadVerified rejects managed artifacts when expectedHash is undefined", async () => {
     const payload = Buffer.from("arbitrary-binary-content-without-checksum");
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -315,51 +366,66 @@ describe("Phase 0 Security Characterization — SEC-06: Executable Verification 
     activeHttpServers.push(server);
 
     const destPath = path.join(gameDir, "downloaded-unverified.jar");
-    const bytes = await downloadVerified(`http://127.0.0.1:${server.port}/blob`, destPath, {
-      expectedHash: undefined,
-    });
-
-    expect(bytes).toBe(payload.length);
-    expect(fs.existsSync(destPath)).toBe(true);
-    expect(fs.readFileSync(destPath)).toEqual(payload);
+    await expect(
+      downloadVerified(`http://127.0.0.1:${server.port}/blob`, destPath, {
+        expectedHash: undefined,
+      }),
+    ).rejects.toThrow(/expected SHA256 digest/i);
+    expect(fs.existsSync(destPath)).toBe(false);
   });
 });
 
-describe("Phase 0 Security Characterization — SEC-09: Logging Redaction Gaps", () => {
-  test("LauncherLoggerService.sanitize redacts standard keys but misses underscore fields", () => {
+describe("Phase 0 Security Verification — SEC-09: Logging Redaction", () => {
+  test("LauncherLoggerService.sanitize redacts standard and underscore credential fields", () => {
     const camel = '{"token": "secret_bearer_token"}';
-    expect(LauncherLoggerService.sanitize(camel)).toBe('{"token": "[REDACTED]"}');
+    expect(LauncherLoggerService.sanitize(camel)).toBe(
+      '{"token": "[REDACTED]"}',
+    );
 
     const underRefresh = '{"refresh_token": "secret_refresh_token_value"}';
-    expect(LauncherLoggerService.sanitize(underRefresh)).toBe(underRefresh);
+    expect(LauncherLoggerService.sanitize(underRefresh)).toBe(
+      '{"refresh_token": "[REDACTED]"}',
+    );
 
     const underAccess = '{"access_token": "secret_access_token_value"}';
-    expect(LauncherLoggerService.sanitize(underAccess)).toBe(underAccess);
+    expect(LauncherLoggerService.sanitize(underAccess)).toBe(
+      '{"access_token": "[REDACTED]"}',
+    );
   });
 
-  test("LauncherLoggerService.sanitize does not redact authorization codes in URL query strings", () => {
-    const queryWithCode = "https://dev.lampas.town/callback?code=sensitive_authorization_code_12345&state=abc";
-    expect(LauncherLoggerService.sanitize(queryWithCode)).toBe(queryWithCode);
+  test("LauncherLoggerService.sanitize redacts authorization codes in URL query strings", () => {
+    const queryWithCode =
+      "https://dev.lampas.town/callback?code=sensitive_authorization_code_12345&state=abc";
+    const sanitized = LauncherLoggerService.sanitize(queryWithCode);
+    expect(sanitized).not.toContain("sensitive_authorization_code_12345");
+    expect(sanitized).toContain("?redacted");
   });
 
-  test("LauncherLoggerService.sanitize does not redact CLI command arguments", () => {
-    const cliLine = "Starting java with --accessToken sensitive_session_token_xyz --version 26.2";
-    expect(LauncherLoggerService.sanitize(cliLine)).toBe(cliLine);
+  test("LauncherLoggerService.sanitize redacts CLI command arguments", () => {
+    const cliLine =
+      "Starting java with --accessToken sensitive_session_token_xyz --version 26.2";
+    const sanitized = LauncherLoggerService.sanitize(cliLine);
+    expect(sanitized).not.toContain("sensitive_session_token_xyz");
+    expect(sanitized).toContain("--accessToken [REDACTED]");
   });
 
-  test("ProcessLogFramer truncates oversized lines before redaction, leaking split secrets", () => {
+  test("ProcessLogFramer discards oversized lines before redaction", () => {
     let emitted: string | null = null;
-    const framer = new ProcessLogFramer("INFO", (entry) => {
-      emitted = entry.message;
-    }, { maxLineLength: 50 });
+    const framer = new ProcessLogFramer(
+      "INFO",
+      (entry) => {
+        emitted = entry.message;
+      },
+      { maxLineLength: 50 },
+    );
 
-    const line = 'A'.repeat(30) + '{"token": "sensitive_leaked_secret_token_12345"}\n';
+    const line =
+      "A".repeat(30) + '{"token": "sensitive_leaked_secret_token_12345"}\n';
 
     framer.pushChunk(Buffer.from(line));
     framer.flush();
 
-    expect(emitted).not.toBeNull();
-    expect(emitted!).toContain("sensitive");
-    expect(emitted!).toContain("...[TRUNCATED]");
+    expect(emitted).toBe(DISCARDED_LOG_RECORD);
+    expect(emitted).not.toContain("sensitive_leaked_secret_token_12345");
   });
 });

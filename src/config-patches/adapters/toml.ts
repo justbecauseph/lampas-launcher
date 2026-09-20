@@ -14,7 +14,9 @@ function deepEqual(a: any, b: any): boolean {
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
   if (keysA.length !== keysB.length) return false;
-  return keysA.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+  return keysA.every(
+    (k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]),
+  );
 }
 
 function formatTomlValue(val: any): string {
@@ -28,7 +30,8 @@ function formatTomlValue(val: any): string {
 function getNested(obj: any, path: Array<string | number>): any {
   let cur = obj;
   for (const part of path) {
-    if (cur === undefined || cur === null || typeof cur !== "object") return undefined;
+    if (cur === undefined || cur === null || typeof cur !== "object")
+      return undefined;
     cur = cur[part];
   }
   return cur;
@@ -66,13 +69,16 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
 
     for (const op of operations) {
       if (op.op === "replaceLiteral") {
-        throw new Error("TOML adapter does not support 'replaceLiteral' operations");
+        throw new Error(
+          "TOML adapter does not support 'replaceLiteral' operations",
+        );
       }
       if (op.path.length === 0) {
         throw new Error("TOML operation path must not be empty");
       }
 
-      const parsed = current.trim() === "" ? {} : (smolToml.parse(current) as any);
+      const parsed =
+        current.trim() === "" ? {} : (smolToml.parse(current) as any);
       const existingVal = getNested(parsed, op.path);
 
       if (op.op === "set") {
@@ -80,13 +86,15 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
           continue;
         }
         details.push(
-          `${op.path.join(".")}: ${existingVal !== undefined ? JSON.stringify(existingVal) : "(unset)"} → ${JSON.stringify(op.value)}`
+          `${op.path.join(".")}: ${existingVal !== undefined ? JSON.stringify(existingVal) : "(unset)"} → ${JSON.stringify(op.value)}`,
         );
       } else if (op.op === "remove") {
         if (existingVal === undefined) {
           continue;
         }
-        details.push(`${op.path.join(".")}: removed (${JSON.stringify(existingVal)})`);
+        details.push(
+          `${op.path.join(".")}: removed (${JSON.stringify(existingVal)})`,
+        );
       }
 
       const key = String(op.path[op.path.length - 1]);
@@ -107,7 +115,9 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
           }
         }
       } else {
-        const secRegex = new RegExp(`^[ \t]*\\[[ \t]*${escapeRegex(sectionName)}[ \t]*\\]`);
+        const secRegex = new RegExp(
+          `^[ \t]*\\[[ \t]*${escapeRegex(sectionName)}[ \t]*\\]`,
+        );
         for (let i = 0; i < lines.length; i++) {
           if (secRegex.test(lines[i])) {
             sectionStart = i;
@@ -132,7 +142,7 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
       }
 
       const keyRegex = new RegExp(
-        `^([ \t]*(?:"${escapeRegex(key)}"|'${escapeRegex(key)}'|${escapeRegex(key)})[ \t]*=[ \t]*)([^#]*?)([ \t]*(?:#.*)?)$`
+        `^([ \t]*(?:"${escapeRegex(key)}"|'${escapeRegex(key)}'|${escapeRegex(key)})[ \t]*=[ \t]*)([^#]*?)([ \t]*(?:#.*)?)$`,
       );
 
       let keyLineIdx = -1;
@@ -168,7 +178,7 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
         reParsed = smolToml.parse(current);
       } catch (parseErr: any) {
         throw new Error(
-          `Cannot safely modify TOML document: targeted edit resulted in invalid syntax (${parseErr.message})`
+          `Cannot safely modify TOML document: targeted edit resulted in invalid syntax (${parseErr.message})`,
         );
       }
 
@@ -176,14 +186,14 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
         const check = getNested(reParsed, op.path);
         if (!deepEqual(check, op.value)) {
           throw new Error(
-            `Cannot safely modify TOML document: targeted edit failed to apply expected value`
+            `Cannot safely modify TOML document: targeted edit failed to apply expected value`,
           );
         }
       } else if (op.op === "remove") {
         const check = getNested(reParsed, op.path);
         if (check !== undefined) {
           throw new Error(
-            `Cannot safely modify TOML document: targeted edit failed to remove property`
+            `Cannot safely modify TOML document: targeted edit failed to remove property`,
           );
         }
       }

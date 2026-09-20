@@ -2,9 +2,17 @@ import * as http from "node:http";
 import * as net from "node:net";
 import { createHash, randomBytes } from "node:crypto";
 import { shell } from "electron";
-import { ConfigManager, normalizePortalUrl, portalFetch, PortalRedirectPolicyError } from "./config";
+import {
+  ConfigManager,
+  normalizePortalUrl,
+  portalFetch,
+  PortalRedirectPolicyError,
+} from "./config";
 import { SessionManager, isValidMinecraftUuid } from "./session-manager";
-import { type ClearCredentialsResult, type SaveCredentialsResult } from "./credential-store";
+import {
+  type ClearCredentialsResult,
+  type SaveCredentialsResult,
+} from "./credential-store";
 import type { UserProfile } from "./types";
 import { LauncherLogger } from "./logger";
 import { OperationConflictError, UserCancelledError } from "./ipc-boundary";
@@ -12,7 +20,11 @@ import { OperationConflictError, UserCancelledError } from "./ipc-boundary";
 export const LOGIN_TIMEOUT_MS = 120_000; // 120 seconds (2 minutes) timeout
 
 function base64Url(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return buf
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 function generatePkce() {
@@ -62,7 +74,9 @@ function renderSuccessHtml(): string {
 </html>`;
 }
 
-function renderErrorHtml(message: string = "Authentication failed. Please return to the launcher and try again."): string {
+function renderErrorHtml(
+  message: string = "Authentication failed. Please return to the launcher and try again.",
+): string {
   return `<!DOCTYPE html>
 <html>
   <head>
@@ -94,8 +108,16 @@ interface LoginOperationContext {
   callbackPort?: number;
   isTerminal(): boolean;
   terminate(
-    reason: "timeout" | "cancelled" | "superseded" | "denied" | "shutdown" | "server_error" | "browser_error" | "error",
-    err?: Error
+    reason:
+      | "timeout"
+      | "cancelled"
+      | "superseded"
+      | "denied"
+      | "shutdown"
+      | "server_error"
+      | "browser_error"
+      | "error",
+    err?: Error,
   ): void;
   settleSuccess(data: { token: string; user: UserProfile }): void;
 }
@@ -112,18 +134,25 @@ export class LauncherAuth {
    */
   static cancelLogin(): void {
     if (this.activeLoginContext) {
-      this.activeLoginContext.terminate("cancelled", new UserCancelledError("Authentication cancelled by user."));
+      this.activeLoginContext.terminate(
+        "cancelled",
+        new UserCancelledError("Authentication cancelled by user."),
+      );
       this.activeLoginContext = null;
     }
     SessionManager.advanceSessionEpoch();
   }
 
-  static async loginWithPortal(_portalUrlOverride?: string): Promise<{ token: string; user: UserProfile }> {
+  static async loginWithPortal(
+    _portalUrlOverride?: string,
+  ): Promise<{ token: string; user: UserProfile }> {
     // 1. Supersede any existing in-flight login operation
     if (this.activeLoginContext) {
       this.activeLoginContext.terminate(
         "superseded",
-        new OperationConflictError("Login was superseded by a new login request.")
+        new OperationConflictError(
+          "Login was superseded by a new login request.",
+        ),
       );
       this.activeLoginContext = null;
     }
@@ -143,8 +172,10 @@ export class LauncherAuth {
       const clientSockets = new Set<net.Socket>();
 
       const settleOnce = (
-        result: { success: true; data: { token: string; user: UserProfile } } | { success: false; error: Error },
-        reason?: string
+        result:
+          | { success: true; data: { token: string; user: UserProfile } }
+          | { success: false; error: Error },
+        reason?: string,
       ) => {
         if (isSettled) return;
         isSettled = true;
@@ -165,12 +196,12 @@ export class LauncherAuth {
         // Separate immediate logical settlement from bounded transport cleanup:
         // Immediate termination reasons (cancelled, timeout, superseded, shutdown):
         // Destroy client sockets immediately so aborted / hung operations terminate.
-        const isImmediateAbort = !result.success && (
-          reason === "timeout" ||
-          reason === "cancelled" ||
-          reason === "superseded" ||
-          reason === "shutdown"
-        );
+        const isImmediateAbort =
+          !result.success &&
+          (reason === "timeout" ||
+            reason === "cancelled" ||
+            reason === "superseded" ||
+            reason === "shutdown");
 
         if (isImmediateAbort) {
           for (const socket of clientSockets) {
@@ -224,7 +255,10 @@ export class LauncherAuth {
       // 120-second terminal deadline
       timeoutTimer = setTimeout(() => {
         LauncherLogger.warn("[Auth] Portal login timed out after 120 seconds.");
-        opContext.terminate("timeout", new Error("Login timed out after 120 seconds."));
+        opContext.terminate(
+          "timeout",
+          new Error("Login timed out after 120 seconds."),
+        );
       }, LOGIN_TIMEOUT_MS);
 
       const server = http.createServer(async (req, res) => {
@@ -240,14 +274,20 @@ export class LauncherAuth {
 
           // 1. Method constraint
           if (req.method !== "GET") {
-            res.writeHead(405, { "Content-Type": "text/plain", Connection: "close" });
+            res.writeHead(405, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
             res.end("Method Not Allowed");
             return;
           }
 
           // 2. Request URI length limit
           if ((req.url || "").length > 2048) {
-            res.writeHead(414, { "Content-Type": "text/plain", Connection: "close" });
+            res.writeHead(414, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
             res.end("URI Too Long");
             return;
           }
@@ -257,7 +297,10 @@ export class LauncherAuth {
           const hostHeader = (req.headers.host || "").toLowerCase();
           const expectedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
           if (!expectedHosts.includes(hostHeader)) {
-            res.writeHead(400, { "Content-Type": "text/plain", Connection: "close" });
+            res.writeHead(400, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
             res.end("Bad Request: Host header mismatch");
             return;
           }
@@ -266,14 +309,20 @@ export class LauncherAuth {
           try {
             reqUrl = new URL(req.url || "", `http://127.0.0.1:${port}`);
           } catch {
-            res.writeHead(400, { "Content-Type": "text/plain", Connection: "close" });
+            res.writeHead(400, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
             res.end("Bad Request: Malformed URL");
             return;
           }
 
           // 4. Noise handling: ignore non-callback paths without closing server
           if (reqUrl.pathname !== "/callback") {
-            res.writeHead(404, { "Content-Type": "text/plain", Connection: "close" });
+            res.writeHead(404, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
             res.end("Not Found");
             return;
           }
@@ -284,23 +333,41 @@ export class LauncherAuth {
 
           // Handle legitimate OAuth denial/cancellation from portal
           if (oauthError && returnedState === state) {
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Authentication was denied or cancelled on the portal."));
-            LauncherLogger.warn("[Auth] OAuth login denied or cancelled by user on portal.");
-            opContext.terminate("denied", new Error("Authentication was denied or cancelled by user"));
+            res.writeHead(400, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml(
+                "Authentication was denied or cancelled on the portal.",
+              ),
+            );
+            LauncherLogger.warn(
+              "[Auth] OAuth login denied or cancelled by user on portal.",
+            );
+            opContext.terminate(
+              "denied",
+              new Error("Authentication was denied or cancelled by user"),
+            );
             return;
           }
 
           // Noise or invalid state probe: reject request without terminating valid pending server
           if (!code || returnedState !== state) {
-            res.writeHead(400, { "Content-Type": "text/plain", Connection: "close" });
+            res.writeHead(400, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
             res.end("Bad Request: Invalid callback state or missing code");
             return;
           }
 
           // 5. Single-use exchange enforcement
           if (exchanged) {
-            res.writeHead(409, { "Content-Type": "text/plain", Connection: "close" });
+            res.writeHead(409, {
+              "Content-Type": "text/plain",
+              Connection: "close",
+            });
             res.end("Conflict: Authorization code already processed");
             return;
           }
@@ -314,16 +381,30 @@ export class LauncherAuth {
             SessionManager.getSessionEpoch() !== generationSnapshot ||
             normalizePortalUrl(currentConfig.portalUrl) !== portalUrl
           ) {
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Authentication session was superseded or cancelled."));
-            opContext.terminate("superseded", new Error("Authentication session was invalidated or portal changed during login flow"));
+            res.writeHead(400, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml(
+                "Authentication session was superseded or cancelled.",
+              ),
+            );
+            opContext.terminate(
+              "superseded",
+              new Error(
+                "Authentication session was invalidated or portal changed during login flow",
+              ),
+            );
             return;
           }
 
           // 7. Exchange authorization code for token
           const exchangeUrl = `${portalUrl}/api/v1/auth/exchange`;
           const startTime = Date.now();
-          LauncherLogger.logApiRequest("POST", exchangeUrl, { code: "[REDACTED]" });
+          LauncherLogger.logApiRequest("POST", exchangeUrl, {
+            code: "[REDACTED]",
+          });
 
           let resp: Response;
           try {
@@ -335,8 +416,13 @@ export class LauncherAuth {
             });
           } catch (netErr: any) {
             if (opContext.isTerminal()) return;
-            res.writeHead(502, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Network error communicating with the portal."));
+            res.writeHead(502, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml("Network error communicating with the portal."),
+            );
             opContext.terminate("error", netErr);
             return;
           }
@@ -345,36 +431,54 @@ export class LauncherAuth {
           const durationMs = Date.now() - startTime;
 
           if (!resp.ok) {
-            let errMsg = `Token exchange failed (${resp.status})`;
-            try {
-              const errJson = await resp.json();
-              if (errJson?.error) errMsg = errJson.error;
-            } catch {
-              try {
-                const errText = await resp.text();
-                if (errText) errMsg = `${errMsg}: ${errText}`;
-              } catch {}
-            }
-            LauncherLogger.logApiResponse("POST", exchangeUrl, resp.status, durationMs, { error: errMsg });
+            const errMsg = `Token exchange failed (${resp.status})`;
+            LauncherLogger.logApiResponse(
+              "POST",
+              exchangeUrl,
+              resp.status,
+              durationMs,
+              { error: errMsg },
+            );
 
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Token exchange failed. Please try logging in again."));
+            res.writeHead(400, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml(
+                "Token exchange failed. Please try logging in again.",
+              ),
+            );
             opContext.terminate("error", new Error(errMsg));
             return;
           }
 
           const json = await resp.json();
           // Security: Do not log full credential-bearing response objects at source
-          LauncherLogger.logApiResponse("POST", exchangeUrl, resp.status, durationMs, {
-            user: json.user?.name || json.user?.id,
-            minecraftUsername: json.user?.minecraftUsername,
-            status: "token_issued",
-          });
+          LauncherLogger.logApiResponse(
+            "POST",
+            exchangeUrl,
+            resp.status,
+            durationMs,
+          );
 
-          if (!json?.token || typeof json.token !== "string" || !json.token.trim()) {
-            const err = new Error("Token exchange failed: portal returned invalid token");
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Token exchange failed. Server returned invalid token."));
+          if (
+            !json?.token ||
+            typeof json.token !== "string" ||
+            !json.token.trim()
+          ) {
+            const err = new Error(
+              "Token exchange failed: portal returned invalid token",
+            );
+            res.writeHead(400, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml(
+                "Token exchange failed. Server returned invalid token.",
+              ),
+            );
             opContext.terminate("error", err);
             return;
           }
@@ -392,19 +496,42 @@ export class LauncherAuth {
             user.name.toLowerCase() === "account" ||
             user.name.toLowerCase() === "unverified-migration"
           ) {
-            const err = new Error("Token exchange failed: portal returned invalid user identity");
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Token exchange failed. Server returned invalid user identity."));
+            const err = new Error(
+              "Token exchange failed: portal returned invalid user identity",
+            );
+            res.writeHead(400, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml(
+                "Token exchange failed. Server returned invalid user identity.",
+              ),
+            );
             opContext.terminate("error", err);
             return;
           }
 
-          if (!isValidMinecraftUuid(user?.minecraftUuid) || !user?.minecraftUsername) {
-            const err = new Error("Minecraft account not bound: Please link your Minecraft Java account on the Lampas Portal dashboard.");
-            LauncherLogger.error(`[Auth] User ${user?.name || user?.id} lacks bound Minecraft UUID`);
+          if (
+            !isValidMinecraftUuid(user?.minecraftUuid) ||
+            !user?.minecraftUsername
+          ) {
+            const err = new Error(
+              "Minecraft account not bound: Please link your Minecraft Java account on the Lampas Portal dashboard.",
+            );
+            LauncherLogger.error(
+              "[Auth] Identity is missing a bound Minecraft UUID",
+            );
 
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Minecraft account not bound. Please link your Minecraft Java account on the portal dashboard."));
+            res.writeHead(400, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml(
+                "Minecraft account not bound. Please link your Minecraft Java account on the portal dashboard.",
+              ),
+            );
             opContext.terminate("error", err);
             return;
           }
@@ -416,9 +543,21 @@ export class LauncherAuth {
             SessionManager.getSessionEpoch() !== generationSnapshot ||
             normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
           ) {
-            res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-            res.end(renderErrorHtml("Authentication session was superseded or cancelled."));
-            opContext.terminate("superseded", new Error("Authentication session was invalidated or portal changed during token exchange"));
+            res.writeHead(400, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
+            res.end(
+              renderErrorHtml(
+                "Authentication session was superseded or cancelled.",
+              ),
+            );
+            opContext.terminate(
+              "superseded",
+              new Error(
+                "Authentication session was invalidated or portal changed during token exchange",
+              ),
+            );
             return;
           }
 
@@ -428,19 +567,23 @@ export class LauncherAuth {
             {
               token: json.token.trim(),
               refreshToken: json.refreshToken || undefined,
-              minecraftAccessToken: user?.minecraftAccessToken || json.minecraftAccessToken,
+              minecraftAccessToken:
+                user?.minecraftAccessToken || json.minecraftAccessToken,
               portalAccountId: user.id,
               portalUsername: user.name,
               minecraftUuid: user.minecraftUuid,
               minecraftUsername: user.minecraftUsername,
             },
-            user
+            user,
           );
 
-          LauncherLogger.info(`[Auth Success] Logged in as ${user.minecraftUsername} (UUID: ${user.minecraftUuid})`);
+          LauncherLogger.info("[Auth Success] Session established");
 
           // 10. Display browser success ONLY after token exchange and session establishment succeed
-          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
+          res.writeHead(200, {
+            "Content-Type": "text/html; charset=utf-8",
+            Connection: "close",
+          });
           res.end(renderSuccessHtml());
 
           const onResponseFinished = () => {
@@ -459,10 +602,15 @@ export class LauncherAuth {
         } catch (err: any) {
           if (opContext.isTerminal()) return;
           try {
-            res.writeHead(500, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
+            res.writeHead(500, {
+              "Content-Type": "text/html; charset=utf-8",
+              Connection: "close",
+            });
             res.end(renderErrorHtml());
           } catch {}
-          LauncherLogger.error(`[Auth Error] loginWithPortal failed: ${err.message}`);
+          LauncherLogger.error(
+            `[Auth Error] loginWithPortal failed: ${err.message}`,
+          );
           opContext.terminate("error", err);
         }
       });
@@ -474,7 +622,10 @@ export class LauncherAuth {
 
       server.on("error", (err: any) => {
         LauncherLogger.error(`[Auth] Loopback server error: ${err.message}`);
-        opContext.terminate("server_error", new Error(`Loopback callback server failed: ${err.message}`));
+        opContext.terminate(
+          "server_error",
+          new Error(`Loopback callback server failed: ${err.message}`),
+        );
       });
 
       server.listen(0, "127.0.0.1", () => {
@@ -484,10 +635,19 @@ export class LauncherAuth {
           const authUrl = `${portalUrl}/auth/launcher?code_challenge=${encodeURIComponent(challenge)}&port=${port}&state=${encodeURIComponent(state)}`;
           opContext.authUrl = authUrl;
           opContext.callbackPort = port;
-          LauncherLogger.info(`[Auth] Initiated portal login flow in browser at ${portalUrl} (callback port: ${port})`);
+          LauncherLogger.info(
+            `[Auth] Initiated portal login flow in browser at ${portalUrl} (callback port: ${port})`,
+          );
           shell.openExternal(authUrl).catch((openErr: any) => {
-            LauncherLogger.error(`[Auth] Failed to open external browser: ${openErr.message}`);
-            opContext.terminate("browser_error", new Error(`Failed to open browser for authentication: ${openErr.message}`));
+            LauncherLogger.error(
+              `[Auth] Failed to open external browser: ${openErr.message}`,
+            );
+            opContext.terminate(
+              "browser_error",
+              new Error(
+                `Failed to open browser for authentication: ${openErr.message}`,
+              ),
+            );
           });
         } catch (listenErr: any) {
           opContext.terminate("server_error", listenErr);
@@ -500,24 +660,27 @@ export class LauncherAuth {
    * Refreshes the active session with request coalescing strictly scoped to (portalUrl, accountId, sessionEpoch).
    * Differentiates authentication refusal (401/403) from transport outages.
    */
-  static refreshSession(_portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
+  static refreshSession(
+    _portalUrlOverride?: string,
+  ): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
     const config = ConfigManager.get();
     if (!config.token && !config.refreshToken) {
       return Promise.resolve({ valid: false });
     }
 
     const portalUrl = normalizePortalUrl(config.portalUrl);
-    const accountId = SessionManager.getCurrentRecord()?.portalAccountId || "unknown";
+    const accountId =
+      SessionManager.getCurrentRecord()?.portalAccountId || "unknown";
     const epoch = SessionManager.getSessionEpoch();
 
     return SessionManager.getCoalescedRefresh(portalUrl, accountId, epoch, () =>
-      this.executeRefreshSession(portalUrl, epoch)
+      this.executeRefreshSession(portalUrl, epoch),
     );
   }
 
   private static async executeRefreshSession(
     portalUrl: string,
-    generationSnapshot: number
+    generationSnapshot: number,
   ): Promise<{ valid: boolean; user?: UserProfile; token?: string }> {
     const config = ConfigManager.get();
     if (!config.token && !config.refreshToken) {
@@ -526,7 +689,9 @@ export class LauncherAuth {
 
     // Session Origin Binding
     if (!config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
-      LauncherLogger.warn(`[Auth Refresh] Session bound to '${config.sessionPortalUrl}' does not match active portal '${portalUrl}'`);
+      LauncherLogger.warn(
+        `[Auth Refresh] Session bound to '${config.sessionPortalUrl}' does not match active portal '${portalUrl}'`,
+      );
       return { valid: false };
     }
 
@@ -553,22 +718,31 @@ export class LauncherAuth {
         SessionManager.getSessionEpoch() !== generationSnapshot ||
         normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
       ) {
-        LauncherLogger.warn("[Auth Refresh] Aborted publishing refresh result: session was superseded or portal changed");
+        LauncherLogger.warn(
+          "[Auth Refresh] Aborted publishing refresh result: session was superseded or portal changed",
+        );
         return { valid: false };
       }
 
       if (resp.ok) {
         const json = await resp.json();
         // Security: Redact tokens from source log payload
-        LauncherLogger.logApiResponse("POST", refreshUrl, resp.status, durationMs, {
-          user: json.user?.name || json.user?.id,
-          minecraftUsername: json.user?.minecraftUsername,
-          status: "token_refreshed",
-        });
+        LauncherLogger.logApiResponse(
+          "POST",
+          refreshUrl,
+          resp.status,
+          durationMs,
+        );
 
         const user = json.user;
-        if (!user?.minecraftUuid || !isValidMinecraftUuid(user.minecraftUuid) || !user?.minecraftUsername) {
-          LauncherLogger.warn("[Auth Refresh] Session invalid: user lacks bound Minecraft UUID");
+        if (
+          !user?.minecraftUuid ||
+          !isValidMinecraftUuid(user.minecraftUuid) ||
+          !user?.minecraftUsername
+        ) {
+          LauncherLogger.warn(
+            "[Auth Refresh] Session invalid: user lacks bound Minecraft UUID",
+          );
           if (
             SessionManager.getSessionEpoch() === generationSnapshot &&
             normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
@@ -578,8 +752,14 @@ export class LauncherAuth {
           return { valid: false };
         }
 
-        if (!json?.token || typeof json.token !== "string" || !json.token.trim()) {
-          LauncherLogger.warn("[Auth Refresh] Refresh response omitted valid token string");
+        if (
+          !json?.token ||
+          typeof json.token !== "string" ||
+          !json.token.trim()
+        ) {
+          LauncherLogger.warn(
+            "[Auth Refresh] Refresh response omitted valid token string",
+          );
           return { valid: false };
         }
         const currentRecord = SessionManager.getCurrentRecord();
@@ -592,13 +772,18 @@ export class LauncherAuth {
           !currentRecord.portalAccountId.startsWith("session-account-") &&
           user.id !== currentRecord.portalAccountId
         ) {
-          LauncherLogger.warn(`[Auth Refresh] Account identity mismatch on refresh: expected ${currentRecord.portalAccountId}, got ${user.id}`);
+          LauncherLogger.warn(
+            "[Auth Refresh] Account identity mismatch on refresh",
+          );
           return { valid: false };
         }
 
         const newToken = json.token.trim();
         const newRefreshToken = json.refreshToken || config.refreshToken;
-        const newMcToken = user?.minecraftAccessToken || json.minecraftAccessToken || config.minecraftAccessToken;
+        const newMcToken =
+          user?.minecraftAccessToken ||
+          json.minecraftAccessToken ||
+          config.minecraftAccessToken;
 
         // Check snapshot immediately before updating credentials
         if (
@@ -617,15 +802,19 @@ export class LauncherAuth {
               refreshToken: newRefreshToken,
               minecraftAccessToken: newMcToken,
             },
-            user
+            user,
           );
         } catch (updateErr: any) {
-          LauncherLogger.warn(`[Auth Refresh] Failed to commit refreshed session: ${updateErr.message}`);
+          LauncherLogger.warn(
+            `[Auth Refresh] Failed to commit refreshed session: ${updateErr.message}`,
+          );
           return { valid: false };
         }
 
         if (!saveResult.success && !saveResult.sessionOnly) {
-          LauncherLogger.warn(`[Auth Refresh] Refresh failed to persist and cannot run session-only: ${saveResult.error}`);
+          LauncherLogger.warn(
+            `[Auth Refresh] Refresh failed to persist and cannot run session-only: ${saveResult.error}`,
+          );
           return { valid: false };
         }
 
@@ -636,7 +825,12 @@ export class LauncherAuth {
         };
       } else if (resp.status === 401 || resp.status === 403) {
         // Explicit auth refusal: clear session
-        LauncherLogger.logApiResponse("POST", refreshUrl, resp.status, durationMs);
+        LauncherLogger.logApiResponse(
+          "POST",
+          refreshUrl,
+          resp.status,
+          durationMs,
+        );
         if (
           SessionManager.getSessionEpoch() === generationSnapshot &&
           normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
@@ -645,11 +839,19 @@ export class LauncherAuth {
         }
         return { valid: false };
       } else {
-        LauncherLogger.logApiResponse("POST", refreshUrl, resp.status, durationMs);
+        LauncherLogger.logApiResponse(
+          "POST",
+          refreshUrl,
+          resp.status,
+          durationMs,
+        );
         return { valid: false };
       }
     } catch (err: any) {
-      if (err instanceof PortalRedirectPolicyError || err?.name === "PortalRedirectPolicyError") {
+      if (
+        err instanceof PortalRedirectPolicyError ||
+        err?.name === "PortalRedirectPolicyError"
+      ) {
         LauncherLogger.warn(`[Auth Refresh] Rejected redirect: ${err.message}`);
         if (
           SessionManager.getSessionEpoch() === generationSnapshot &&
@@ -659,12 +861,18 @@ export class LauncherAuth {
         }
         return { valid: false };
       }
-      LauncherLogger.logApiError("POST", `${portalUrl}/api/v1/auth/refresh`, err);
+      LauncherLogger.logApiError(
+        "POST",
+        `${portalUrl}/api/v1/auth/refresh`,
+        err,
+      );
       return { valid: false };
     }
   }
 
-  static async verifySession(_portalUrlOverride?: string): Promise<{ valid: boolean; user?: UserProfile }> {
+  static async verifySession(
+    _portalUrlOverride?: string,
+  ): Promise<{ valid: boolean; user?: UserProfile }> {
     const config = ConfigManager.get();
     if (!config.token && !config.refreshToken) {
       return { valid: false };
@@ -675,7 +883,9 @@ export class LauncherAuth {
 
     // Session Origin Binding
     if (!config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
-      LauncherLogger.warn(`[Auth Verify] Session bound to '${config.sessionPortalUrl}' does not match active portal '${portalUrl}'`);
+      LauncherLogger.warn(
+        `[Auth Verify] Session bound to '${config.sessionPortalUrl}' does not match active portal '${portalUrl}'`,
+      );
       return { valid: false };
     }
 
@@ -698,12 +908,19 @@ export class LauncherAuth {
         SessionManager.getSessionEpoch() !== generationSnapshot ||
         normalizePortalUrl(ConfigManager.get().portalUrl) !== portalUrl
       ) {
-        LauncherLogger.warn("[Auth Verify] Aborted verify result: session was superseded or portal changed");
+        LauncherLogger.warn(
+          "[Auth Verify] Aborted verify result: session was superseded or portal changed",
+        );
         return { valid: false };
       }
 
       if (!resp.ok) {
-        LauncherLogger.logApiResponse("POST", verifyUrl, resp.status, durationMs);
+        LauncherLogger.logApiResponse(
+          "POST",
+          verifyUrl,
+          resp.status,
+          durationMs,
+        );
 
         // If 401 and refresh token exists, route through the coordinated refresh mechanism
         if (resp.status === 401 && config.refreshToken) {
@@ -723,13 +940,15 @@ export class LauncherAuth {
       }
 
       const json = await resp.json();
-      LauncherLogger.logApiResponse("POST", verifyUrl, resp.status, durationMs, {
-        valid: json.valid,
-        user: json.user?.name || json.user?.id,
-      });
+      LauncherLogger.logApiResponse("POST", verifyUrl, resp.status, durationMs);
 
       const user = json.user;
-      if (!json.valid || !user?.minecraftUuid || !isValidMinecraftUuid(user.minecraftUuid) || !user?.minecraftUsername) {
+      if (
+        !json.valid ||
+        !user?.minecraftUuid ||
+        !isValidMinecraftUuid(user.minecraftUuid) ||
+        !user?.minecraftUsername
+      ) {
         if (
           SessionManager.getSessionEpoch() === generationSnapshot &&
           normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl
@@ -756,21 +975,27 @@ export class LauncherAuth {
               refreshToken: config.refreshToken,
               minecraftAccessToken: user.minecraftAccessToken,
             },
-            user
+            user,
           );
           if (!updateResult.success && !updateResult.sessionOnly) {
-            LauncherLogger.warn(`[Auth Verify] Failed to update session: ${updateResult.error}`);
+            LauncherLogger.warn(
+              `[Auth Verify] Failed to update session: ${updateResult.error}`,
+            );
             return { valid: false };
           }
         } catch (err: any) {
-          LauncherLogger.warn(`[Auth Verify] Session update rejected: ${err.message}`);
+          LauncherLogger.warn(
+            `[Auth Verify] Session update rejected: ${err.message}`,
+          );
           return { valid: false };
         }
       } else {
         try {
           SessionManager.setCurrentUser(user);
         } catch (err: any) {
-          LauncherLogger.warn(`[Auth Verify] User identity rejected: ${err.message}`);
+          LauncherLogger.warn(
+            `[Auth Verify] User identity rejected: ${err.message}`,
+          );
           return { valid: false };
         }
       }
@@ -780,7 +1005,10 @@ export class LauncherAuth {
         user,
       };
     } catch (err: any) {
-      if (err instanceof PortalRedirectPolicyError || err?.name === "PortalRedirectPolicyError") {
+      if (
+        err instanceof PortalRedirectPolicyError ||
+        err?.name === "PortalRedirectPolicyError"
+      ) {
         if (
           SessionManager.getSessionEpoch() === generationSnapshot &&
           normalizePortalUrl(ConfigManager.get().portalUrl) === portalUrl

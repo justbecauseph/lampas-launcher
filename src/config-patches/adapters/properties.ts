@@ -17,10 +17,14 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
 
     for (const op of operations) {
       if (op.op === "replaceLiteral") {
-        throw new Error("Properties adapter does not support 'replaceLiteral' operations");
+        throw new Error(
+          "Properties adapter does not support 'replaceLiteral' operations",
+        );
       }
       if (op.path.length !== 1) {
-        throw new Error(`Properties adapter requires 1-element path [key], got [${op.path.join(", ")}]`);
+        throw new Error(
+          `Properties adapter requires 1-element path [key], got [${op.path.join(", ")}]`,
+        );
       }
 
       const key = String(op.path[0]);
@@ -31,10 +35,16 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
         const targetVal = String(op.value);
         const newLines = lines.map((line) => {
           const trimmed = line.trim();
-          if (trimmed.startsWith("#") || trimmed.startsWith("!") || trimmed === "") {
+          if (
+            trimmed.startsWith("#") ||
+            trimmed.startsWith("!") ||
+            trimmed === ""
+          ) {
             return line;
           }
-          const match = line.match(/^([ \t]*)([^=: \t]+)([ \t]*[=:][ \t]*)(.*)$/);
+          const match = line.match(
+            /^([ \t]*)([^=: \t]+)([ \t]*[=:][ \t]*)(.*)$/,
+          );
           if (match && match[2] === key) {
             keyFound = true;
             if (match[4].trim() === targetVal) {
@@ -57,10 +67,16 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
       } else if (op.op === "remove") {
         const newLines = lines.filter((line) => {
           const trimmed = line.trim();
-          if (trimmed.startsWith("#") || trimmed.startsWith("!") || trimmed === "") {
+          if (
+            trimmed.startsWith("#") ||
+            trimmed.startsWith("!") ||
+            trimmed === ""
+          ) {
             return true;
           }
-          const match = line.match(/^([ \t]*)([^=: \t]+)([ \t]*[=:][ \t]*)(.*)$/);
+          const match = line.match(
+            /^([ \t]*)([^=: \t]+)([ \t]*[=:][ \t]*)(.*)$/,
+          );
           if (match && match[2] === key) {
             keyFound = true;
             changed = true;

@@ -6,10 +6,15 @@ interface NormalizedMod extends ModCatalogEntry {
 }
 
 export interface ModsViewOptions {
-  showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
+  showToast: (
+    message: string,
+    type: "info" | "success" | "error",
+    duration?: number,
+  ) => void;
   onModsChanged?: () => void;
   getGameDir?: () => string;
   switchToTab?: (tabId: string) => void;
+  externalImages?: () => boolean;
 }
 
 function formatBytes(bytes?: number): string {
@@ -20,32 +25,56 @@ function formatBytes(bytes?: number): string {
 }
 
 function escapeHtml(value?: string | number): string {
-  return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "'": "&#39;",
-    '"': "&quot;",
-  })[char] || char);
+  return String(value ?? "").replace(
+    /[&<>'"]/g,
+    (char) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "'": "&#39;",
+        '"': "&quot;",
+      })[char] || char,
+  );
 }
 
 export function initModsView(options: ModsViewOptions): () => void {
-  const { showToast, onModsChanged, getGameDir, switchToTab } = options;
+  const { showToast, onModsChanged, getGameDir, switchToTab, externalImages } =
+    options;
 
   const modsGrid = document.getElementById("mods-grid") as HTMLElement | null;
-  const modsSearchInput = document.getElementById("mods-search-input") as HTMLInputElement | null;
-  const modsFilteredCount = document.getElementById("mods-filtered-count") as HTMLElement | null;
-  const managedModCount = document.getElementById("managed-mod-count") as HTMLElement | null;
-  const optionalModCount = document.getElementById("optional-mod-count") as HTMLElement | null;
-  const localModCount = document.getElementById("local-mod-count") as HTMLElement | null;
-  const modFilterPills = document.querySelectorAll<HTMLElement>(".mod-filter-pill");
+  const modsSearchInput = document.getElementById(
+    "mods-search-input",
+  ) as HTMLInputElement | null;
+  const modsFilteredCount = document.getElementById(
+    "mods-filtered-count",
+  ) as HTMLElement | null;
+  const managedModCount = document.getElementById(
+    "managed-mod-count",
+  ) as HTMLElement | null;
+  const optionalModCount = document.getElementById(
+    "optional-mod-count",
+  ) as HTMLElement | null;
+  const localModCount = document.getElementById(
+    "local-mod-count",
+  ) as HTMLElement | null;
+  const modFilterPills =
+    document.querySelectorAll<HTMLElement>(".mod-filter-pill");
 
   // Client Loadout Action Buttons
-  const btnAddMods = (document.getElementById("btn-add-mods") || document.getElementById("btn-browse-mod")) as HTMLButtonElement | null;
-  const btnRepairPack = document.getElementById("btn-repair-pack") as HTMLButtonElement | null;
-  const btnVerifyPack = document.getElementById("btn-verify-pack") as HTMLButtonElement | null;
-  const btnModsOpenDir = document.getElementById("btn-mods-open-dir") as HTMLButtonElement | null;
-  const modDropZone = (document.getElementById("mod-drop-zone") || document.getElementById("tab-mods")) as HTMLElement | null;
+  const btnAddMods = (document.getElementById("btn-add-mods") ||
+    document.getElementById("btn-browse-mod")) as HTMLButtonElement | null;
+  const btnRepairPack = document.getElementById(
+    "btn-repair-pack",
+  ) as HTMLButtonElement | null;
+  const btnVerifyPack = document.getElementById(
+    "btn-verify-pack",
+  ) as HTMLButtonElement | null;
+  const btnModsOpenDir = document.getElementById(
+    "btn-mods-open-dir",
+  ) as HTMLButtonElement | null;
+  const modDropZone = (document.getElementById("mod-drop-zone") ||
+    document.getElementById("tab-mods")) as HTMLElement | null;
 
   let allMods: NormalizedMod[] = [];
   let activeModFilter = "all";
@@ -53,6 +82,7 @@ export function initModsView(options: ModsViewOptions): () => void {
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let isComposing = false;
   let isMutating = false;
+  let iconRenderGeneration = 0;
 
   function precomputeSearchKey(mod: ModCatalogEntry): string {
     const parts = [
@@ -79,6 +109,39 @@ export function initModsView(options: ModsViewOptions): () => void {
     if (localModCount) localModCount.innerText = String(local);
   }
 
+  async function loadExternalIcons(
+    mods: NormalizedMod[],
+    generation: number,
+  ): Promise<void> {
+    if (
+      !externalImages?.() ||
+      !window.lampas.cosmetics?.getModIcon ||
+      !modsGrid
+    )
+      return;
+    await Promise.all(
+      mods.map(async (mod) => {
+        if (!mod.iconUrl) return;
+        try {
+          const image = await window.lampas.cosmetics.getModIcon(mod.id);
+          if (!image || generation !== iconRenderGeneration) return;
+          const holder = modsGrid.querySelector<HTMLElement>(
+            `[data-mod-icon-id="${CSS.escape(mod.id)}"]`,
+          );
+          if (!holder) return;
+          const img = document.createElement("img");
+          img.src = image.dataUrl;
+          img.alt = mod.name || mod.id;
+          img.className = "mod-icon-img";
+          const fallback =
+            holder.querySelector<HTMLElement>(".mod-icon-fallback");
+          if (fallback) fallback.style.display = "none";
+          holder.prepend(img);
+        } catch {}
+      }),
+    );
+  }
+
   function renderMods(): void {
     if (!modsGrid) return;
 
@@ -92,7 +155,11 @@ export function initModsView(options: ModsViewOptions): () => void {
       if (filter === "custom" && mod.source !== "custom") return false;
       if (filter === "server" && mod.side !== "server") return false;
       if (filter === "both" && mod.side !== "both") return false;
-      if (!["all", "client", "disabled", "custom", "server", "both"].includes(filter)) {
+      if (
+        !["all", "client", "disabled", "custom", "server", "both"].includes(
+          filter,
+        )
+      ) {
         const cats = (mod.categories || []).map((c) => c.toLowerCase());
         if (!cats.includes(filter)) return false;
       }
@@ -118,30 +185,31 @@ export function initModsView(options: ModsViewOptions): () => void {
       return;
     }
 
+    const generation = ++iconRenderGeneration;
     modsGrid.innerHTML = filtered
       .map((mod) => {
         const sideBadge =
           mod.side === "client"
             ? '<span class="text-[9px] font-bold text-cyan-400 bg-cyan-950/80 border border-cyan-800/60 px-1.5 py-0.5 rounded-md">CLIENT ONLY</span>'
             : mod.side === "server"
-            ? '<span class="text-[9px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 rounded-md">SERVER ONLY</span>'
-            : '<span class="text-[9px] font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded-md">REQUIRED</span>';
+              ? '<span class="text-[9px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 rounded-md">SERVER ONLY</span>'
+              : '<span class="text-[9px] font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded-md">REQUIRED</span>';
 
-        const fallbackChar = escapeHtml((mod.name || mod.id || "M")[0].toUpperCase());
+        const fallbackChar = escapeHtml(
+          (mod.name || mod.id || "M")[0].toUpperCase(),
+        );
         const modName = escapeHtml(mod.name || mod.filename || "Unknown mod");
         const modId = escapeHtml(mod.id);
-        const iconHtml = mod.iconUrl
-          ? `<div class="mod-icon-wrapper">
-              <img src="${escapeHtml(mod.iconUrl)}" alt="${modName}" class="mod-icon-img" loading="lazy" />
-              <div class="mod-icon-fallback" style="display: none;">${fallbackChar}</div>
-            </div>`
-          : `<div class="mod-icon-wrapper">
+        const iconHtml = `<div class="mod-icon-wrapper" data-mod-icon-id="${escapeHtml(mod.id)}">
               <div class="mod-icon-fallback">${fallbackChar}</div>
             </div>`;
 
         const catsHtml = (mod.categories || [])
           .slice(0, 3)
-          .map((c) => `<span class="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded">#${escapeHtml(c)}</span>`)
+          .map(
+            (c) =>
+              `<span class="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded">#${escapeHtml(c)}</span>`,
+          )
           .join(" ");
 
         const linkBtn = mod.sourceUrl
@@ -154,10 +222,14 @@ export function initModsView(options: ModsViewOptions): () => void {
               <span></span>
             </label>`
           : "";
-        const localBadge = mod.source === "custom" ? '<span class="local-mod-badge">LOCAL</span>' : "";
-        const remove = mod.source === "custom"
-          ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" data-name="${modName}" title="Remove this local mod">Remove</button>`
-          : "";
+        const localBadge =
+          mod.source === "custom"
+            ? '<span class="local-mod-badge">LOCAL</span>'
+            : "";
+        const remove =
+          mod.source === "custom"
+            ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" data-name="${modName}" title="Remove this local mod">Remove</button>`
+            : "";
 
         return `
           <div class="mod-card" data-mod-id="${modId}">
@@ -185,6 +257,7 @@ export function initModsView(options: ModsViewOptions): () => void {
         `;
       })
       .join("");
+    void loadExternalIcons(filtered, generation);
   }
 
   async function loadCatalog(): Promise<void> {
@@ -215,7 +288,7 @@ export function initModsView(options: ModsViewOptions): () => void {
           if (fallback) fallback.style.display = "flex";
         }
       },
-      true // capture error events
+      true, // capture error events
     );
 
     // Delegated clicks for links and remove buttons
@@ -236,7 +309,10 @@ export function initModsView(options: ModsViewOptions): () => void {
       if (removeBtn && removeBtn.dataset.filename && !isMutating) {
         const filename = removeBtn.dataset.filename;
         const found = allMods.find((m) => m.filename === filename);
-        const displayName = found?.name || removeBtn.dataset.name || cleanModDisplayName(filename);
+        const displayName =
+          found?.name ||
+          removeBtn.dataset.name ||
+          cleanModDisplayName(filename);
         isMutating = true;
         removeBtn.disabled = true;
         try {
@@ -245,7 +321,10 @@ export function initModsView(options: ModsViewOptions): () => void {
           await loadCatalog();
           onModsChanged?.();
         } catch (err: any) {
-          showToast(`Could not remove ${displayName}: ${formatFriendlyError(err)}`, "error");
+          showToast(
+            `Could not remove ${displayName}: ${formatFriendlyError(err)}`,
+            "error",
+          );
         } finally {
           isMutating = false;
         }
@@ -262,8 +341,14 @@ export function initModsView(options: ModsViewOptions): () => void {
       const filename = target.dataset.filename || "";
       const enabled = target.checked;
 
-      const found = allMods.find((m) => (isOfficial ? m.id === modId : m.filename === filename));
-      const displayName = found?.name || target.dataset.name || cleanModDisplayName(filename) || modId;
+      const found = allMods.find((m) =>
+        isOfficial ? m.id === modId : m.filename === filename,
+      );
+      const displayName =
+        found?.name ||
+        target.dataset.name ||
+        cleanModDisplayName(filename) ||
+        modId;
 
       isMutating = true;
       target.disabled = true;
@@ -280,12 +365,19 @@ export function initModsView(options: ModsViewOptions): () => void {
         if (activeModFilter === "disabled") {
           renderMods();
         }
-        showToast(`${enabled ? "Enabled" : "Disabled"} ${displayName}.`, "info", 1500);
+        showToast(
+          `${enabled ? "Enabled" : "Disabled"} ${displayName}.`,
+          "info",
+          1500,
+        );
         onModsChanged?.();
       } catch (err: any) {
         // Rollback checkbox
         target.checked = !enabled;
-        showToast(`Could not ${enabled ? "enable" : "disable"} ${displayName}: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not ${enabled ? "enable" : "disable"} ${displayName}: ${formatFriendlyError(err)}`,
+          "error",
+        );
       } finally {
         target.disabled = false;
         isMutating = false;
@@ -359,7 +451,9 @@ export function initModsView(options: ModsViewOptions): () => void {
         btnRepairPack.disabled = true;
         showToast("Verifying and repairing game files...", "info");
         const res = await window.lampas.sync.repair();
-        const completionMsg = res?.message || "Repair complete! All game files, assets, and libraries verified.";
+        const completionMsg =
+          res?.message ||
+          "Repair complete! All game files, assets, and libraries verified.";
         showToast(completionMsg, "success", 4500);
         await loadCatalog();
         onModsChanged?.();
@@ -386,12 +480,17 @@ export function initModsView(options: ModsViewOptions): () => void {
         btnVerifyPack.disabled = true;
         showToast("Verifying modpack integrity...", "info");
         const res = await window.lampas.sync.start();
-        const completionMsg = res?.message || `Modpack v${res.version} verified successfully.`;
+        const completionMsg =
+          res?.message || `Modpack v${res.version} verified successfully.`;
         showToast(completionMsg, "success", 4500);
         await loadCatalog();
         onModsChanged?.();
       } catch (err: any) {
-        showToast(`Verification failed: ${formatFriendlyError(err)}`, "error", 6000);
+        showToast(
+          `Verification failed: ${formatFriendlyError(err)}`,
+          "error",
+          6000,
+        );
       } finally {
         btnVerifyPack.disabled = false;
       }
@@ -437,7 +536,7 @@ export function initModsView(options: ModsViewOptions): () => void {
       e.preventDefault();
       modDropZone.classList.remove("drag-over");
       const files = Array.from(e.dataTransfer?.files || []).filter((f) =>
-        f.name.toLowerCase().endsWith(".jar")
+        f.name.toLowerCase().endsWith(".jar"),
       );
       if (files.length === 0) return;
 

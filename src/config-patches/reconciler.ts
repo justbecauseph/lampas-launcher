@@ -1,6 +1,9 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
-import type { AppliedConfigPatchState, ConfigPatch, InstallationState } from "../types";
+import type {
+  AppliedConfigPatchState,
+  ConfigPatch,
+  InstallationState,
+} from "../types";
 import { AdapterRegistry } from "./registry";
 import { LauncherLogger } from "../logger";
 
@@ -23,55 +26,30 @@ import {
   resolveAndContainPath,
   checkPhysicalAncestry,
 } from "../path-policy";
+import { writeAtomicFile } from "../file-transfer";
 
 export function isSafeConfigPatchPath(targetPath: string): boolean {
   if (!targetPath || typeof targetPath !== "string") return false;
   try {
     const canonical = canonicalizeRelativePath(targetPath);
     if (isPathProtected(canonical)) return false;
-    if (canonical === ".lampas" || canonical.startsWith(".lampas/")) return false;
+    if (canonical === ".lampas" || canonical.startsWith(".lampas/"))
+      return false;
     return true;
   } catch {
     return false;
   }
 }
 
-async function atomicReplaceFile(tempPath: string, destination: string): Promise<void> {
-  if (fs.existsSync(destination)) {
-    try {
-      const stat = await fs.promises.lstat(destination);
-      if (
-        stat.isSymbolicLink() ||
-        stat.isFIFO() ||
-        stat.isSocket() ||
-        stat.isCharacterDevice() ||
-        stat.isBlockDevice() ||
-        stat.nlink > 1
-      ) {
-        await fs.promises.unlink(destination);
-      }
-    } catch {}
-  }
-  try {
-    await fs.promises.rename(tempPath, destination);
-  } catch (error: any) {
-    if (!fs.existsSync(destination) || (error?.code !== "EEXIST" && error?.code !== "EPERM")) {
-      throw error;
-    }
-    const backupPath = `${destination}.previous.${Date.now()}.${Math.random().toString(16).slice(2)}`;
-    await fs.promises.rename(destination, backupPath);
-    try {
-      await fs.promises.rename(tempPath, destination);
-      await fs.promises.rm(backupPath, { force: true });
-    } catch (replacementError) {
-      await fs.promises.rename(backupPath, destination).catch(() => undefined);
-      throw replacementError;
-    }
-  }
+async function atomicWriteConfig(
+  destination: string,
+  content: string,
+): Promise<void> {
+  await writeAtomicFile(destination, content, { encoding: "utf-8" });
 }
 
 export async function reconcileConfigPatches(
-  options: ReconcileOptions
+  options: ReconcileOptions,
 ): Promise<ReconcileResult> {
   const { gameDir, patches, prevState } = options;
   const appliedState: Record<string, AppliedConfigPatchState> = {
@@ -85,10 +63,10 @@ export async function reconcileConfigPatches(
   for (const patch of patches) {
     if (!isSafeConfigPatchPath(patch.path)) {
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  unsafe target path '${patch.path}'; file was left unchanged`
+        `[Config Patch] ✗ ${patch.id}\n  unsafe target path '${patch.path}'; file was left unchanged`,
       );
       throw new Error(
-        `[Config Patch] ✗ ${patch.id}: unsafe target path '${patch.path}'`
+        `[Config Patch] ✗ ${patch.id}: unsafe target path '${patch.path}'`,
       );
     }
 
@@ -102,17 +80,27 @@ export async function reconcileConfigPatches(
     }
 
     const targetFullPath = resolveAndContainPath(gameDir, patch.path);
-    await checkPhysicalAncestry(gameDir, targetFullPath, { enforceOwnership: true, disallowSymlinks: true });
+    await checkPhysicalAncestry(gameDir, targetFullPath, {
+      enforceOwnership: true,
+      disallowSymlinks: true,
+    });
 
-    for (const op of (patch.operations || [])) {
+    for (const op of patch.operations || []) {
       if (op && typeof op === "object") {
         const key = (op as any).key;
         const opPath = (op as any).path;
         if (
-          key === "__proto__" || key === "constructor" || key === "prototype" ||
-          (typeof opPath === "string" && (opPath.includes("__proto__") || opPath.includes("constructor") || opPath.includes("prototype")))
+          key === "__proto__" ||
+          key === "constructor" ||
+          key === "prototype" ||
+          (typeof opPath === "string" &&
+            (opPath.includes("__proto__") ||
+              opPath.includes("constructor") ||
+              opPath.includes("prototype")))
         ) {
-          throw new Error(`[Config Patch] ✗ ${patch.id}: Prototype-sensitive operation rejected.`);
+          throw new Error(
+            `[Config Patch] ✗ ${patch.id}: Prototype-sensitive operation rejected.`,
+          );
         }
       }
     }
@@ -123,7 +111,7 @@ export async function reconcileConfigPatches(
       if (patch.missingFile === "defer") {
         deferredCount++;
         LauncherLogger.info(
-          `[Config Patch] ↪ ${patch.id} deferred; target missing`
+          `[Config Patch] ↪ ${patch.id} deferred; target missing`,
         );
         continue;
       }
@@ -134,7 +122,7 @@ export async function reconcileConfigPatches(
         adapter = AdapterRegistry.get(patch.adapter);
       } catch (err: any) {
         LauncherLogger.error(
-          `[Config Patch] ✗ ${patch.id}\n  ${err.message}; file was left unchanged`
+          `[Config Patch] ✗ ${patch.id}\n  ${err.message}; file was left unchanged`,
         );
         throw err;
       }
@@ -142,7 +130,7 @@ export async function reconcileConfigPatches(
       if (!adapter.canCreate) {
         const msg = `adapter '${patch.adapter}' does not support creating new files`;
         LauncherLogger.error(
-          `[Config Patch] ✗ ${patch.id}\n  ${msg}; file was left unchanged`
+          `[Config Patch] ✗ ${patch.id}\n  ${msg}; file was left unchanged`,
         );
         throw new Error(`[Config Patch] ✗ ${patch.id}: ${msg}`);
       }
@@ -151,15 +139,7 @@ export async function reconcileConfigPatches(
         const patchResult = adapter.apply("", patch.operations);
         adapter.validate(patchResult.output);
 
-        const targetDir = path.dirname(targetFullPath);
-        await fs.promises.mkdir(targetDir, { recursive: true });
-        const tempPath = path.join(
-          targetDir,
-          `${path.basename(targetFullPath)}.${Date.now()}.${Math.random().toString(16).slice(2)}.lampas.tmp`
-        );
-
-        await fs.promises.writeFile(tempPath, patchResult.output, "utf-8");
-        await atomicReplaceFile(tempPath, targetFullPath);
+        await atomicWriteConfig(targetFullPath, patchResult.output);
 
         appliedCount++;
         if (patch.mode === "once") {
@@ -169,15 +149,16 @@ export async function reconcileConfigPatches(
           };
         }
 
-        const details = patchResult.details && patchResult.details.length > 0
-          ? `\n${patchResult.details.map((d) => `  ${d}`).join("\n")}`
-          : "";
+        const details =
+          patchResult.details && patchResult.details.length > 0
+            ? `\n${patchResult.details.map((d) => `  ${d}`).join("\n")}`
+            : "";
         LauncherLogger.info(
-          `[Config Patch] ✓ ${patch.id}\n  ${patch.path}${details}`
+          `[Config Patch] ✓ ${patch.id}\n  ${patch.path}${details}`,
         );
       } catch (err: any) {
         LauncherLogger.error(
-          `[Config Patch] ✗ ${patch.id}\n  ${err.message}; file was left unchanged`
+          `[Config Patch] ✗ ${patch.id}\n  ${err.message}; file was left unchanged`,
         );
         throw new Error(`[Config Patch] ✗ ${patch.id}: ${err.message}`);
       }
@@ -190,7 +171,7 @@ export async function reconcileConfigPatches(
       adapter = AdapterRegistry.get(patch.adapter);
     } catch (err: any) {
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  ${err.message}; file was left unchanged`
+        `[Config Patch] ✗ ${patch.id}\n  ${err.message}; file was left unchanged`,
       );
       throw err;
     }
@@ -200,9 +181,11 @@ export async function reconcileConfigPatches(
       source = await fs.promises.readFile(targetFullPath, "utf-8");
     } catch (readErr: any) {
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  failed to read target: ${readErr.message}; file was left unchanged`
+        `[Config Patch] ✗ ${patch.id}\n  failed to read target: ${readErr.message}; file was left unchanged`,
       );
-      throw new Error(`[Config Patch] ✗ ${patch.id}: failed to read target: ${readErr.message}`);
+      throw new Error(
+        `[Config Patch] ✗ ${patch.id}: failed to read target: ${readErr.message}`,
+      );
     }
 
     // Validate original syntax
@@ -210,9 +193,11 @@ export async function reconcileConfigPatches(
       adapter.validate(source);
     } catch (valErr: any) {
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  target contained invalid syntax (${valErr.message}); file was left unchanged`
+        `[Config Patch] ✗ ${patch.id}\n  target contained invalid syntax (${valErr.message}); file was left unchanged`,
       );
-      throw new Error(`[Config Patch] ✗ ${patch.id}: target contained invalid syntax: ${valErr.message}`);
+      throw new Error(
+        `[Config Patch] ✗ ${patch.id}: target contained invalid syntax: ${valErr.message}`,
+      );
     }
 
     // Apply operations in memory
@@ -221,9 +206,11 @@ export async function reconcileConfigPatches(
       patchResult = adapter.apply(source, patch.operations);
     } catch (applyErr: any) {
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  failed to apply operations (${applyErr.message}); file was left unchanged`
+        `[Config Patch] ✗ ${patch.id}\n  failed to apply operations (${applyErr.message}); file was left unchanged`,
       );
-      throw new Error(`[Config Patch] ✗ ${patch.id}: failed to apply operations: ${applyErr.message}`);
+      throw new Error(
+        `[Config Patch] ✗ ${patch.id}: failed to apply operations: ${applyErr.message}`,
+      );
     }
 
     // Validate resulting syntax
@@ -231,9 +218,11 @@ export async function reconcileConfigPatches(
       adapter.validate(patchResult.output);
     } catch (outValErr: any) {
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  resulting syntax invalid (${outValErr.message}); file was left unchanged`
+        `[Config Patch] ✗ ${patch.id}\n  resulting syntax invalid (${outValErr.message}); file was left unchanged`,
       );
-      throw new Error(`[Config Patch] ✗ ${patch.id}: resulting syntax invalid: ${outValErr.message}`);
+      throw new Error(
+        `[Config Patch] ✗ ${patch.id}: resulting syntax invalid: ${outValErr.message}`,
+      );
     }
 
     if (!patchResult.changed) {
@@ -248,21 +237,12 @@ export async function reconcileConfigPatches(
       continue;
     }
 
-    // Atomic write
-    const targetDir = path.dirname(targetFullPath);
-    await fs.promises.mkdir(targetDir, { recursive: true });
-    const tempPath = path.join(
-      targetDir,
-      `${path.basename(targetFullPath)}.${Date.now()}.${Math.random().toString(16).slice(2)}.lampas.tmp`
-    );
-
+    // Atomic write through the shared exclusive-staging helper.
     try {
-      await fs.promises.writeFile(tempPath, patchResult.output, "utf-8");
-      await atomicReplaceFile(tempPath, targetFullPath);
+      await atomicWriteConfig(targetFullPath, patchResult.output);
     } catch (writeErr: any) {
-      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  failed to atomically write target: ${writeErr.message}; file was left unchanged`
+        `[Config Patch] ✗ ${patch.id}\n  failed to atomically write target: ${writeErr.message}; file was left unchanged`,
       );
       throw writeErr;
     }
@@ -277,9 +257,11 @@ export async function reconcileConfigPatches(
       }
     } catch (verifyErr: any) {
       LauncherLogger.error(
-        `[Config Patch] ✗ ${patch.id}\n  post-patch verification failed: ${verifyErr.message}`
+        `[Config Patch] ✗ ${patch.id}\n  post-patch verification failed: ${verifyErr.message}`,
       );
-      throw new Error(`[Config Patch] ✗ ${patch.id}: post-patch verification failed: ${verifyErr.message}`);
+      throw new Error(
+        `[Config Patch] ✗ ${patch.id}: post-patch verification failed: ${verifyErr.message}`,
+      );
     }
 
     appliedCount++;
@@ -290,11 +272,12 @@ export async function reconcileConfigPatches(
       };
     }
 
-    const details = patchResult.details && patchResult.details.length > 0
-      ? `\n${patchResult.details.map((d) => `  ${d}`).join("\n")}`
-      : "";
+    const details =
+      patchResult.details && patchResult.details.length > 0
+        ? `\n${patchResult.details.map((d) => `  ${d}`).join("\n")}`
+        : "";
     LauncherLogger.info(
-      `[Config Patch] ✓ ${patch.id}\n  ${patch.path}${details}`
+      `[Config Patch] ✓ ${patch.id}\n  ${patch.path}${details}`,
     );
   }
 

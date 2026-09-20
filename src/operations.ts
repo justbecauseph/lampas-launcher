@@ -1,6 +1,6 @@
 /**
  * Centralized operation guard and execution coordination.
- * 
+ *
  * Invariants:
  * 1. Mutual exclusivity for installation mutators (sync, repair, move, mod-mutations, launch).
  * 2. Operation ownership: an operation owns an AbortController and unique ID.
@@ -10,7 +10,8 @@
 
 import { GameRunner } from "./game-runner";
 
-export type LauncherOperationType = "sync" | "repair" | "move" | "launch" | "mod-mutation";
+export type LauncherOperationType =
+  "sync" | "repair" | "move" | "launch" | "mod-mutation";
 
 export interface ActiveOperationInfo {
   id: string;
@@ -28,14 +29,19 @@ export interface OperationScope {
   createThrottledProgress: <T>(
     sender: (data: T) => void,
     intervalMs?: number,
-    isTerminal?: (data: T) => boolean
+    isTerminal?: (data: T) => boolean,
   ) => (data: T, forceImmediate?: boolean) => void;
 }
 
 export class OperationBusyError extends Error {
   readonly isMainOwnedError = true;
-  constructor(public readonly currentOperation: ActiveOperationInfo, requestedType: string) {
-    super(`Cannot start '${requestedType}': operation '${currentOperation.type}' is currently in progress.`);
+  constructor(
+    public readonly currentOperation: ActiveOperationInfo,
+    requestedType: string,
+  ) {
+    super(
+      `Cannot start '${requestedType}': operation '${currentOperation.type}' is currently in progress.`,
+    );
     this.name = "OperationBusyError";
   }
 }
@@ -82,9 +88,14 @@ export class OperationCoordinator {
    * Throws OperationBusyError if another operation is active.
    * Throws GameRunningConflictError if Minecraft is running and operation affects installation.
    */
-  static acquire(type: LauncherOperationType, description?: string): OperationScope {
+  static acquire(
+    type: LauncherOperationType,
+    description?: string,
+  ): OperationScope {
     if (blockedReason) {
-      throw new Error(`Launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`);
+      throw new Error(
+        `Launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`,
+      );
     }
 
     if (activeOperation && !activeOperation.settled) {
@@ -95,7 +106,7 @@ export class OperationCoordinator {
           startTime: activeOperation.startTime,
           description: activeOperation.description,
         },
-        type
+        type,
       );
     }
 
@@ -126,14 +137,16 @@ export class OperationCoordinator {
 
     const abort = (reason?: any) => {
       if (!abortController.signal.aborted) {
-        abortController.abort(reason || new Error(`Operation ${opId} was cancelled.`));
+        abortController.abort(
+          reason || new Error(`Operation ${opId} was cancelled.`),
+        );
       }
     };
 
     const createThrottledProgress = <T>(
       sender: (data: T) => void,
       intervalMs = 100,
-      isTerminal?: (data: T) => boolean
+      isTerminal?: (data: T) => boolean,
     ) => {
       let lastSent = 0;
       let scheduledTimer: ReturnType<typeof setTimeout> | null = null;
@@ -159,15 +172,22 @@ export class OperationCoordinator {
         } else {
           pendingData = data;
           if (!scheduledTimer) {
-            scheduledTimer = setTimeout(() => {
-              scheduledTimer = null;
-              if (!currentOp.settled && activeOperation?.id === opId && pendingData !== null) {
-                lastSent = Date.now();
-                const toSend = pendingData;
-                pendingData = null;
-                sender(toSend);
-              }
-            }, intervalMs - (now - lastSent));
+            scheduledTimer = setTimeout(
+              () => {
+                scheduledTimer = null;
+                if (
+                  !currentOp.settled &&
+                  activeOperation?.id === opId &&
+                  pendingData !== null
+                ) {
+                  lastSent = Date.now();
+                  const toSend = pendingData;
+                  pendingData = null;
+                  sender(toSend);
+                }
+              },
+              intervalMs - (now - lastSent),
+            );
           }
         }
       };
@@ -189,7 +209,9 @@ export class OperationCoordinator {
    */
   static assertCanMutate(operationName = "modify installation"): void {
     if (blockedReason) {
-      throw new Error(`Cannot perform '${operationName}': launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`);
+      throw new Error(
+        `Cannot perform '${operationName}': launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`,
+      );
     }
     if (activeOperation && !activeOperation.settled) {
       throw new OperationBusyError(
@@ -199,7 +221,7 @@ export class OperationCoordinator {
           startTime: activeOperation.startTime,
           description: activeOperation.description,
         },
-        operationName
+        operationName,
       );
     }
     if (GameRunner.isGameRunning()) {
@@ -235,19 +257,32 @@ export class OperationCoordinator {
  * preventing unhandled exceptions if the window or its webContents has been destroyed.
  */
 export function safeSend(
-  window: { isDestroyed?: () => boolean; webContents?: { isDestroyed?: () => boolean; send: (channel: string, ...args: any[]) => void } } | null | undefined,
+  window:
+    | {
+        isDestroyed?: () => boolean;
+        webContents?: {
+          isDestroyed?: () => boolean;
+          send: (channel: string, ...args: any[]) => void;
+        };
+      }
+    | null
+    | undefined,
   channel: string,
   ...args: any[]
 ): boolean {
   if (!window) return false;
   try {
-    if (typeof window.isDestroyed === "function" && window.isDestroyed()) return false;
+    if (typeof window.isDestroyed === "function" && window.isDestroyed())
+      return false;
     if (!window.webContents) return false;
-    if (typeof window.webContents.isDestroyed === "function" && window.webContents.isDestroyed()) return false;
+    if (
+      typeof window.webContents.isDestroyed === "function" &&
+      window.webContents.isDestroyed()
+    )
+      return false;
     window.webContents.send(channel, ...args);
     return true;
   } catch {
     return false;
   }
 }
-

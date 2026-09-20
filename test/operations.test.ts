@@ -72,23 +72,35 @@ describe("Phase 1 — OperationCoordinator & Mutual Exclusion", () => {
 
   test("assertCanMutate rejects when operation is active or game is running", () => {
     // Idle state: mutation allowed
-    expect(() => OperationCoordinator.assertCanMutate("import custom mod")).not.toThrow();
+    expect(() =>
+      OperationCoordinator.assertCanMutate("import custom mod"),
+    ).not.toThrow();
 
     // Active operation: mutation blocked
     const lease = OperationCoordinator.acquire("sync");
-    expect(() => OperationCoordinator.assertCanMutate("import custom mod")).toThrow(OperationBusyError);
+    expect(() =>
+      OperationCoordinator.assertCanMutate("import custom mod"),
+    ).toThrow(OperationBusyError);
     lease.release();
 
     // Game running: mutation blocked
     (GameRunner as any).runningProcess = { killed: false };
-    expect(() => OperationCoordinator.assertCanMutate("import custom mod")).toThrow(GameRunningConflictError);
+    expect(() =>
+      OperationCoordinator.assertCanMutate("import custom mod"),
+    ).toThrow(GameRunningConflictError);
   });
 
   test("cannot acquire installation operation when game is running", () => {
     (GameRunner as any).runningProcess = { killed: false };
-    expect(() => OperationCoordinator.acquire("sync")).toThrow(GameRunningConflictError);
-    expect(() => OperationCoordinator.acquire("repair")).toThrow(GameRunningConflictError);
-    expect(() => OperationCoordinator.acquire("move")).toThrow(GameRunningConflictError);
+    expect(() => OperationCoordinator.acquire("sync")).toThrow(
+      GameRunningConflictError,
+    );
+    expect(() => OperationCoordinator.acquire("repair")).toThrow(
+      GameRunningConflictError,
+    );
+    expect(() => OperationCoordinator.acquire("move")).toThrow(
+      GameRunningConflictError,
+    );
   });
 
   test("operation owns its own AbortController and abort signal", () => {
@@ -112,9 +124,12 @@ describe("Phase 1 — Throttled Progress & Stale Callback Rejection", () => {
     const lease = OperationCoordinator.acquire("sync");
     const delivered: Array<{ percent: number; message: string }> = [];
 
-    const sendProgress = lease.createThrottledProgress<{ percent: number; message: string }>(
+    const sendProgress = lease.createThrottledProgress<{
+      percent: number;
+      message: string;
+    }>(
       (p) => delivered.push(p),
-      50 // 50ms throttle for test speed
+      50, // 50ms throttle for test speed
     );
 
     // Immediate first call
@@ -145,7 +160,7 @@ describe("Phase 1 — Throttled Progress & Stale Callback Rejection", () => {
     const sendProgress = lease.createThrottledProgress<number>(
       (p) => delivered.push(p),
       1000, // Large throttle interval
-      (p) => p === 100 // 100 is terminal
+      (p) => p === 100, // 100 is terminal
     );
 
     sendProgress(1);
@@ -168,7 +183,7 @@ describe("Phase 1 — Throttled Progress & Stale Callback Rejection", () => {
 
     const sendProgress = lease.createThrottledProgress<number>(
       (p) => delivered.push(p),
-      50
+      50,
     );
 
     sendProgress(10);
@@ -219,7 +234,9 @@ describe("Phase 1 — safeSend IPC Guard", () => {
       isDestroyed: () => true,
       webContents: {
         isDestroyed: () => false,
-        send: () => { throw new Error("Should not be called"); },
+        send: () => {
+          throw new Error("Should not be called");
+        },
       },
     };
     expect(safeSend(destroyedWin, "ch")).toBe(false);
@@ -228,7 +245,9 @@ describe("Phase 1 — safeSend IPC Guard", () => {
       isDestroyed: () => false,
       webContents: {
         isDestroyed: () => true,
-        send: () => { throw new Error("Should not be called"); },
+        send: () => {
+          throw new Error("Should not be called");
+        },
       },
     };
     expect(safeSend(destroyedContentsWin, "ch")).toBe(false);
@@ -275,7 +294,9 @@ describe("Phase 1 — GameRunner Lifecycle Invariants", () => {
     // Only after exit event fires does runningProcess clear
     fakeProc.emit("exit", 0);
     // Exit handler clears runningProcess
-    expect((fakeProc as any).listenerCount?.("exit") || 0).toBeLessThanOrEqual(1);
+    expect((fakeProc as any).listenerCount?.("exit") || 0).toBeLessThanOrEqual(
+      1,
+    );
   });
 
   test("repeated killGame calls do not crash and handle already-killed gracefully", () => {

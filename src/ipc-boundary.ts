@@ -1,4 +1,9 @@
-import type { BrowserWindow, IpcMainEvent, IpcMainInvokeEvent, WebFrameMain } from "electron";
+import type {
+  BrowserWindow,
+  IpcMainEvent,
+  IpcMainInvokeEvent,
+  WebFrameMain,
+} from "electron";
 import * as electronModule from "electron";
 
 const electron: any = electronModule;
@@ -17,7 +22,10 @@ export const MAX_CUSTOM_MOD_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB
 
 export class MainIpcError extends Error {
   readonly isMainOwnedError = true;
-  constructor(message: string, public readonly code?: string) {
+  constructor(
+    message: string,
+    public readonly code?: string,
+  ) {
     super(message);
   }
 }
@@ -135,14 +143,25 @@ export function parseJavaArgs(value: string): string[] {
       escaped = false;
     } else if (char === "\\") {
       const next = input[index + 1];
-      if (next === "\\" || next === '"' || next === "'" || /\s/.test(next || "")) escaped = true;
+      if (
+        next === "\\" ||
+        next === '"' ||
+        next === "'" ||
+        /\s/.test(next || "")
+      )
+        escaped = true;
       else current += char;
     } else if (quote) {
       if (char === quote) quote = null;
       else current += char;
     } else if (char === '"' || char === "'") {
       quote = char;
-    } else if (char === " " || char === "\t" || char === "\n" || char === "\r") {
+    } else if (
+      char === " " ||
+      char === "\t" ||
+      char === "\n" ||
+      char === "\r"
+    ) {
       if (current) {
         args.push(current);
         current = "";
@@ -152,7 +171,8 @@ export function parseJavaArgs(value: string): string[] {
     }
   }
   if (escaped) current += "\\";
-  if (quote) throw new Error("Custom Java arguments contain an unclosed quote.");
+  if (quote)
+    throw new Error("Custom Java arguments contain an unclosed quote.");
   if (current) args.push(current);
   return args;
 }
@@ -190,8 +210,7 @@ const ORDINARY_GC_NUMERIC_PATTERN =
   /^-XX:(G1ReservePercent|InitiatingHeapOccupancyPercent|G1HeapRegionSize|MaxGCPauseMillis|ConcGCThreads|ParallelGCThreads|G1NewSizePercent|G1MaxNewSizePercent|SurvivorRatio|TargetSurvivorRatio|MaxTenuringThreshold|G1MixedGCCountTarget|G1MixedGCLiveThresholdPercent|G1HeapWastePercent|NewRatio)=[0-9]+[kKmMgGtT]?$/i;
 const ORDINARY_GC_EXTRA_PATTERN =
   /^-XX:(ZAllocationSpikeTolerance=[0-9.]+|ShenandoahGCHeuristics=(adaptive|compact|passive))$/i;
-const ORDINARY_GENERAL_PATTERN =
-  /^(-server|-client|-showversion)$/;
+const ORDINARY_GENERAL_PATTERN = /^(-server|-client|-showversion)$/;
 
 export function isOrdinaryTuningOption(token: string): boolean {
   const trimmed = token.trim();
@@ -269,7 +288,10 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
         i++;
         const operand = tokens[i].trim();
         if (operand.startsWith("@") || /(?:^|[=;:\s])@/.test(operand)) {
-          recordLaunchTargetViolation(operand, `Argument file (@argfile) as operand to '${optName}': '${operand}'`);
+          recordLaunchTargetViolation(
+            operand,
+            `Argument file (@argfile) as operand to '${optName}': '${operand}'`,
+          );
         }
         return operand;
       }
@@ -281,56 +303,83 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
       if (eqIdx !== -1) {
         const val = tokenStr.slice(eqIdx + 1).trim();
         if (val.startsWith("@") || /(?:^|[=;:\s])@/.test(val)) {
-          recordLaunchTargetViolation(tokenStr, `Argument file (@argfile) in '${optName}': '${tokenStr}'`);
+          recordLaunchTargetViolation(
+            tokenStr,
+            `Argument file (@argfile) in '${optName}': '${tokenStr}'`,
+          );
         }
       }
     };
 
     // 1. Argument files
     if (token.startsWith("@")) {
-      recordLaunchTargetViolation(token, `Argument file (@argfile): '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Argument file (@argfile): '${token}'`,
+      );
       continue;
     }
 
     // 2. Launch target flags: -jar
     if (token === "-jar") {
-      recordLaunchTargetViolation(token, `Launch target override (-jar): '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Launch target override (-jar): '${token}'`,
+      );
       validateAndConsumeOperand(token);
       continue;
     }
     if (token.startsWith("-jar=")) {
-      recordLaunchTargetViolation(token, `Launch target override (-jar): '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Launch target override (-jar): '${token}'`,
+      );
       validateEqualsOperand("-jar", token);
       continue;
     }
 
     // 3. Module launch target: -m or --module
     if (token === "-m" || token === "--module") {
-      recordLaunchTargetViolation(token, `Module launch target override: '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Module launch target override: '${token}'`,
+      );
       validateAndConsumeOperand(token);
       continue;
     }
     if (token.startsWith("-m=") || token.startsWith("--module=")) {
-      recordLaunchTargetViolation(token, `Module launch target override: '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Module launch target override: '${token}'`,
+      );
       validateEqualsOperand(token.split("=")[0], token);
       continue;
     }
 
     // 4. Source file launch: --source
     if (token === "--source") {
-      recordLaunchTargetViolation(token, `Source launch target override: '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Source launch target override: '${token}'`,
+      );
       validateAndConsumeOperand(token);
       continue;
     }
     if (token.startsWith("--source=")) {
-      recordLaunchTargetViolation(token, `Source launch target override: '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Source launch target override: '${token}'`,
+      );
       validateEqualsOperand("--source", token);
       continue;
     }
 
     // 5. Positional operands (non-option tokens not consumed as operands of prior options)
     if (!token.startsWith("-")) {
-      recordLaunchTargetViolation(token, `Positional launch target override: '${token}'`);
+      recordLaunchTargetViolation(
+        token,
+        `Positional launch target override: '${token}'`,
+      );
       continue;
     }
 
@@ -342,7 +391,11 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
       validateAndConsumeOperand(token);
       continue;
     }
-    if (token.startsWith("-cp=") || token.startsWith("-classpath=") || token.startsWith("--class-path=")) {
+    if (
+      token.startsWith("-cp=") ||
+      token.startsWith("-classpath=") ||
+      token.startsWith("--class-path=")
+    ) {
       isPrivileged = true;
       privilegedReasons.push(`Classpath override: '${token}'`);
       validateEqualsOperand(token.split("=")[0], token);
@@ -364,7 +417,9 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
     }
 
     // Advanced module options: --upgrade-module-path, --patch-module, etc.
-    const moduleOptMatch = token.match(/^(--upgrade-module-path|--patch-module|--add-modules|--add-exports|--add-opens|--add-reads|--limit-modules)(?:=(.*))?$/);
+    const moduleOptMatch = token.match(
+      /^(--upgrade-module-path|--patch-module|--add-modules|--add-exports|--add-opens|--add-reads|--limit-modules)(?:=(.*))?$/,
+    );
     if (moduleOptMatch) {
       isPrivileged = true;
       privilegedReasons.push(`Module configuration override: '${token}'`);
@@ -404,7 +459,11 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
     }
 
     // Command hooks and error files
-    if (/^-XX:(OnError|OnOutOfMemoryError|ErrorFile|HeapDumpPath|LogFile|NativeMemoryTracking)=/i.test(token)) {
+    if (
+      /^-XX:(OnError|OnOutOfMemoryError|ErrorFile|HeapDumpPath|LogFile|NativeMemoryTracking)=/i.test(
+        token,
+      )
+    ) {
       isPrivileged = true;
       privilegedReasons.push(`JVM diagnostic/command hook: '${token}'`);
       continue;
@@ -422,7 +481,9 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
           hasLaunchTargetOverride = true;
           isPrivileged = true;
           launchTargetViolations.push(token);
-          privilegedReasons.push(`Launch authority property override: '${token}'`);
+          privilegedReasons.push(
+            `Launch authority property override: '${token}'`,
+          );
           continue;
         }
 
@@ -435,7 +496,9 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
 
         // Unknown or sensitive system property
         isPrivileged = true;
-        privilegedReasons.push(`Unreviewed or sensitive system property: '${token}'`);
+        privilegedReasons.push(
+          `Unreviewed or sensitive system property: '${token}'`,
+        );
         continue;
       }
     }
@@ -478,7 +541,9 @@ export class IpcBoundary {
   static initializeStartupPolicy(policy: StartupPolicy): void {
     this.startupPolicy = policy;
     const appDir = path.resolve(policy.appPath);
-    this.canonicalRendererPath = normalizeFilePath(path.join(appDir, "dist/renderer/index.html"));
+    this.canonicalRendererPath = normalizeFilePath(
+      path.join(appDir, "dist/renderer/index.html"),
+    );
     if (!policy.isPackaged && policy.devEndpoint) {
       try {
         this.allowedDevOrigin = new URL(policy.devEndpoint).origin;
@@ -580,7 +645,7 @@ export class IpcBoundary {
   static grantApproval(
     operation: string,
     target: string,
-    options?: GrantApprovalOptions
+    options?: GrantApprovalOptions,
   ): void {
     const generation = options?.generation ?? this.documentGeneration;
     const ttlMs = options?.ttlMs ?? APPROVAL_TTL_MS;
@@ -588,7 +653,7 @@ export class IpcBoundary {
     // Require exact current-generation equality
     if (generation !== this.documentGeneration) {
       throw new IpcSecurityError(
-        `Approval generation mismatch: expected generation ${this.documentGeneration}, but got ${generation}.`
+        `Approval generation mismatch: expected generation ${this.documentGeneration}, but got ${generation}.`,
       );
     }
 
@@ -607,7 +672,10 @@ export class IpcBoundary {
     const key = `${operation}:${normTarget}`;
     const record = this.approvals.get(key);
     if (!record) return false;
-    if (Date.now() > record.expiresAt || record.generation !== this.documentGeneration) {
+    if (
+      Date.now() > record.expiresAt ||
+      record.generation !== this.documentGeneration
+    ) {
       this.approvals.delete(key);
       return false;
     }
@@ -620,46 +688,83 @@ export class IpcBoundary {
     const record = this.approvals.get(key);
     if (!record) return false;
     this.approvals.delete(key);
-    if (Date.now() > record.expiresAt || record.generation !== this.documentGeneration) {
+    if (
+      Date.now() > record.expiresAt ||
+      record.generation !== this.documentGeneration
+    ) {
       return false;
     }
     return true;
   }
 
-  static createApprovalSnapshot(event: IpcMainInvokeEvent | IpcMainEvent): ApprovalSnapshot {
+  static createApprovalSnapshot(
+    event: IpcMainInvokeEvent | IpcMainEvent,
+  ): ApprovalSnapshot {
     if (!this.mainWindowRef || this.mainWindowRef.isDestroyed?.()) {
-      throw new IpcSecurityError("Cannot create approval snapshot: main window is unavailable.");
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: main window is unavailable.",
+      );
     }
     const webContents = this.mainWindowRef.webContents;
-    if (!webContents || (typeof (webContents as any).isDestroyed === "function" && (webContents as any).isDestroyed())) {
-      throw new IpcSecurityError("Cannot create approval snapshot: webContents is unavailable or destroyed.");
+    if (
+      !webContents ||
+      (typeof (webContents as any).isDestroyed === "function" &&
+        (webContents as any).isDestroyed())
+    ) {
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: webContents is unavailable or destroyed.",
+      );
     }
     if (event.sender !== webContents) {
-      throw new IpcSecurityError("Cannot create approval snapshot: caller webContents does not match main window.");
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: caller webContents does not match main window.",
+      );
     }
     const currentMainFrame = webContents.mainFrame;
-    if (!currentMainFrame || (typeof (currentMainFrame as any).isDestroyed === "function" && (currentMainFrame as any).isDestroyed())) {
-      throw new IpcSecurityError("Cannot create approval snapshot: missing or destroyed main frame.");
+    if (
+      !currentMainFrame ||
+      (typeof (currentMainFrame as any).isDestroyed === "function" &&
+        (currentMainFrame as any).isDestroyed())
+    ) {
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: missing or destroyed main frame.",
+      );
     }
     if ((currentMainFrame as any).detached === true) {
-      throw new IpcSecurityError("Cannot create approval snapshot: main frame is detached.");
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: main frame is detached.",
+      );
     }
     const frame = event.senderFrame;
-    if (!frame || (typeof (frame as any).isDestroyed === "function" && (frame as any).isDestroyed())) {
-      throw new IpcSecurityError("Cannot create approval snapshot: sender frame is destroyed.");
+    if (
+      !frame ||
+      (typeof (frame as any).isDestroyed === "function" &&
+        (frame as any).isDestroyed())
+    ) {
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: sender frame is destroyed.",
+      );
     }
     if ((frame as any).detached === true) {
-      throw new IpcSecurityError("Cannot create approval snapshot: sender frame is detached.");
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: sender frame is detached.",
+      );
     }
     if (frame !== currentMainFrame) {
-      throw new IpcSecurityError("Cannot create approval snapshot: sender frame is not the active main frame.");
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: sender frame is not the active main frame.",
+      );
     }
     if (frame.parent !== null) {
-      throw new IpcSecurityError("Cannot create approval snapshot: sender frame is not top-level.");
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: sender frame is not top-level.",
+      );
     }
     const frameUrl = frame.url;
     if (!frameUrl || frameUrl.trim() === "" || frameUrl === "about:blank") {
-      throw new IpcSecurityError("Cannot create approval snapshot: uninitialized or blank document.");
+      throw new IpcSecurityError(
+        "Cannot create approval snapshot: uninitialized or blank document.",
+      );
     }
     this.assertApprovedDocument(frameUrl);
 
@@ -674,50 +779,80 @@ export class IpcBoundary {
 
   static validateApprovalSnapshot(snapshot: ApprovalSnapshot): void {
     if (this.documentGeneration !== snapshot.generation) {
-      throw new IpcSecurityError("Document generation changed while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "Document generation changed while awaiting native user approval.",
+      );
     }
-    if (!snapshot.window || snapshot.window.isDestroyed?.() || snapshot.window !== this.mainWindowRef) {
-      throw new IpcSecurityError("Application window destroyed or replaced while awaiting native user approval.");
+    if (
+      !snapshot.window ||
+      snapshot.window.isDestroyed?.() ||
+      snapshot.window !== this.mainWindowRef
+    ) {
+      throw new IpcSecurityError(
+        "Application window destroyed or replaced while awaiting native user approval.",
+      );
     }
     if (
       !snapshot.webContents ||
-      (typeof (snapshot.webContents as any).isDestroyed === "function" && (snapshot.webContents as any).isDestroyed()) ||
+      (typeof (snapshot.webContents as any).isDestroyed === "function" &&
+        (snapshot.webContents as any).isDestroyed()) ||
       snapshot.window.webContents !== snapshot.webContents
     ) {
-      throw new IpcSecurityError("WebContents invalidated while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "WebContents invalidated while awaiting native user approval.",
+      );
     }
     const currentMainFrame = snapshot.webContents.mainFrame;
     if (
       !currentMainFrame ||
-      (typeof (currentMainFrame as any).isDestroyed === "function" && (currentMainFrame as any).isDestroyed())
+      (typeof (currentMainFrame as any).isDestroyed === "function" &&
+        (currentMainFrame as any).isDestroyed())
     ) {
-      throw new IpcSecurityError("Active main frame destroyed or unavailable while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "Active main frame destroyed or unavailable while awaiting native user approval.",
+      );
     }
     if ((currentMainFrame as any).detached === true) {
-      throw new IpcSecurityError("Active main frame detached while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "Active main frame detached while awaiting native user approval.",
+      );
     }
     if (
       !snapshot.frame ||
-      (typeof (snapshot.frame as any).isDestroyed === "function" && (snapshot.frame as any).isDestroyed())
+      (typeof (snapshot.frame as any).isDestroyed === "function" &&
+        (snapshot.frame as any).isDestroyed())
     ) {
-      throw new IpcSecurityError("Sender frame invalidated while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "Sender frame invalidated while awaiting native user approval.",
+      );
     }
     if ((snapshot.frame as any).detached === true) {
-      throw new IpcSecurityError("Sender frame detached while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "Sender frame detached while awaiting native user approval.",
+      );
     }
     if (snapshot.frame !== currentMainFrame || snapshot.frame.parent !== null) {
-      throw new IpcSecurityError("Sender frame invalidated while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "Sender frame invalidated while awaiting native user approval.",
+      );
     }
 
     // Revalidate the approved document after native approval
     const currentUrl = currentMainFrame.url;
     if (!currentUrl || currentUrl !== snapshot.frameUrl) {
-      throw new IpcSecurityError("Document URL changed while awaiting native user approval.");
+      throw new IpcSecurityError(
+        "Document URL changed while awaiting native user approval.",
+      );
     }
     this.assertApprovedDocument(currentUrl);
 
-    if (snapshot.webContents.getURL && snapshot.webContents.getURL() !== currentUrl) {
-      throw new IpcSecurityError("Document has navigated away from active frame URL.");
+    if (
+      snapshot.webContents.getURL &&
+      snapshot.webContents.getURL() !== currentUrl
+    ) {
+      throw new IpcSecurityError(
+        "Document has navigated away from active frame URL.",
+      );
     }
   }
 
@@ -729,15 +864,20 @@ export class IpcBoundary {
       detail?: string;
       confirmButtonText?: string;
       cancelButtonText?: string;
-    }
+    },
   ): Promise<boolean> {
     if (!dialog || typeof dialog.showMessageBox !== "function") {
-      throw new IpcSecurityError("Native dialog service unavailable; privileged action denied fail-closed.");
+      throw new IpcSecurityError(
+        "Native dialog service unavailable; privileged action denied fail-closed.",
+      );
     }
     const snapshot = this.createApprovalSnapshot(event);
     const result = await dialog.showMessageBox(snapshot.window, {
       type: "warning",
-      buttons: [options.confirmButtonText || "Confirm", options.cancelButtonText || "Cancel"],
+      buttons: [
+        options.confirmButtonText || "Confirm",
+        options.cancelButtonText || "Cancel",
+      ],
       defaultId: 1,
       cancelId: 1,
       title: options.title,
@@ -749,67 +889,105 @@ export class IpcBoundary {
     return result.response === 0;
   }
 
-  static validateIpcSender(event: IpcMainInvokeEvent | IpcMainEvent): { sender: any; frame: any } {
+  static validateIpcSender(event: IpcMainInvokeEvent | IpcMainEvent): {
+    sender: any;
+    frame: any;
+  } {
     if (!this.mainWindowRef || this.mainWindowRef.isDestroyed?.()) {
-      throw new IpcSecurityError("Unauthorized IPC caller: main application window is unavailable.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: main application window is unavailable.",
+      );
     }
 
     const webContents = this.mainWindowRef.webContents;
     if (
       !webContents ||
-      (typeof (webContents as any).isDestroyed === "function" && (webContents as any).isDestroyed()) ||
-      (typeof (event.sender as any)?.isDestroyed === "function" && (event.sender as any).isDestroyed())
+      (typeof (webContents as any).isDestroyed === "function" &&
+        (webContents as any).isDestroyed()) ||
+      (typeof (event.sender as any)?.isDestroyed === "function" &&
+        (event.sender as any).isDestroyed())
     ) {
-      throw new IpcSecurityError("Unauthorized IPC caller: webContents is unavailable or destroyed.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: webContents is unavailable or destroyed.",
+      );
     }
 
     if (event.sender !== webContents) {
-      throw new IpcSecurityError("Unauthorized IPC caller: caller webContents does not match main window.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: caller webContents does not match main window.",
+      );
     }
 
     const frame = event.senderFrame;
     if (!frame) {
-      throw new IpcSecurityError("Unauthorized IPC caller: missing or destroyed sender frame.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: missing or destroyed sender frame.",
+      );
     }
 
     if (frame.parent !== null) {
-      throw new IpcSecurityError("Unauthorized IPC caller: child frames and subdocuments are not permitted.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: child frames and subdocuments are not permitted.",
+      );
     }
 
-    if (typeof (frame as any).isDestroyed === "function" && (frame as any).isDestroyed()) {
-      throw new IpcSecurityError("Unauthorized IPC caller: sender frame is detached or destroyed.");
+    if (
+      typeof (frame as any).isDestroyed === "function" &&
+      (frame as any).isDestroyed()
+    ) {
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: sender frame is detached or destroyed.",
+      );
     }
 
     if ((frame as any).detached === true) {
-      throw new IpcSecurityError("Unauthorized IPC caller: sender frame is detached.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: sender frame is detached.",
+      );
     }
 
     const mainFrame = this.mainWindowRef.webContents?.mainFrame;
-    if (!mainFrame || (typeof (mainFrame as any).isDestroyed === "function" && (mainFrame as any).isDestroyed())) {
-      throw new IpcSecurityError("Unauthorized IPC caller: missing or destroyed main frame.");
+    if (
+      !mainFrame ||
+      (typeof (mainFrame as any).isDestroyed === "function" &&
+        (mainFrame as any).isDestroyed())
+    ) {
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: missing or destroyed main frame.",
+      );
     }
 
     if ((mainFrame as any).detached === true) {
-      throw new IpcSecurityError("Unauthorized IPC caller: main frame is detached.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: main frame is detached.",
+      );
     }
 
     if (frame !== mainFrame) {
-      throw new IpcSecurityError("Unauthorized IPC caller: sender frame is not the active main frame.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: sender frame is not the active main frame.",
+      );
     }
 
     if (!this.startupPolicy) {
-      throw new IpcSecurityError("Unauthorized IPC caller: startup policy not initialized.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: startup policy not initialized.",
+      );
     }
 
     const frameUrl = frame.url;
     if (!frameUrl || frameUrl.trim() === "" || frameUrl === "about:blank") {
-      throw new IpcSecurityError("Unauthorized IPC caller: uninitialized or blank document.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: uninitialized or blank document.",
+      );
     }
 
     this.assertApprovedDocument(frameUrl);
 
     if (event.sender.getURL && event.sender.getURL() !== frameUrl) {
-      throw new IpcSecurityError("Unauthorized IPC caller: document has navigated away from active frame URL.");
+      throw new IpcSecurityError(
+        "Unauthorized IPC caller: document has navigated away from active frame URL.",
+      );
     }
 
     return { sender: event.sender, frame };
@@ -820,7 +998,9 @@ export class IpcBoundary {
     try {
       parsed = new URL(frameUrl);
     } catch {
-      throw new IpcSecurityError(`Unauthorized IPC caller: malformed frame URL '${frameUrl}'`);
+      throw new IpcSecurityError(
+        `Unauthorized IPC caller: malformed frame URL '${frameUrl}'`,
+      );
     }
 
     if (
@@ -829,7 +1009,9 @@ export class IpcBoundary {
       parsed.protocol === "blob:" ||
       parsed.protocol === "javascript:"
     ) {
-      throw new IpcSecurityError(`Unauthorized IPC caller: disallowed document scheme '${parsed.protocol}'`);
+      throw new IpcSecurityError(
+        `Unauthorized IPC caller: disallowed document scheme '${parsed.protocol}'`,
+      );
     }
 
     const isPackaged = this.isPackagedProduction();
@@ -838,7 +1020,7 @@ export class IpcBoundary {
       // Reject foreign file-URL authorities (e.g. file://evil.com/ or UNC file://share/...)
       if (parsed.hostname !== "" && parsed.hostname !== "localhost") {
         throw new IpcSecurityError(
-          `Unauthorized IPC caller: foreign file URL authority '${parsed.hostname}' is prohibited.`
+          `Unauthorized IPC caller: foreign file URL authority '${parsed.hostname}' is prohibited.`,
         );
       }
 
@@ -846,27 +1028,32 @@ export class IpcBoundary {
       try {
         candidatePath = fileURLToPath(frameUrl);
       } catch {
-        throw new IpcSecurityError(`Unauthorized IPC caller: invalid file URL path conversion '${frameUrl}'`);
+        throw new IpcSecurityError(
+          `Unauthorized IPC caller: invalid file URL path conversion '${frameUrl}'`,
+        );
       }
 
       const canonicalCandidate = normalizeFilePath(candidatePath);
       const expectedPath =
-        this.canonicalRendererPath || normalizeFilePath(path.resolve(__dirname, "renderer/index.html"));
+        this.canonicalRendererPath ||
+        normalizeFilePath(path.resolve(__dirname, "renderer/index.html"));
       const devUiPath = normalizeFilePath(
-        path.resolve(this.startupPolicy?.appPath || __dirname, "ui/index.html")
+        path.resolve(this.startupPolicy?.appPath || __dirname, "ui/index.html"),
       );
 
-      const allowedPaths = isPackaged ? [expectedPath] : [expectedPath, devUiPath];
+      const allowedPaths = isPackaged
+        ? [expectedPath]
+        : [expectedPath, devUiPath];
 
       const matches = allowedPaths.some((allowed) =>
         process.platform === "win32"
           ? allowed.toLowerCase() === canonicalCandidate.toLowerCase()
-          : allowed === canonicalCandidate
+          : allowed === canonicalCandidate,
       );
 
       if (!matches) {
         throw new IpcSecurityError(
-          `Unauthorized IPC caller: document does not match approved renderer path. Candidate: ${canonicalCandidate}`
+          `Unauthorized IPC caller: document does not match approved renderer path. Candidate: ${canonicalCandidate}`,
         );
       }
       return;
@@ -875,25 +1062,27 @@ export class IpcBoundary {
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {
       if (isPackaged) {
         throw new IpcSecurityError(
-          `Unauthorized IPC caller: remote or loopback dev server document is prohibited in packaged production: ${frameUrl}`
+          `Unauthorized IPC caller: remote or loopback dev server document is prohibited in packaged production: ${frameUrl}`,
         );
       }
 
       if (!this.allowedDevOrigin) {
         throw new IpcSecurityError(
-          `Unauthorized IPC caller: no development endpoint configured for remote document: ${frameUrl}`
+          `Unauthorized IPC caller: no development endpoint configured for remote document: ${frameUrl}`,
         );
       }
 
       if (parsed.origin !== this.allowedDevOrigin) {
         throw new IpcSecurityError(
-          `Unauthorized IPC caller: not an approved application document: origin '${parsed.origin}' does not match configured development endpoint '${this.allowedDevOrigin}'`
+          `Unauthorized IPC caller: not an approved application document: origin '${parsed.origin}' does not match configured development endpoint '${this.allowedDevOrigin}'`,
         );
       }
       return;
     }
 
-    throw new IpcSecurityError(`Unauthorized IPC caller: unsupported protocol '${parsed.protocol}'`);
+    throw new IpcSecurityError(
+      `Unauthorized IPC caller: unsupported protocol '${parsed.protocol}'`,
+    );
   }
 }
 
@@ -908,6 +1097,7 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "noSync",
   "javaPath",
   "javaArgs",
+  "externalImages",
 ]);
 
 export function validateConfigSet(payload: unknown): UpdateSettingsDto {
@@ -927,20 +1117,31 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
   const sanitized: UpdateSettingsDto = {};
 
   if (raw.portalUrl !== undefined) {
-    if (typeof raw.portalUrl !== "string" || raw.portalUrl.trim().length === 0) {
+    if (
+      typeof raw.portalUrl !== "string" ||
+      raw.portalUrl.trim().length === 0
+    ) {
       throw new IpcValidationError("portalUrl must be a non-empty string.");
     }
     if (raw.portalUrl.length > 512) {
-      throw new IpcValidationError("portalUrl exceeds maximum length of 512 characters.");
+      throw new IpcValidationError(
+        "portalUrl exceeds maximum length of 512 characters.",
+      );
     }
     sanitized.portalUrl = normalizePortalUrl(raw.portalUrl);
   }
 
   if (raw.selectedChannel !== undefined) {
-    if (typeof raw.selectedChannel !== "string" || !["stable", "beta", "dev"].includes(raw.selectedChannel)) {
-      throw new IpcValidationError("selectedChannel must be one of: 'stable', 'beta', 'dev'.");
+    if (
+      typeof raw.selectedChannel !== "string" ||
+      !["stable", "beta", "dev"].includes(raw.selectedChannel)
+    ) {
+      throw new IpcValidationError(
+        "selectedChannel must be one of: 'stable', 'beta', 'dev'.",
+      );
     }
-    sanitized.selectedChannel = raw.selectedChannel as "stable" | "beta" | "dev";
+    sanitized.selectedChannel = raw.selectedChannel as
+      "stable" | "beta" | "dev";
   }
 
   if (raw.allocatedRamGb !== undefined) {
@@ -950,7 +1151,9 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
       raw.allocatedRamGb < 2 ||
       raw.allocatedRamGb > 64
     ) {
-      throw new IpcValidationError("allocatedRamGb must be an integer between 2 and 64.");
+      throw new IpcValidationError(
+        "allocatedRamGb must be an integer between 2 and 64.",
+      );
     }
     sanitized.allocatedRamGb = raw.allocatedRamGb;
   }
@@ -962,12 +1165,21 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
     sanitized.noSync = raw.noSync;
   }
 
+  if (raw.externalImages !== undefined) {
+    if (typeof raw.externalImages !== "boolean") {
+      throw new IpcValidationError("externalImages must be a boolean.");
+    }
+    sanitized.externalImages = raw.externalImages;
+  }
+
   if (raw.javaPath !== undefined) {
     if (typeof raw.javaPath !== "string") {
       throw new IpcValidationError("javaPath must be a string.");
     }
     if (raw.javaPath.length > 1024) {
-      throw new IpcValidationError("javaPath exceeds maximum length of 1024 characters.");
+      throw new IpcValidationError(
+        "javaPath exceeds maximum length of 1024 characters.",
+      );
     }
     sanitized.javaPath = raw.javaPath;
   }
@@ -977,12 +1189,16 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
       throw new IpcValidationError("javaArgs must be a string.");
     }
     if (raw.javaArgs.length > 2048) {
-      throw new IpcValidationError("javaArgs exceeds maximum length of 2048 characters.");
+      throw new IpcValidationError(
+        "javaArgs exceeds maximum length of 2048 characters.",
+      );
     }
     const tokens = parseJavaArgs(raw.javaArgs);
     const classification = classifyJavaArgs(tokens);
     if (classification.hasLaunchTargetOverride) {
-      throw new IpcValidationError("Custom Java arguments cannot override launch target or main class.");
+      throw new IpcValidationError(
+        "Custom Java arguments cannot override launch target or main class.",
+      );
     }
     sanitized.javaArgs = raw.javaArgs;
   }
@@ -995,7 +1211,9 @@ export function validateOpenPath(raw: unknown): string {
     throw new IpcValidationError("Target path must be a non-empty string.");
   }
   if (raw.length > 1024) {
-    throw new IpcValidationError("Target path exceeds maximum length of 1024 characters.");
+    throw new IpcValidationError(
+      "Target path exceeds maximum length of 1024 characters.",
+    );
   }
   return raw.trim();
 }
@@ -1005,7 +1223,9 @@ export function validateOpenSourcePage(raw: unknown): string {
     throw new IpcValidationError("URL must be a non-empty string.");
   }
   if (raw.length > 2048) {
-    throw new IpcValidationError("URL exceeds maximum length of 2048 characters.");
+    throw new IpcValidationError(
+      "URL exceeds maximum length of 2048 characters.",
+    );
   }
   return validateWebUrl(raw.trim());
 }
@@ -1027,10 +1247,14 @@ export function validateOpenKnownLocation(raw: unknown): KnownLocationId {
 
 export function validateGameDirTarget(raw: unknown): string {
   if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new IpcValidationError("Directory target path must be a non-empty string.");
+    throw new IpcValidationError(
+      "Directory target path must be a non-empty string.",
+    );
   }
   if (raw.length > 1024) {
-    throw new IpcValidationError("Directory target path exceeds maximum length of 1024 characters.");
+    throw new IpcValidationError(
+      "Directory target path exceeds maximum length of 1024 characters.",
+    );
   }
   return path.resolve(raw.trim());
 }
@@ -1041,14 +1265,16 @@ export function validateOptionalPath(raw: unknown): string | undefined {
     throw new IpcValidationError("Path argument must be a string if provided.");
   }
   if (raw.length > 1024) {
-    throw new IpcValidationError("Path exceeds maximum length of 1024 characters.");
+    throw new IpcValidationError(
+      "Path exceeds maximum length of 1024 characters.",
+    );
   }
   return raw.trim();
 }
 
 export function validateGameDirValidateArgs(
   targetPath: unknown,
-  currentPath?: unknown
+  currentPath?: unknown,
 ): { targetPath: string; currentPath?: string } {
   return {
     targetPath: validateGameDirTarget(targetPath),
@@ -1056,16 +1282,22 @@ export function validateGameDirValidateArgs(
   };
 }
 
-export function validateGameDirBrowse(defaultPath?: unknown): string | undefined {
+export function validateGameDirBrowse(
+  defaultPath?: unknown,
+): string | undefined {
   return validateOptionalPath(defaultPath);
 }
 
 export function validateModPaths(raw: unknown): string[] {
   if (!Array.isArray(raw) || raw.length === 0) {
-    throw new IpcValidationError("Mod paths must be a non-empty array of file paths.");
+    throw new IpcValidationError(
+      "Mod paths must be a non-empty array of file paths.",
+    );
   }
   if (raw.length > 50) {
-    throw new IpcValidationError("Cannot import more than 50 mod files at once.");
+    throw new IpcValidationError(
+      "Cannot import more than 50 mod files at once.",
+    );
   }
   const result: string[] = [];
   for (const item of raw) {
@@ -1073,7 +1305,9 @@ export function validateModPaths(raw: unknown): string[] {
       throw new IpcValidationError("Each mod path must be a non-empty string.");
     }
     if (item.length > 1024) {
-      throw new IpcValidationError("Mod path exceeds maximum length of 1024 characters.");
+      throw new IpcValidationError(
+        "Mod path exceeds maximum length of 1024 characters.",
+      );
     }
     const resolved = path.resolve(item.trim());
     if (path.extname(resolved).toLowerCase() !== ".jar") {
@@ -1088,7 +1322,7 @@ export function validateModPaths(raw: unknown): string[] {
     }
     if (stat.size > MAX_CUSTOM_MOD_FILE_SIZE_BYTES) {
       throw new IpcValidationError(
-        "Mod file exceeds maximum allowed size of 100MB."
+        "Mod file exceeds maximum allowed size of 100MB.",
       );
     }
     result.push(resolved);
@@ -1096,9 +1330,14 @@ export function validateModPaths(raw: unknown): string[] {
   return result;
 }
 
-export function validateOfficialModToggle(id: unknown, enabled: unknown): { id: string; enabled: boolean } {
+export function validateOfficialModToggle(
+  id: unknown,
+  enabled: unknown,
+): { id: string; enabled: boolean } {
   if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) {
-    throw new IpcValidationError("Official mod identifier must be an alphanumeric string (max 128 chars).");
+    throw new IpcValidationError(
+      "Official mod identifier must be an alphanumeric string (max 128 chars).",
+    );
   }
   if (typeof enabled !== "boolean") {
     throw new IpcValidationError("Enabled flag must be a boolean.");
@@ -1108,16 +1347,25 @@ export function validateOfficialModToggle(id: unknown, enabled: unknown): { id: 
 
 export function validateCustomModToggle(
   filename: unknown,
-  enabled: unknown
+  enabled: unknown,
 ): { filename: string; enabled: boolean } {
   if (typeof filename !== "string" || filename.trim().length === 0) {
     throw new IpcValidationError("Mod filename must be a non-empty string.");
   }
   if (filename.length > 256) {
-    throw new IpcValidationError("Mod filename exceeds maximum length of 256 characters.");
+    throw new IpcValidationError(
+      "Mod filename exceeds maximum length of 256 characters.",
+    );
   }
-  if (path.basename(filename) !== filename || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
-    throw new IpcValidationError("Invalid mod filename path traversal attempt.");
+  if (
+    path.basename(filename) !== filename ||
+    filename.includes("..") ||
+    filename.includes("/") ||
+    filename.includes("\\")
+  ) {
+    throw new IpcValidationError(
+      "Invalid mod filename path traversal attempt.",
+    );
   }
   if (typeof enabled !== "boolean") {
     throw new IpcValidationError("Enabled flag must be a boolean.");
@@ -1130,12 +1378,28 @@ export function validateCustomModFilename(filename: unknown): string {
     throw new IpcValidationError("Mod filename must be a non-empty string.");
   }
   if (filename.length > 256) {
-    throw new IpcValidationError("Mod filename exceeds maximum length of 256 characters.");
+    throw new IpcValidationError(
+      "Mod filename exceeds maximum length of 256 characters.",
+    );
   }
-  if (path.basename(filename) !== filename || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
-    throw new IpcValidationError("Invalid mod filename path traversal attempt.");
+  if (
+    path.basename(filename) !== filename ||
+    filename.includes("..") ||
+    filename.includes("/") ||
+    filename.includes("\\")
+  ) {
+    throw new IpcValidationError(
+      "Invalid mod filename path traversal attempt.",
+    );
   }
   return filename;
+}
+
+export function validateCosmeticModId(raw: unknown): string {
+  if (typeof raw !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(raw)) {
+    throw new IpcValidationError("Cosmetic mod identifier is invalid.");
+  }
+  return raw;
 }
 
 export function validateLogAck(payload: unknown): { batchId: number } {
@@ -1143,8 +1407,14 @@ export function validateLogAck(payload: unknown): { batchId: number } {
     throw new IpcValidationError("LogAck payload must be an object.");
   }
   const batchId = (payload as any).batchId;
-  if (typeof batchId !== "number" || !Number.isInteger(batchId) || batchId < 0) {
-    throw new IpcValidationError("LogAck payload must include a non-negative integer batchId.");
+  if (
+    typeof batchId !== "number" ||
+    !Number.isInteger(batchId) ||
+    batchId < 0
+  ) {
+    throw new IpcValidationError(
+      "LogAck payload must include a non-negative integer batchId.",
+    );
   }
   return { batchId };
 }
@@ -1153,14 +1423,21 @@ export const IpcSchemas = {
   noArgs: (): [] => [],
   openPath: (raw: unknown): [string] => [validateOpenPath(raw)],
   openSourcePage: (raw: unknown): [string] => [validateOpenSourcePage(raw)],
-  openKnownLocation: (raw: unknown): [KnownLocationId] => [validateOpenKnownLocation(raw)],
+  openKnownLocation: (raw: unknown): [KnownLocationId] => [
+    validateOpenKnownLocation(raw),
+  ],
   configSet: (raw: unknown): [UpdateSettingsDto] => [validateConfigSet(raw)],
   gameDirTarget: (raw: unknown): [string] => [validateGameDirTarget(raw)],
-  gameDirValidate: (targetPath: unknown, currentPath?: unknown): [string, string | undefined] => {
+  gameDirValidate: (
+    targetPath: unknown,
+    currentPath?: unknown,
+  ): [string, string | undefined] => {
     const res = validateGameDirValidateArgs(targetPath, currentPath);
     return [res.targetPath, res.currentPath];
   },
-  gameDirBrowse: (defaultPath?: unknown): [string | undefined] => [validateGameDirBrowse(defaultPath)],
+  gameDirBrowse: (defaultPath?: unknown): [string | undefined] => [
+    validateGameDirBrowse(defaultPath),
+  ],
   modPaths: (raw: unknown): [string[]] => [validateModPaths(raw)],
   officialModToggle: (id: unknown, enabled: unknown): [string, boolean] => {
     const res = validateOfficialModToggle(id, enabled);
@@ -1170,7 +1447,10 @@ export const IpcSchemas = {
     const res = validateCustomModToggle(filename, enabled);
     return [res.filename, res.enabled];
   },
-  customModFilename: (raw: unknown): [string] => [validateCustomModFilename(raw)],
+  customModFilename: (raw: unknown): [string] => [
+    validateCustomModFilename(raw),
+  ],
+  cosmeticModId: (raw: unknown): [string] => [validateCosmeticModId(raw)],
   logAck: (data?: unknown): [{ batchId: number }] => [validateLogAck(data)],
 };
 
@@ -1184,7 +1464,10 @@ export function scrubErrorText(text: string): string {
   s = s.replace(/\r?\n\s*at\s+.*$/s, "");
   s = s.replace(/\r?\n\s*at\s+[^\r\n]*/g, "");
   // 2. Collapse newlines and multiline spacing to single line
-  s = s.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  s = s
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   // 3. Scrub Windows drive paths and UNC paths
   s = s.replace(/[a-zA-Z]:[\\/][^'"\s;:,]+/g, "<path>");
   s = s.replace(/\\\\[^'"\s;:,]+/g, "<path>");
@@ -1193,11 +1476,11 @@ export function scrubErrorText(text: string): string {
   // 5. Scrub synthetic secrets and credential values
   s = s.replace(
     /(?<=\b(?:token|bearer|secret|password|access_token|refresh_token|code|key)[\s:=]+)['"]?[^\s'"`;:,]+['"]?/gi,
-    "<redacted>"
+    "<redacted>",
   );
   s = s.replace(
     /(?<=^|[\s'"`;:])(?:eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+|[a-fA-F0-9]{32,}|[a-zA-Z0-9+/]{32,}={0,2})(?=$|[\s'"`;:])/g,
-    "<redacted>"
+    "<redacted>",
   );
   return s.trim();
 }
@@ -1209,7 +1492,10 @@ export function boundErrorMessage(msg: string, maxLen = 120): string {
 
 export function sanitizeIpcError(err: any): Error {
   // 1. Security violations return stable generic security error
-  if (err instanceof IpcSecurityError || (err && err.code === "SECURITY_VIOLATION")) {
+  if (
+    err instanceof IpcSecurityError ||
+    (err && err.code === "SECURITY_VIOLATION")
+  ) {
     return new Error("Security violation: IPC request rejected.");
   }
 
@@ -1222,8 +1508,9 @@ export function sanitizeIpcError(err: any): Error {
     err instanceof ModPolicyError ||
     (err && typeof err === "object" && (err as any).isMainOwnedError === true)
   ) {
-    const rawMsg = typeof err?.message === "string" ? err.message : "Validation error.";
-    const scrubbed = scrubErrorText(rawMsg);
+    const rawMsg =
+      typeof err?.message === "string" ? err.message : "Validation error.";
+    const scrubbed = scrubErrorText(LauncherLogger.sanitize(rawMsg));
     return new Error(boundErrorMessage(scrubbed, 120));
   }
 
@@ -1234,32 +1521,46 @@ export function sanitizeIpcError(err: any): Error {
 export function registerSecureHandler<TArgs extends any[], TRes>(
   channel: string,
   validator: ((...args: any[]) => TArgs) | null,
-  handler: (event: Electron.IpcMainInvokeEvent, ...args: TArgs) => Promise<TRes> | TRes
+  handler: (
+    event: Electron.IpcMainInvokeEvent,
+    ...args: TArgs
+  ) => Promise<TRes> | TRes,
 ): void {
-  ipcMain.handle(channel, async (event: Electron.IpcMainInvokeEvent, ...rawArgs: any[]) => {
-    try {
-      IpcBoundary.validateIpcSender(event);
-      const validatedArgs = validator ? validator(...rawArgs) : (rawArgs as unknown as TArgs);
-      return await handler(event, ...validatedArgs);
-    } catch (err: any) {
-      LauncherLogger.warn(`[IPC Handler Error: ${channel}] ${err?.message || err}`);
-      throw sanitizeIpcError(err);
-    }
-  });
+  ipcMain.handle(
+    channel,
+    async (event: Electron.IpcMainInvokeEvent, ...rawArgs: any[]) => {
+      try {
+        IpcBoundary.validateIpcSender(event);
+        const validatedArgs = validator
+          ? validator(...rawArgs)
+          : (rawArgs as unknown as TArgs);
+        return await handler(event, ...validatedArgs);
+      } catch (err: any) {
+        LauncherLogger.warn(
+          `[IPC Handler Error: ${channel}] ${err?.message || err}`,
+        );
+        throw sanitizeIpcError(err);
+      }
+    },
+  );
 }
 
 export function registerSecureListener<TArgs extends any[]>(
   channel: string,
   validator: ((...args: any[]) => TArgs) | null,
-  listener: (event: Electron.IpcMainEvent, ...args: TArgs) => void
+  listener: (event: Electron.IpcMainEvent, ...args: TArgs) => void,
 ): void {
   ipcMain.on(channel, (event: Electron.IpcMainEvent, ...rawArgs: any[]) => {
     try {
       IpcBoundary.validateIpcSender(event);
-      const validatedArgs = validator ? validator(...rawArgs) : (rawArgs as unknown as TArgs);
+      const validatedArgs = validator
+        ? validator(...rawArgs)
+        : (rawArgs as unknown as TArgs);
       listener(event, ...validatedArgs);
     } catch (err: any) {
-      LauncherLogger.warn(`[IPC Listener Error: ${channel}] ${err?.message || err}`);
+      LauncherLogger.warn(
+        `[IPC Listener Error: ${channel}] ${err?.message || err}`,
+      );
     }
   });
 }

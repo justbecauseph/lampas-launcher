@@ -2,35 +2,73 @@ import type { GameLogEntry } from "../types";
 import { formatFriendlyError } from "../utils";
 
 export interface ConsoleViewOptions {
-  showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
+  showToast: (
+    message: string,
+    type: "info" | "success" | "error",
+    duration?: number,
+  ) => void;
 }
 
 export interface ConsoleViewInstance {
   appendLog: (level: "INFO" | "WARN" | "ERROR", message: string) => void;
   isAutoScroll: () => boolean;
-  setGameStatus: (state: "idle" | "syncing" | "launching" | "running", textOverride?: string) => void;
+  setGameStatus: (
+    state: "idle" | "syncing" | "launching" | "running",
+    textOverride?: string,
+  ) => void;
   dispose: () => void;
 }
 
-export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstance {
+export function initConsoleView(
+  options: ConsoleViewOptions,
+): ConsoleViewInstance {
   const { showToast } = options;
 
-  const consoleOutput = document.getElementById("console-output") as HTMLElement | null;
-  const consoleCount = document.getElementById("console-count") as HTMLElement | null;
-  const btnClearLogs = document.getElementById("btn-clear-logs") as HTMLButtonElement | null;
-  const btnCopyLogs = document.getElementById("btn-copy-logs") as HTMLButtonElement | null;
-  const btnOpenLogFile = document.getElementById("btn-open-log-file") as HTMLButtonElement | null;
-  const btnOpenLogFolder = document.getElementById("btn-open-log-folder") as HTMLButtonElement | null;
-  const btnOpenMinecraftLog = document.getElementById("btn-open-minecraft-log") as HTMLButtonElement | null;
-  const consoleAutoscroll = (document.getElementById("console-autoscroll") || document.getElementById("btn-autoscroll")) as HTMLInputElement | HTMLButtonElement | null;
-  const btnConsoleStop = document.getElementById("btn-console-stop") as HTMLButtonElement | null;
-  const consoleGameStatus = document.getElementById("console-game-status") as HTMLElement | null;
-  const consoleStatusDot = document.getElementById("console-status-dot") as HTMLElement | null;
-  const consoleStatusText = document.getElementById("console-status-text") as HTMLElement | null;
-  const logFilterSelect = document.getElementById("log-filter-level") as HTMLSelectElement | null;
+  const consoleOutput = document.getElementById(
+    "console-output",
+  ) as HTMLElement | null;
+  const consoleCount = document.getElementById(
+    "console-count",
+  ) as HTMLElement | null;
+  const btnClearLogs = document.getElementById(
+    "btn-clear-logs",
+  ) as HTMLButtonElement | null;
+  const btnCopyLogs = document.getElementById(
+    "btn-copy-logs",
+  ) as HTMLButtonElement | null;
+  const btnOpenLogFile = document.getElementById(
+    "btn-open-log-file",
+  ) as HTMLButtonElement | null;
+  const btnOpenLogFolder = document.getElementById(
+    "btn-open-log-folder",
+  ) as HTMLButtonElement | null;
+  const btnOpenMinecraftLog = document.getElementById(
+    "btn-open-minecraft-log",
+  ) as HTMLButtonElement | null;
+  const consoleAutoscroll = (document.getElementById("console-autoscroll") ||
+    document.getElementById("btn-autoscroll")) as
+    HTMLInputElement | HTMLButtonElement | null;
+  const btnConsoleStop = document.getElementById(
+    "btn-console-stop",
+  ) as HTMLButtonElement | null;
+  const consoleGameStatus = document.getElementById(
+    "console-game-status",
+  ) as HTMLElement | null;
+  const consoleStatusDot = document.getElementById(
+    "console-status-dot",
+  ) as HTMLElement | null;
+  const consoleStatusText = document.getElementById(
+    "console-status-text",
+  ) as HTMLElement | null;
+  const logFilterSelect = document.getElementById(
+    "log-filter-level",
+  ) as HTMLSelectElement | null;
 
   let logLineCount = 0;
-  let autoScroll = consoleAutoscroll && "checked" in consoleAutoscroll ? Boolean(consoleAutoscroll.checked) : true;
+  let autoScroll =
+    consoleAutoscroll && "checked" in consoleAutoscroll
+      ? Boolean(consoleAutoscroll.checked)
+      : true;
   let activeFilterLevel = "ALL";
   const disposers: Array<() => void> = [];
 
@@ -47,10 +85,18 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
       consoleAutoscroll.checked = autoScroll;
     } else {
       if (autoScroll) {
-        consoleAutoscroll.classList.add("bg-cyan-500/20", "text-cyan-400", "border-cyan-500/40");
+        consoleAutoscroll.classList.add(
+          "bg-cyan-500/20",
+          "text-cyan-400",
+          "border-cyan-500/40",
+        );
         consoleAutoscroll.classList.remove("text-slate-400");
       } else {
-        consoleAutoscroll.classList.remove("bg-cyan-500/20", "text-cyan-400", "border-cyan-500/40");
+        consoleAutoscroll.classList.remove(
+          "bg-cyan-500/20",
+          "text-cyan-400",
+          "border-cyan-500/40",
+        );
         consoleAutoscroll.classList.add("text-slate-400");
       }
     }
@@ -109,9 +155,10 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
   function appendBatch(entries: GameLogEntry[]): void {
     if (!consoleOutput || entries.length === 0) return;
 
-    const fragment = typeof document.createDocumentFragment === "function"
-      ? document.createDocumentFragment()
-      : null;
+    const fragment =
+      typeof document.createDocumentFragment === "function"
+        ? document.createDocumentFragment()
+        : null;
 
     for (const entry of entries) {
       logLineCount++;
@@ -145,22 +192,29 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
     appendBatch([{ timestamp, level, message }]);
   }
 
-  function setGameStatus(state: "idle" | "syncing" | "launching" | "running", textOverride?: string): void {
+  function setGameStatus(
+    state: "idle" | "syncing" | "launching" | "running",
+    textOverride?: string,
+  ): void {
     if (consoleGameStatus && consoleStatusDot && consoleStatusText) {
       if (state === "running") {
         consoleStatusDot.className = "status-dot status-dot-running";
         consoleStatusText.innerText = textOverride || "GAME RUNNING";
-        consoleGameStatus.className = "badge flex items-center gap-1.5 text-emerald-400 border-emerald-500/40 bg-emerald-950/50";
+        consoleGameStatus.className =
+          "badge flex items-center gap-1.5 text-emerald-400 border-emerald-500/40 bg-emerald-950/50";
         if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
       } else if (state === "syncing" || state === "launching") {
         consoleStatusDot.className = "status-dot status-dot-launching";
-        consoleStatusText.innerText = textOverride || (state === "syncing" ? "SYNCING..." : "LAUNCHING...");
-        consoleGameStatus.className = "badge flex items-center gap-1.5 text-amber-400 border-amber-500/40 bg-amber-950/50";
+        consoleStatusText.innerText =
+          textOverride || (state === "syncing" ? "SYNCING..." : "LAUNCHING...");
+        consoleGameStatus.className =
+          "badge flex items-center gap-1.5 text-amber-400 border-amber-500/40 bg-amber-950/50";
         if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
       } else {
         consoleStatusDot.className = "status-dot status-dot-idle";
         consoleStatusText.innerText = textOverride || "IDLE";
-        consoleGameStatus.className = "badge flex items-center gap-1.5 text-slate-400";
+        consoleGameStatus.className =
+          "badge flex items-center gap-1.5 text-slate-400";
         if (btnConsoleStop) btnConsoleStop.classList.add("hidden");
       }
     }
@@ -201,7 +255,9 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
         }
       };
       consoleAutoscroll.addEventListener("change", onCheckboxChange);
-      disposers.push(() => consoleAutoscroll.removeEventListener("change", onCheckboxChange));
+      disposers.push(() =>
+        consoleAutoscroll.removeEventListener("change", onCheckboxChange),
+      );
     } else {
       const onBtnClick = () => {
         autoScroll = !autoScroll;
@@ -211,7 +267,9 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
         }
       };
       consoleAutoscroll.addEventListener("click", onBtnClick);
-      disposers.push(() => consoleAutoscroll.removeEventListener("click", onBtnClick));
+      disposers.push(() =>
+        consoleAutoscroll.removeEventListener("click", onBtnClick),
+      );
       updateAutoscrollUI();
     }
   }
@@ -223,7 +281,10 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
         await window.lampas?.game?.kill?.();
         showToast("Stopping Minecraft...", "info");
       } catch (err: any) {
-        showToast(`Could not stop Minecraft: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not stop Minecraft: ${formatFriendlyError(err)}`,
+          "error",
+        );
       } finally {
         btnConsoleStop.disabled = false;
       }
@@ -252,11 +313,16 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
       try {
         await window.lampas?.utils?.openLogFile?.();
       } catch (err: any) {
-        showToast(`Could not open log file: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not open log file: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
     btnOpenLogFile.addEventListener("click", onOpenFile);
-    disposers.push(() => btnOpenLogFile.removeEventListener("click", onOpenFile));
+    disposers.push(() =>
+      btnOpenLogFile.removeEventListener("click", onOpenFile),
+    );
   }
 
   if (btnOpenLogFolder) {
@@ -264,11 +330,16 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
       try {
         await window.lampas?.utils?.openLogsDir?.();
       } catch (err: any) {
-        showToast(`Could not open logs folder: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not open logs folder: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
     btnOpenLogFolder.addEventListener("click", onOpenFolder);
-    disposers.push(() => btnOpenLogFolder.removeEventListener("click", onOpenFolder));
+    disposers.push(() =>
+      btnOpenLogFolder.removeEventListener("click", onOpenFolder),
+    );
   }
 
   if (btnOpenMinecraftLog) {
@@ -276,20 +347,29 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
       try {
         await window.lampas?.utils?.openMinecraftLog?.();
       } catch (err: any) {
-        showToast(`Could not open Minecraft log: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not open Minecraft log: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
     btnOpenMinecraftLog.addEventListener("click", onOpenMcLog);
-    disposers.push(() => btnOpenMinecraftLog.removeEventListener("click", onOpenMcLog));
+    disposers.push(() =>
+      btnOpenMinecraftLog.removeEventListener("click", onOpenMcLog),
+    );
   }
 
   if (logFilterSelect) {
     const onFilterChange = () => {
       activeFilterLevel = logFilterSelect.value;
       if (!consoleOutput) return;
-      const lines = consoleOutput.querySelectorAll<HTMLElement>(".console-line");
+      const lines =
+        consoleOutput.querySelectorAll<HTMLElement>(".console-line");
       lines.forEach((line) => {
-        if (activeFilterLevel === "ALL" || line.dataset.level === activeFilterLevel) {
+        if (
+          activeFilterLevel === "ALL" ||
+          line.dataset.level === activeFilterLevel
+        ) {
           line.style.display = "";
         } else {
           line.style.display = "none";
@@ -300,7 +380,9 @@ export function initConsoleView(options: ConsoleViewOptions): ConsoleViewInstanc
       }
     };
     logFilterSelect.addEventListener("change", onFilterChange);
-    disposers.push(() => logFilterSelect.removeEventListener("change", onFilterChange));
+    disposers.push(() =>
+      logFilterSelect.removeEventListener("change", onFilterChange),
+    );
   }
 
   return {

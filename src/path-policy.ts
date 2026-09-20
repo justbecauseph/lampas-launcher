@@ -18,10 +18,12 @@ export class PathContainmentError extends Error {
  */
 export function validateDigestString(
   hash: string,
-  algorithm: "sha256" | "sha1" = "sha256"
+  algorithm: "sha256" | "sha1" = "sha256",
 ): string {
   if (typeof hash !== "string") {
-    throw new PathContainmentError(`Invalid digest: expected string, got ${typeof hash}`);
+    throw new PathContainmentError(
+      `Invalid digest: expected string, got ${typeof hash}`,
+    );
   }
   const trimmed = hash.trim().toLowerCase();
   const expectedLength = algorithm === "sha256" ? 64 : 40;
@@ -29,7 +31,7 @@ export function validateDigestString(
 
   if (trimmed.length !== expectedLength || !regex.test(trimmed)) {
     throw new PathContainmentError(
-      `Invalid ${algorithm.toUpperCase()} digest format: '${hash}' (expected ${expectedLength} hex characters)`
+      `Invalid ${algorithm.toUpperCase()} digest format: '${hash}' (expected ${expectedLength} hex characters)`,
     );
   }
   return trimmed;
@@ -37,7 +39,7 @@ export function validateDigestString(
 
 export function isValidDigestString(
   hash: string,
-  algorithm: "sha256" | "sha1" = "sha256"
+  algorithm: "sha256" | "sha1" = "sha256",
 ): boolean {
   try {
     validateDigestString(hash, algorithm);
@@ -73,7 +75,9 @@ export function canonicalizeRelativePath(relPath: string): string {
   }
 
   if (CONTROL_CHAR_REGEX.test(relPath)) {
-    throw new PathContainmentError("Relative path contains prohibited control characters.");
+    throw new PathContainmentError(
+      "Relative path contains prohibited control characters.",
+    );
   }
 
   // Check for UNC, drive-relative, or absolute prefix before normalization
@@ -85,7 +89,9 @@ export function canonicalizeRelativePath(relPath: string): string {
     trimmed.startsWith("\\") ||
     /^[a-zA-Z]:/.test(trimmed)
   ) {
-    throw new PathContainmentError(`Absolute or drive-rooted paths are not permitted: '${relPath}'`);
+    throw new PathContainmentError(
+      `Absolute or drive-rooted paths are not permitted: '${relPath}'`,
+    );
   }
 
   // Convert all backslashes to forward slashes
@@ -101,38 +107,56 @@ export function canonicalizeRelativePath(relPath: string): string {
     // Empty segments from leading/trailing or double slashes
     if (rawSeg === "") {
       if (i === 0 && segments.length > 1) {
-        throw new PathContainmentError(`Path must not start with a slash: '${relPath}'`);
+        throw new PathContainmentError(
+          `Path must not start with a slash: '${relPath}'`,
+        );
       }
       if (i === segments.length - 1) {
         // Trailing slash
         continue;
       }
-      throw new PathContainmentError(`Path contains consecutive slashes: '${relPath}'`);
+      throw new PathContainmentError(
+        `Path contains consecutive slashes: '${relPath}'`,
+      );
     }
 
     // Traversal check
     if (rawSeg === "." || rawSeg === "..") {
-      throw new PathContainmentError(`Path traversal segment '${rawSeg}' is prohibited: '${relPath}'`);
+      throw new PathContainmentError(
+        `Path traversal segment '${rawSeg}' is prohibited: '${relPath}'`,
+      );
     }
 
     // Prototype pollution check
-    if (rawSeg === "__proto__" || rawSeg === "constructor" || rawSeg === "prototype") {
-      throw new PathContainmentError(`Prototype-sensitive segment '${rawSeg}' is prohibited: '${relPath}'`);
+    if (
+      rawSeg === "__proto__" ||
+      rawSeg === "constructor" ||
+      rawSeg === "prototype"
+    ) {
+      throw new PathContainmentError(
+        `Prototype-sensitive segment '${rawSeg}' is prohibited: '${relPath}'`,
+      );
     }
 
     // Windows Alternate Data Streams (ADS)
     if (ADS_REGEX.test(rawSeg)) {
-      throw new PathContainmentError(`Windows Alternate Data Stream notation is prohibited: '${rawSeg}'`);
+      throw new PathContainmentError(
+        `Windows Alternate Data Stream notation is prohibited: '${rawSeg}'`,
+      );
     }
 
     // Trailing dots and spaces (Windows filesystem aliases)
     if (rawSeg.endsWith(".") || rawSeg.endsWith(" ")) {
-      throw new PathContainmentError(`Path segment with trailing space or dot is prohibited: '${rawSeg}'`);
+      throw new PathContainmentError(
+        `Path segment with trailing space or dot is prohibited: '${rawSeg}'`,
+      );
     }
 
     // DOS device names
     if (DOS_DEVICE_REGEX.test(rawSeg)) {
-      throw new PathContainmentError(`Reserved device name is prohibited: '${rawSeg}'`);
+      throw new PathContainmentError(
+        `Reserved device name is prohibited: '${rawSeg}'`,
+      );
     }
 
     cleanSegments.push(rawSeg);
@@ -171,16 +195,12 @@ export function normalizePathKey(relPath: string): string {
  * Formal Ownership Categories for Game Directory Files
  */
 export type PathOwnershipCategory =
-  | "RESERVED_INTERNAL"     // .lampas, .lampas/*, .lampas-moving-* (Launcher state, receipts, release, cache, staging)
+  | "RESERVED_INTERNAL" // .lampas, .lampas/*, .lampas-moving-* (Launcher state, receipts, release, cache, staging)
   | "PROTECTED_PLAYER_DATA" // saves/*, screenshots/*, logs/*, crash-reports/*, options.txt, servers.dat, usercache.json, hotbar.nbt, realms_persistence.json
-  | "MANAGED_PACK_FILES"    // mods/*, config/*, resourcepacks/* (pack-managed content)
+  | "MANAGED_PACK_FILES" // mods/*, config/*, resourcepacks/* (pack-managed content)
   | "UNPROTECTED";
 
-const RESERVED_INTERNAL_PREFIXES = [
-  ".lampas",
-  ".lampas/",
-  ".lampas-moving-",
-];
+const RESERVED_INTERNAL_PREFIXES = [".lampas", ".lampas/", ".lampas-moving-"];
 
 const PROTECTED_PLAYER_DATA_ITEMS = [
   "options.txt",
@@ -213,7 +233,11 @@ export function getOwnershipCategory(relPath: string): PathOwnershipCategory {
 
   // 1. Reserved internal launcher namespace
   for (const prefix of RESERVED_INTERNAL_PREFIXES) {
-    if (lower === prefix || lower.startsWith(".lampas/") || lower.startsWith(".lampas-moving-")) {
+    if (
+      lower === prefix ||
+      lower.startsWith(".lampas/") ||
+      lower.startsWith(".lampas-moving-")
+    ) {
       return "RESERVED_INTERNAL";
     }
   }
@@ -232,6 +256,14 @@ export function getOwnershipCategory(relPath: string): PathOwnershipCategory {
     }
   }
 
+  // 4. Managed pack files directories
+  const MANAGED_PACK_DIRS = ["mods/", "config/", "resourcepacks/"];
+  for (const dir of MANAGED_PACK_DIRS) {
+    if (lower === dir.slice(0, -1) || lower.startsWith(dir.toLowerCase())) {
+      return "MANAGED_PACK_FILES";
+    }
+  }
+
   return "UNPROTECTED";
 }
 
@@ -246,7 +278,9 @@ export function getOwnershipCategory(relPath: string): PathOwnershipCategory {
  */
 export function isPathProtected(relPath: string): boolean {
   const category = getOwnershipCategory(relPath);
-  return category === "RESERVED_INTERNAL" || category === "PROTECTED_PLAYER_DATA";
+  return (
+    category === "RESERVED_INTERNAL" || category === "PROTECTED_PLAYER_DATA"
+  );
 }
 
 function stripExtendedPathPrefix(p: string): string {
@@ -314,7 +348,7 @@ export function getCanonicalDiskPath(targetPath: string): string {
 export function resolveAndContainPath(
   baseDir: string,
   targetRelOrAbs: string,
-  options: { allowEqual?: boolean } = {}
+  options: { allowEqual?: boolean } = {},
 ): string {
   const resolvedBase = path.resolve(baseDir);
   const resolvedTarget = path.isAbsolute(targetRelOrAbs)
@@ -329,21 +363,29 @@ export function resolveAndContainPath(
     if (options.allowEqual) {
       return resolvedTarget;
     }
-    throw new PathContainmentError(`Target path cannot be identical to base directory: '${targetRelOrAbs}'`);
+    throw new PathContainmentError(
+      `Target path cannot be identical to base directory: '${targetRelOrAbs}'`,
+    );
   }
 
-  const basePrefix = compBase.endsWith(path.sep) ? compBase : compBase + path.sep;
+  const basePrefix = compBase.endsWith(path.sep)
+    ? compBase
+    : compBase + path.sep;
   if (!compTarget.startsWith(basePrefix)) {
     // On Windows, paths can differ by 8.3 short name (e.g. RUNNER~1 vs runneradmin).
     // If initial prefix match fails, compare canonical disk paths.
     if (isWindows) {
       const canonBase = getCanonicalDiskPath(resolvedBase).toLowerCase();
       const canonTarget = getCanonicalDiskPath(resolvedTarget).toLowerCase();
-      const canonPrefix = canonBase.endsWith(path.sep) ? canonBase : canonBase + path.sep;
+      const canonPrefix = canonBase.endsWith(path.sep)
+        ? canonBase
+        : canonBase + path.sep;
 
       if (canonTarget === canonBase) {
         if (options.allowEqual) return resolvedTarget;
-        throw new PathContainmentError(`Target path cannot be identical to base directory: '${targetRelOrAbs}'`);
+        throw new PathContainmentError(
+          `Target path cannot be identical to base directory: '${targetRelOrAbs}'`,
+        );
       }
       if (canonTarget.startsWith(canonPrefix)) {
         return resolvedTarget;
@@ -351,7 +393,7 @@ export function resolveAndContainPath(
     }
 
     throw new PathContainmentError(
-      `Path containment violation: '${targetRelOrAbs}' resolves outside base directory '${baseDir}'`
+      `Path containment violation: '${targetRelOrAbs}' resolves outside base directory '${baseDir}'`,
     );
   }
 
@@ -373,10 +415,29 @@ export function assertSubordinateRoot(gameDir: string, subDir: string): string {
   resolveAndContainPath(resolvedGameDir, resolvedSubDir, { allowEqual: true });
 
   const canonGameDir = getCanonicalDiskPath(resolvedGameDir);
+  const rel = path
+    .relative(resolvedGameDir, resolvedSubDir)
+    .replace(/\\/g, "/");
+  const lowerRel = rel.toLowerCase();
+  let expectedCategory: PathOwnershipCategory | undefined;
+  if (lowerRel === ".lampas" || lowerRel.startsWith(".lampas/")) {
+    expectedCategory = "RESERVED_INTERNAL";
+  } else if (lowerRel === "mods" || lowerRel.startsWith("mods/")) {
+    expectedCategory = "MANAGED_PACK_FILES";
+  }
 
   // If subDir exists, verify physical ancestry
   if (fs.existsSync(resolvedSubDir)) {
-    checkPhysicalAncestrySync(resolvedGameDir, resolvedSubDir, { enforceOwnership: false });
+    const stat = fs.lstatSync(resolvedSubDir);
+    if (stat.isSymbolicLink()) {
+      throw new PathContainmentError(
+        `Subordinate root cannot be a symbolic link: '${resolvedSubDir}'`,
+      );
+    }
+    checkPhysicalAncestrySync(resolvedGameDir, resolvedSubDir, {
+      disallowSymlinks: true,
+      expectedCategory,
+    });
     const realSubDir = getCanonicalDiskPath(resolvedSubDir);
     resolveAndContainPath(canonGameDir, realSubDir, { allowEqual: true });
   } else {
@@ -386,7 +447,9 @@ export function assertSubordinateRoot(gameDir: string, subDir: string): string {
       parent = path.dirname(parent);
     }
     if (fs.existsSync(parent)) {
-      checkPhysicalAncestrySync(resolvedGameDir, parent, { enforceOwnership: false });
+      checkPhysicalAncestrySync(resolvedGameDir, parent, {
+        disallowSymlinks: true,
+      });
       const realParent = getCanonicalDiskPath(parent);
       resolveAndContainPath(canonGameDir, realParent, { allowEqual: true });
     }
@@ -398,6 +461,7 @@ export function assertSubordinateRoot(gameDir: string, subDir: string): string {
 export interface PhysicalAncestryOptions {
   disallowSymlinks?: boolean;
   enforceOwnership?: boolean;
+  expectedCategory?: PathOwnershipCategory;
 }
 
 /**
@@ -409,7 +473,7 @@ export interface PhysicalAncestryOptions {
 export function checkPhysicalAncestrySync(
   baseDir: string,
   fullPath: string,
-  options: PhysicalAncestryOptions = {}
+  options: PhysicalAncestryOptions = {},
 ): void {
   const resolvedBase = path.resolve(baseDir);
   const resolvedTarget = path.resolve(fullPath);
@@ -427,20 +491,22 @@ export function checkPhysicalAncestrySync(
 
   for (const part of parts) {
     current = path.join(current, part);
-    if (!fs.existsSync(current)) {
-      // Once an element doesn't exist, remaining children don't exist yet
-      break;
-    }
-
     let stat: fs.Stats;
     try {
       stat = fs.lstatSync(current);
     } catch (err: any) {
-      throw new PathContainmentError(`Cannot lstat physical ancestor '${current}': ${err.message}`);
+      if (err.code === "ENOENT") {
+        break;
+      }
+      throw new PathContainmentError(
+        `Cannot lstat physical ancestor '${current}': ${err.message}`,
+      );
     }
 
     if (options.disallowSymlinks && stat.isSymbolicLink()) {
-      throw new PathContainmentError(`Prohibited symbolic link along path: '${current}'`);
+      throw new PathContainmentError(
+        `Prohibited symbolic link along path: '${current}'`,
+      );
     }
 
     if (stat.isSymbolicLink()) {
@@ -449,15 +515,19 @@ export function checkPhysicalAncestrySync(
       try {
         realTarget = realpathCanonicalSync(current);
       } catch (err: any) {
-        throw new PathContainmentError(`Cannot resolve symlink target at '${current}': ${err.message}`);
+        throw new PathContainmentError(
+          `Cannot resolve symlink target at '${current}': ${err.message}`,
+        );
       }
       resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
 
       if (options.enforceOwnership) {
-        const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
+        const relToRoot = path
+          .relative(canonBase, realTarget)
+          .replace(/\\/g, "/");
         if (isPathProtected(relToRoot)) {
           throw new PathContainmentError(
-            `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`
+            `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`,
           );
         }
       }
@@ -470,26 +540,42 @@ export function checkPhysicalAncestrySync(
       stat.isBlockDevice()
     ) {
       throw new PathContainmentError(
-        `Prohibited special file type encountered in physical ancestry: '${current}'`
+        `Prohibited special file type encountered in physical ancestry: '${current}'`,
       );
     }
   }
 
-  // If enforceOwnership is true, inspect the resolved realpath of the target or its closest existing ancestor
-  if (options.enforceOwnership) {
+  // Inspect the resolved realpath of the target or its closest existing ancestor
+  if (options.enforceOwnership || options.expectedCategory) {
     let checkPath = resolvedTarget;
-    while (checkPath && !fs.existsSync(checkPath) && checkPath !== resolvedBase) {
+    while (
+      checkPath &&
+      !fs.existsSync(checkPath) &&
+      checkPath !== resolvedBase
+    ) {
       checkPath = path.dirname(checkPath);
     }
     if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
       try {
         const realTarget = realpathCanonicalSync(checkPath);
         resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
-        const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
-        if (isPathProtected(relToRoot)) {
-          throw new PathContainmentError(
-            `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`
-          );
+        const relToRoot = path
+          .relative(canonBase, realTarget)
+          .replace(/\\/g, "/");
+        const category = getOwnershipCategory(relToRoot);
+
+        if (options.expectedCategory) {
+          if (category !== options.expectedCategory) {
+            throw new PathContainmentError(
+              `Physical destination resolves into unexpected category '${category}' (expected '${options.expectedCategory}'): '${relToRoot}'`,
+            );
+          }
+        } else if (options.enforceOwnership) {
+          if (isPathProtected(relToRoot)) {
+            throw new PathContainmentError(
+              `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`,
+            );
+          }
         }
       } catch (err: any) {
         if (err instanceof PathContainmentError) throw err;
@@ -504,7 +590,7 @@ export function checkPhysicalAncestrySync(
 export async function checkPhysicalAncestry(
   baseDir: string,
   fullPath: string,
-  options: PhysicalAncestryOptions = {}
+  options: PhysicalAncestryOptions = {},
 ): Promise<void> {
   const resolvedBase = path.resolve(baseDir);
   const resolvedTarget = path.resolve(fullPath);
@@ -525,7 +611,9 @@ export async function checkPhysicalAncestry(
       const stat = await fs.promises.lstat(current);
 
       if (options.disallowSymlinks && stat.isSymbolicLink()) {
-        throw new PathContainmentError(`Prohibited symbolic link along path: '${current}'`);
+        throw new PathContainmentError(
+          `Prohibited symbolic link along path: '${current}'`,
+        );
       }
 
       if (stat.isSymbolicLink()) {
@@ -533,10 +621,12 @@ export async function checkPhysicalAncestry(
         resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
 
         if (options.enforceOwnership) {
-          const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
+          const relToRoot = path
+            .relative(canonBase, realTarget)
+            .replace(/\\/g, "/");
           if (isPathProtected(relToRoot)) {
             throw new PathContainmentError(
-              `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`
+              `Physical link target at '${current}' resolves into protected or reserved namespace '${relToRoot}'`,
             );
           }
         }
@@ -548,7 +638,7 @@ export async function checkPhysicalAncestry(
         stat.isBlockDevice()
       ) {
         throw new PathContainmentError(
-          `Prohibited special file type encountered in physical ancestry: '${current}'`
+          `Prohibited special file type encountered in physical ancestry: '${current}'`,
         );
       }
     } catch (err: any) {
@@ -558,24 +648,42 @@ export async function checkPhysicalAncestry(
       if (err instanceof PathContainmentError) {
         throw err;
       }
-      throw new PathContainmentError(`Cannot inspect physical ancestry at '${current}': ${err.message}`);
+      throw new PathContainmentError(
+        `Cannot inspect physical ancestry at '${current}': ${err.message}`,
+      );
     }
   }
 
-  if (options.enforceOwnership) {
+  if (options.enforceOwnership || options.expectedCategory) {
     let checkPath = resolvedTarget;
-    while (checkPath && !fs.existsSync(checkPath) && checkPath !== resolvedBase) {
+    while (
+      checkPath &&
+      !fs.existsSync(checkPath) &&
+      checkPath !== resolvedBase
+    ) {
       checkPath = path.dirname(checkPath);
     }
     if (fs.existsSync(checkPath) && checkPath !== resolvedBase) {
       try {
         const realTarget = await realpathCanonical(checkPath);
         resolveAndContainPath(canonBase, realTarget, { allowEqual: true });
-        const relToRoot = path.relative(canonBase, realTarget).replace(/\\/g, "/");
-        if (isPathProtected(relToRoot)) {
-          throw new PathContainmentError(
-            `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`
-          );
+        const relToRoot = path
+          .relative(canonBase, realTarget)
+          .replace(/\\/g, "/");
+        const category = getOwnershipCategory(relToRoot);
+
+        if (options.expectedCategory) {
+          if (category !== options.expectedCategory) {
+            throw new PathContainmentError(
+              `Physical destination resolves into unexpected category '${category}' (expected '${options.expectedCategory}'): '${relToRoot}'`,
+            );
+          }
+        } else if (options.enforceOwnership) {
+          if (isPathProtected(relToRoot)) {
+            throw new PathContainmentError(
+              `Physical destination resolves into protected or reserved namespace: '${relToRoot}'`,
+            );
+          }
         }
       } catch (err: any) {
         if (err instanceof PathContainmentError) throw err;
@@ -594,14 +702,19 @@ export async function checkPhysicalAncestry(
  * - Detects duplicate or case-equivalent destinations
  * - Validates config patches: uniqueness, safety, no collision with whole-file paths
  */
-export function validateManifestMetadata(manifest: any, releaseData?: any): void {
+export function validateManifestMetadata(
+  manifest: any,
+  releaseData?: any,
+): void {
   if (!manifest || typeof manifest !== "object") {
     throw new PathContainmentError("Invalid client manifest: expected object.");
   }
 
   const files = manifest.files;
   if (!files || !Array.isArray(files)) {
-    throw new PathContainmentError("Invalid manifest: 'files' array is mandatory.");
+    throw new PathContainmentError(
+      "Invalid manifest: 'files' array is mandatory.",
+    );
   }
 
   const destinationMap = new Map<string, any>();
@@ -609,7 +722,9 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
 
   for (const file of files) {
     if (!file || typeof file !== "object") {
-      throw new PathContainmentError("Invalid file entry in manifest: expected object.");
+      throw new PathContainmentError(
+        "Invalid file entry in manifest: expected object.",
+      );
     }
 
     if (typeof file.path !== "string" || !file.path) {
@@ -622,13 +737,15 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
       canonicalPath = canonicalizeRelativePath(file.path);
       file.path = canonicalPath;
     } catch (err: any) {
-      throw new PathContainmentError(`Unsafe relative path in manifest: '${file.path}': ${err.message}`);
+      throw new PathContainmentError(
+        `Unsafe relative path in manifest: '${file.path}': ${err.message}`,
+      );
     }
 
     // 2. Reject attempts to target protected namespaces or launcher internal state
     if (isPathProtected(canonicalPath)) {
       throw new PathContainmentError(
-        `Manifest file '${file.path}' targets protected or reserved namespace '${canonicalPath}'. Pack files cannot overwrite user data or launcher state.`
+        `Manifest file '${file.path}' targets protected or reserved namespace '${canonicalPath}'. Pack files cannot overwrite user data or launcher state.`,
       );
     }
 
@@ -636,28 +753,44 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
     const lookupKey = normalizePathKey(canonicalPath);
     if (destinationMap.has(lookupKey)) {
       throw new PathContainmentError(
-        `Duplicate manifest destination detected: '${canonicalPath}' conflicts with '${destinationMap.get(lookupKey).path}'`
+        `Duplicate manifest destination detected: '${canonicalPath}' conflicts with '${destinationMap.get(lookupKey).path}'`,
       );
     }
     destinationMap.set(lookupKey, file);
 
     // 4. Validate SHA-256 digest format
-    if (!file.hashes || typeof file.hashes !== "object" || !file.hashes.sha256) {
-      throw new PathContainmentError(`Manifest file '${file.path}' is missing SHA-256 hash.`);
+    if (
+      !file.hashes ||
+      typeof file.hashes !== "object" ||
+      !file.hashes.sha256
+    ) {
+      throw new PathContainmentError(
+        `Manifest file '${file.path}' is missing SHA-256 hash.`,
+      );
     }
     validateDigestString(file.hashes.sha256, "sha256");
 
     // 5. Validate size
-    if (typeof file.size !== "number" || file.size < 0 || !Number.isSafeInteger(file.size)) {
-      throw new PathContainmentError(`Manifest file '${file.path}' has invalid size: ${file.size}`);
+    if (
+      typeof file.size !== "number" ||
+      file.size < 0 ||
+      !Number.isSafeInteger(file.size)
+    ) {
+      throw new PathContainmentError(
+        `Manifest file '${file.path}' has invalid size: ${file.size}`,
+      );
     }
   }
 
   // 6. Validate config patches
-  const patches = manifest.configPatches ?? (releaseData && (releaseData as any).configPatches);
+  const patches =
+    manifest.configPatches ??
+    (releaseData && (releaseData as any).configPatches);
   if (patches !== undefined) {
     if (!Array.isArray(patches)) {
-      throw new PathContainmentError("Invalid manifest: 'configPatches' must be an array.");
+      throw new PathContainmentError(
+        "Invalid manifest: 'configPatches' must be an array.",
+      );
     }
 
     const patchIds = new Set<string>();
@@ -665,14 +798,18 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
 
     for (const patch of patches) {
       if (!patch || typeof patch !== "object") {
-        throw new PathContainmentError("Invalid config patch entry: expected object.");
+        throw new PathContainmentError(
+          "Invalid config patch entry: expected object.",
+        );
       }
 
       if (typeof patch.id !== "string" || !patch.id.trim()) {
         throw new PathContainmentError("Config patch entry is missing 'id'.");
       }
       if (patchIds.has(patch.id)) {
-        throw new PathContainmentError(`Duplicate config patch ID: '${patch.id}'`);
+        throw new PathContainmentError(
+          `Duplicate config patch ID: '${patch.id}'`,
+        );
       }
       patchIds.add(patch.id);
 
@@ -683,7 +820,9 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
             ? patch.file
             : "";
       if (!patchPathRaw) {
-        throw new PathContainmentError(`Config patch '${patch.id}' is missing 'path'.`);
+        throw new PathContainmentError(
+          `Config patch '${patch.id}' is missing 'path'.`,
+        );
       }
 
       let canonicalPatchPath: string;
@@ -692,12 +831,14 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
         if (patch.path) patch.path = canonicalPatchPath;
         if (patch.file) patch.file = canonicalPatchPath;
       } catch (err: any) {
-        throw new PathContainmentError(`Unsafe config patch path in '${patch.id}': ${err.message}`);
+        throw new PathContainmentError(
+          `Unsafe config patch path in '${patch.id}': ${err.message}`,
+        );
       }
 
       if (isPathProtected(canonicalPatchPath)) {
         throw new PathContainmentError(
-          `Config patch '${patch.id}' targets protected namespace: '${canonicalPatchPath}'`
+          `Config patch '${patch.id}' targets protected namespace: '${canonicalPatchPath}'`,
         );
       }
 
@@ -705,7 +846,7 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
       const patchKey = normalizePathKey(canonicalPatchPath);
       if (destinationMap.has(patchKey)) {
         throw new PathContainmentError(
-          `Conflict: file '${canonicalPatchPath}' is managed both as a whole file and by config patch '${patch.id}'.`
+          `Conflict: file '${canonicalPatchPath}' is managed both as a whole file and by config patch '${patch.id}'.`,
         );
       }
       patchPaths.set(patchKey, patch.id);
@@ -721,12 +862,17 @@ export function validateManifestMetadata(manifest: any, releaseData?: any): void
  */
 export function sanitizeInstallationState(
   rawState: any,
-  gameDir: string
+  gameDir: string,
 ): { files: Record<string, any>; quarantinedKeys: string[] } {
   const resultFiles: Record<string, any> = {};
   const quarantinedKeys: string[] = [];
 
-  if (!rawState || typeof rawState !== "object" || !rawState.files || typeof rawState.files !== "object") {
+  if (
+    !rawState ||
+    typeof rawState !== "object" ||
+    !rawState.files ||
+    typeof rawState.files !== "object"
+  ) {
     return { files: resultFiles, quarantinedKeys };
   }
 
@@ -769,15 +915,25 @@ export function sanitizeInstallationState(
     }
 
     // 6. Must have an explicit, recognized policy. NEVER default unknown/missing to MANAGED!
-    if (fileObj.policy !== "MANAGED" && fileObj.policy !== "PRESERVE") {
+    if (
+      fileObj.policy !== "MANAGED" &&
+      fileObj.policy !== "PRESERVE" &&
+      fileObj.policy !== "OPTIONAL" &&
+      fileObj.policy !== "GENERATED"
+    ) {
       quarantinedKeys.push(key);
       continue;
     }
 
     // 7. If MANAGED, validate SHA-256 hash
     if (fileObj.policy === "MANAGED") {
-      const sha256 = fileObj.sha256 || (fileObj.hashes && fileObj.hashes.sha256);
-      if (!sha256 || typeof sha256 !== "string" || !isValidDigestString(sha256, "sha256")) {
+      const sha256 =
+        fileObj.sha256 || (fileObj.hashes && fileObj.hashes.sha256);
+      if (
+        !sha256 ||
+        typeof sha256 !== "string" ||
+        !isValidDigestString(sha256, "sha256")
+      ) {
         quarantinedKeys.push(key);
         continue;
       }
@@ -792,4 +948,3 @@ export function sanitizeInstallationState(
 
   return { files: resultFiles, quarantinedKeys };
 }
-

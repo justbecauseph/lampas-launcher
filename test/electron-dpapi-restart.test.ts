@@ -12,7 +12,10 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
 
   // Deterministically ensure Electron binary is installed if missing on Windows
   if (isWindows && !fs.existsSync(electronBin)) {
-    const installerPath = path.resolve(__dirname, "../node_modules/electron/install.js");
+    const installerPath = path.resolve(
+      __dirname,
+      "../node_modules/electron/install.js",
+    );
     if (fs.existsSync(installerPath)) {
       try {
         cp.execFileSync("node", [installerPath], { stdio: "inherit" });
@@ -21,8 +24,14 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
   }
 
   const launcherRoot = path.resolve(__dirname, "..");
-  const credStoreModulePath = path.resolve(launcherRoot, "dist/credential-store.js");
-  const sessionManagerModulePath = path.resolve(launcherRoot, "dist/session-manager.js");
+  const credStoreModulePath = path.resolve(
+    launcherRoot,
+    "dist/credential-store.js",
+  );
+  const sessionManagerModulePath = path.resolve(
+    launcherRoot,
+    "dist/session-manager.js",
+  );
 
   interface AclEntry {
     principal: string;
@@ -34,9 +43,13 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
     const lines = output
       .split(/\r?\n/)
       .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith("Successfully") && !l.startsWith("Failed"));
+      .filter(
+        (l) => l && !l.startsWith("Successfully") && !l.startsWith("Failed"),
+      );
     for (const line of lines) {
-      const match = line.match(/(?:^.*?\s+)?([A-Za-z0-9_\\\.\-\s]+?):(\((?:[A-Z0-9\(\)]+)\))/);
+      const match = line.match(
+        /(?:^.*?\s+)?([A-Za-z0-9_\\\.\-\s]+?):(\((?:[A-Z0-9\(\)]+)\))/,
+      );
       if (match) {
         entries.push({ principal: match[1].trim(), rights: match[2].trim() });
       }
@@ -45,7 +58,9 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
   }
 
   function verifyAclSecurity(targetPath: string): void {
-    const output = cp.execFileSync("icacls", [targetPath], { encoding: "utf-8" });
+    const output = cp.execFileSync("icacls", [targetPath], {
+      encoding: "utf-8",
+    });
     const entries = parseIcacls(output);
     expect(entries.length).toBeGreaterThan(0);
 
@@ -80,7 +95,11 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
     // Invariant 2: Authorized privileged/owner principals (SYSTEM, Administrators, or current user) must exist
     const hasAuthorizedPrincipal = entries.some((e) => {
       const p = e.principal.toLowerCase();
-      return p.includes("system") || p.includes("administrators") || p.includes(currentUser);
+      return (
+        p.includes("system") ||
+        p.includes("administrators") ||
+        p.includes(currentUser)
+      );
     });
     expect(hasAuthorizedPrincipal).toBe(true);
   }
@@ -88,8 +107,13 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
   function runElectron(
     args: string[],
     cwd: string,
-    timeoutMs = 12000
-  ): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+    timeoutMs = 12000,
+  ): Promise<{
+    code: number | null;
+    stdout: string;
+    stderr: string;
+    timedOut: boolean;
+  }> {
     return new Promise((resolve) => {
       let stdout = "";
       let stderr = "";
@@ -139,18 +163,28 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         throw new Error(`Electron binary not found at ${electronBin}`);
       }
       if (!fs.existsSync(credStoreModulePath)) {
-        throw new Error(`Built credential store module not found at ${credStoreModulePath}. Run 'bun run build' first.`);
+        throw new Error(
+          `Built credential store module not found at ${credStoreModulePath}. Run 'bun run build' first.`,
+        );
       }
       if (!fs.existsSync(sessionManagerModulePath)) {
-        throw new Error(`Built session manager module not found at ${sessionManagerModulePath}. Run 'bun run build' first.`);
+        throw new Error(
+          `Built session manager module not found at ${sessionManagerModulePath}. Run 'bun run build' first.`,
+        );
       }
 
-      const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-dpapi-evidence-"));
+      const testDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "lampas-dpapi-evidence-"),
+      );
       const userDataDir = path.join(testDir, "user-data");
       fs.mkdirSync(userDataDir, { recursive: true });
 
       const credFile = path.join(userDataDir, "credentials.enc");
-      const testSecret = "syn-dpapi-secret-token-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+      const testSecret =
+        "syn-dpapi-secret-token-" +
+        Date.now() +
+        "-" +
+        Math.random().toString(36).slice(2);
       const testRefreshSecret = "syn-refresh-" + testSecret;
       const testAccountId = "dpapi-test-account-123";
       const testUsername = "NativeUser";
@@ -226,11 +260,16 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
               app.exit(1);
             }
           });
-          `
+          `,
         );
 
-        const p1 = await runElectron([`--user-data-dir=${userDataDir}`, proc1Script], testDir, 12000);
-        if (p1.code !== 0) console.error("P1 FAILED:", p1.code, p1.stdout, p1.stderr);
+        const p1 = await runElectron(
+          [`--user-data-dir=${userDataDir}`, proc1Script],
+          testDir,
+          12000,
+        );
+        if (p1.code !== 0)
+          console.error("P1 FAILED:", p1.code, p1.stdout, p1.stderr);
         expect(p1.code).toBe(0);
         expect(p1.stdout).toContain("ELECTRON_VERSION:44.0.0");
         expect(p1.stdout).toContain("SAVE_SUCCESS");
@@ -296,11 +335,16 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
               app.exit(1);
             }
           });
-          `
+          `,
         );
 
-        const p2 = await runElectron([`--user-data-dir=${userDataDir}`, proc2Script], testDir, 12000);
-        if (p2.code !== 0) console.error("P2 FAILED:", p2.code, p2.stdout, p2.stderr);
+        const p2 = await runElectron(
+          [`--user-data-dir=${userDataDir}`, proc2Script],
+          testDir,
+          12000,
+        );
+        if (p2.code !== 0)
+          console.error("P2 FAILED:", p2.code, p2.stdout, p2.stderr);
         expect(p2.code).toBe(0);
         expect(p2.stdout).toContain("ELECTRON_VERSION:44.0.0");
         expect(p2.stdout).toContain("DECRYPT_SUCCESS");
@@ -317,7 +361,9 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         // Assert session manager loaded state
         expect(restoredData.sessionCreds.token).toBe(testSecret);
         expect(restoredData.sessionCreds.refreshToken).toBe(testRefreshSecret);
-        expect(restoredData.sessionCreds.portalUrl).toBe("https://dev.lampas.town");
+        expect(restoredData.sessionCreds.portalUrl).toBe(
+          "https://dev.lampas.town",
+        );
         expect(restoredData.storageStatus.sessionPersisted).toBe(true);
         expect(restoredData.storageStatus.sessionOnly).toBe(false);
 
@@ -364,11 +410,16 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
               app.exit(1);
             }
           });
-          `
+          `,
         );
 
-        const p3 = await runElectron([`--user-data-dir=${userDataDir}`, proc3Script], testDir, 12000);
-        if (p3.code !== 0) console.error("P3 FAILED:", p3.code, p3.stdout, p3.stderr);
+        const p3 = await runElectron(
+          [`--user-data-dir=${userDataDir}`, proc3Script],
+          testDir,
+          12000,
+        );
+        if (p3.code !== 0)
+          console.error("P3 FAILED:", p3.code, p3.stdout, p3.stderr);
         expect(p3.code).toBe(0);
         expect(p3.stdout).toContain("ELECTRON_VERSION:44.0.0");
         expect(p3.stdout).toContain("CLEAR_SUCCESS");
@@ -379,6 +430,6 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         } catch {}
       }
     },
-    45000
+    45000,
   );
 });

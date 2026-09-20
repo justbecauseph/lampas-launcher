@@ -3,6 +3,7 @@ import { type Readable } from "node:stream";
 import type { GameLogEntry } from "./types";
 import { safeSend } from "./operations";
 import { LauncherLogger } from "./logger";
+import { DISCARDED_LOG_RECORD } from "./privacy";
 
 export interface ProcessLogFramerOptions {
   maxLineLength?: number;
@@ -18,11 +19,12 @@ export class ProcessLogFramer {
   private buffer = "";
   private readonly maxLineLength: number;
   private finished = false;
+  private discarding = false;
 
   constructor(
     private readonly defaultLevel: "INFO" | "WARN" | "ERROR",
     private readonly onEntry: (entry: GameLogEntry) => void,
-    options?: ProcessLogFramerOptions
+    options?: ProcessLogFramerOptions,
   ) {
     this.decoder = new StringDecoder("utf-8");
     this.maxLineLength = options?.maxLineLength ?? 16_384;
@@ -57,13 +59,14 @@ export class ProcessLogFramer {
       this.processText(remaining);
     }
 
-    if (this.buffer.length > 0) {
+    if (this.discarding) {
+      this.discarding = false;
+      this.buffer = "";
+      this.emitLine(DISCARDED_LOG_RECORD);
+    } else if (this.buffer.length > 0) {
       let line = this.buffer;
       this.buffer = "";
       if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (line.length > this.maxLineLength) {
-        line = line.slice(0, this.maxLineLength) + " ...[TRUNCATED]";
-      }
       const trimmed = line.trim();
       if (trimmed.length > 0) {
         this.emitLine(trimmed);
@@ -72,40 +75,27 @@ export class ProcessLogFramer {
   }
 
   private processText(text: string): void {
-    let searchStart = 0;
-
-    for (let i = 0; i < text.length; i++) {
-      if (text[i] === "\n") {
-        const segment = text.slice(searchStart, i);
-        searchStart = i + 1;
-
-        let fullLine = this.buffer + segment;
-        this.buffer = "";
-
-        if (fullLine.endsWith("\r")) {
-          fullLine = fullLine.slice(0, -1);
-        }
-
-        if (fullLine.length > this.maxLineLength) {
-          fullLine = fullLine.slice(0, this.maxLineLength) + " ...[TRUNCATED]";
-        }
-
-        const trimmed = fullLine.trim();
-        if (trimmed.length > 0) {
-          this.emitLine(trimmed);
-        }
+    let start = 0;
+    while (start < text.length) {
+      const newline = text.indexOf("\n", start);
+      const end = newline < 0 ? text.length : newline;
+      if (!this.discarding) {
+        const segment = text.slice(start, end);
+        if (
+          Buffer.byteLength(this.buffer, "utf8") +
+            Buffer.byteLength(segment, "utf8") >
+          this.maxLineLength
+        ) {
+          this.buffer = "";
+          this.discarding = true;
+        } else this.buffer += segment;
       }
-    }
-
-    if (searchStart < text.length) {
-      this.buffer += text.slice(searchStart);
-
-      // Unterminated line bound check
-      if (this.buffer.length >= this.maxLineLength) {
-        const truncatedLine = this.buffer.slice(0, this.maxLineLength) + " ...[TRUNCATED]";
-        this.buffer = "";
-        this.emitLine(truncatedLine);
-      }
+      if (newline < 0) break;
+      if (this.discarding) this.emitLine(DISCARDED_LOG_RECORD);
+      else if (this.buffer.trim()) this.emitLine(this.buffer.trim());
+      this.buffer = "";
+      this.discarding = false;
+      start = newline + 1;
     }
   }
 
@@ -190,7 +180,7 @@ export class BoundedLogBatchTransport {
 
   constructor(
     private readonly targetWindowProvider: () => any,
-    options?: LogBatchTransportOptions
+    options?: LogBatchTransportOptions,
   ) {
     this.intervalMs = options?.intervalMs ?? 50;
     this.maxBatchSize = options?.maxBatchSize ?? 100;
@@ -208,7 +198,8 @@ export class BoundedLogBatchTransport {
 
     // Enforce queue capacity and byte budget
     while (
-      (this.queue.length >= this.maxQueueCapacity || this.queueBytes + entryBytes > this.maxQueueBytes) &&
+      (this.queue.length >= this.maxQueueCapacity ||
+        this.queueBytes + entryBytes > this.maxQueueBytes) &&
       this.queue.length > 0
     ) {
       const dropped = this.queue.shift()!;
@@ -236,7 +227,11 @@ export class BoundedLogBatchTransport {
     if (!this.inFlightBatch) return;
 
     // Exact numeric batchId check: reject undefined, null, NaN, or mismatch
-    if (typeof batchId !== "number" || isNaN(batchId) || batchId !== this.inFlightBatch.batchId) {
+    if (
+      typeof batchId !== "number" ||
+      isNaN(batchId) ||
+      batchId !== this.inFlightBatch.batchId
+    ) {
       // Reject unauthorized, undefined, or mismatched batch IDs
       return;
     }
@@ -310,7 +305,12 @@ export class BoundedLogBatchTransport {
     });
 
     if (sent) {
-      this.inFlightBatch = { batchId, receiverId, entries: batchEntries, bytes: batchBytes };
+      this.inFlightBatch = {
+        batchId,
+        receiverId,
+        entries: batchEntries,
+        bytes: batchBytes,
+      };
     } else {
       // Window unavailable or destroyed: cannot deliver, reset inFlight and restore dropped count
       this.inFlightBatch = null;

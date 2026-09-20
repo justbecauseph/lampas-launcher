@@ -24,7 +24,7 @@ mock.module("electron", () => ({
 }));
 
 const { LauncherLogger } = await import("../../src/logger");
-const { ConfigManager } = await import("../../src/config");
+const { ConfigManager, PortalPolicy } = await import("../../src/config");
 const { LauncherSync } = await import("../../src/sync");
 const { GameDirectoryManager } = await import("../../src/game-directory");
 const { hashFile } = await import("../../src/file-transfer");
@@ -58,7 +58,7 @@ async function runWarmSyncBenchmark(): Promise<BenchmarkResult> {
       path: relPath,
       hashes: { sha256 },
       size: content.length,
-      download: { url: `/blobs/${sha256}` },
+      download: { url: `/blobs/${sha256}`, provider: "lampas" },
       policy: "MANAGED",
     });
 
@@ -67,6 +67,7 @@ async function runWarmSyncBenchmark(): Promise<BenchmarkResult> {
       size: content.length,
       mtimeMs: stat.mtimeMs,
       policy: "MANAGED",
+      path: relPath,
     };
   }
 
@@ -74,7 +75,13 @@ async function runWarmSyncBenchmark(): Promise<BenchmarkResult> {
   fs.mkdirSync(stateDir, { recursive: true });
   fs.writeFileSync(
     path.join(stateDir, "installation.json"),
-    JSON.stringify({ pack: "Lampas 2", version: "2.0.0", files: stateFiles })
+    JSON.stringify({
+      pack: "Lampas 2",
+      version: "2.0.0",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      releaseVersion: "2.0.0",
+      files: stateFiles,
+    }),
   );
 
   let requestCount = 0;
@@ -84,22 +91,35 @@ async function runWarmSyncBenchmark(): Promise<BenchmarkResult> {
       requestCount++;
       const url = new URL(req.url);
       if (url.pathname === "/api/v1/channels/stable") {
-        return Response.json({ channel: "stable", version: "2.0.0" });
+        return Response.json({
+          channel: "stable",
+          version: "2.0.0",
+          release: "/api/v1/releases/2.0.0",
+        });
       }
       if (url.pathname === "/api/v1/releases/2.0.0") {
         return Response.json({
+          schemaVersion: 1,
           pack: "Lampas 2",
           version: "2.0.0",
           minecraft: "26.2",
           loader: { type: "fabric", version: "0.19.3" },
+          minimumLauncherVersion: "1.0.0",
+          protocol: 3,
+          created: "2026-01-01T00:00:00.000Z",
+          clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+          serverManifest: "/api/v1/releases/2.0.0/server-manifest",
         });
       }
       if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
         return Response.json({
+          schemaVersion: 2,
           pack: "Lampas 2",
           version: "2.0.0",
+          target: "client",
           minecraft: "26.2",
           loader: { type: "fabric", version: "0.19.3" },
+          protocol: 3,
           files: manifestFiles,
           mods: [],
         });
@@ -108,12 +128,15 @@ async function runWarmSyncBenchmark(): Promise<BenchmarkResult> {
     },
   });
 
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.set({
     portalUrl: `http://127.0.0.1:${server.port}`,
     selectedChannel: "stable",
     gameDir,
   });
-  ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "bench-token" });
+  ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+    token: "bench-token",
+  });
 
   try {
     // Warm run
@@ -133,6 +156,7 @@ async function runWarmSyncBenchmark(): Promise<BenchmarkResult> {
     };
   } finally {
     server.stop(true);
+    PortalPolicy.resetForTesting();
   }
 }
 
@@ -160,7 +184,7 @@ async function runFullRepairBenchmark(): Promise<BenchmarkResult> {
       path: relPath,
       hashes: { sha256 },
       size: content.length,
-      download: { url: `/blobs/${sha256}` },
+      download: { url: `/blobs/${sha256}`, provider: "lampas" },
       policy: "MANAGED",
     });
   }
@@ -172,22 +196,35 @@ async function runFullRepairBenchmark(): Promise<BenchmarkResult> {
       requestCount++;
       const url = new URL(req.url);
       if (url.pathname === "/api/v1/channels/stable") {
-        return Response.json({ channel: "stable", version: "2.0.0" });
+        return Response.json({
+          channel: "stable",
+          version: "2.0.0",
+          release: "/api/v1/releases/2.0.0",
+        });
       }
       if (url.pathname === "/api/v1/releases/2.0.0") {
         return Response.json({
+          schemaVersion: 1,
           pack: "Lampas 2",
           version: "2.0.0",
           minecraft: "26.2",
           loader: { type: "fabric", version: "0.19.3" },
+          minimumLauncherVersion: "1.0.0",
+          protocol: 3,
+          created: "2026-01-01T00:00:00.000Z",
+          clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+          serverManifest: "/api/v1/releases/2.0.0/server-manifest",
         });
       }
       if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
         return Response.json({
+          schemaVersion: 2,
           pack: "Lampas 2",
           version: "2.0.0",
+          target: "client",
           minecraft: "26.2",
           loader: { type: "fabric", version: "0.19.3" },
+          protocol: 3,
           files: manifestFiles,
           mods: [],
         });
@@ -196,12 +233,15 @@ async function runFullRepairBenchmark(): Promise<BenchmarkResult> {
     },
   });
 
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.set({
     portalUrl: `http://127.0.0.1:${server.port}`,
     selectedChannel: "stable",
     gameDir,
   });
-  ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "bench-token" });
+  ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+    token: "bench-token",
+  });
 
   try {
     const start = performance.now();
@@ -221,6 +261,7 @@ async function runFullRepairBenchmark(): Promise<BenchmarkResult> {
     };
   } finally {
     server.stop(true);
+    PortalPolicy.resetForTesting();
   }
 }
 
@@ -235,7 +276,10 @@ async function runDirectoryMoveBenchmark(): Promise<BenchmarkResult> {
 
   const fileCount = 150;
   for (let i = 0; i < fileCount; i++) {
-    fs.writeFileSync(path.join(moveSrc, "mods", `item-${i}.jar`), `jar-data-${i}-`.repeat(50));
+    fs.writeFileSync(
+      path.join(moveSrc, "mods", `item-${i}.jar`),
+      `jar-data-${i}-`.repeat(50),
+    );
   }
   fs.writeFileSync(path.join(moveSrc, "options.txt"), "gamma:1.0\nfov:90\n");
   fs.writeFileSync(path.join(moveSrc, "servers.dat"), "server-data-bytes");
@@ -320,7 +364,9 @@ async function runLogStormBenchmark(iterations = 3): Promise<BenchmarkResult> {
 
     const pStart = performance.now();
     for (let i = 0; i < lineCount; i++) {
-      LauncherLogger.info(`[Game Log Worker ${i % 4}] Server tick took ${(i % 50).toFixed(2)}ms, entities: ${i * 2}`);
+      LauncherLogger.info(
+        `[Game Log Worker ${i % 4}] Server tick took ${(i % 50).toFixed(2)}ms, entities: ${i * 2}`,
+      );
     }
     const pEnd = performance.now();
     const producerMs = pEnd - pStart;
@@ -337,7 +383,8 @@ async function runLogStormBenchmark(iterations = 3): Promise<BenchmarkResult> {
 
     const totalMs = producerMs + flushMs;
     const p99 = Math.round((ald.percentile(99) / 1_000_000) * 100) / 100;
-    const maxLag = Math.round(Math.max(maxImmediateLagMs, ald.max / 1_000_000) * 100) / 100;
+    const maxLag =
+      Math.round(Math.max(maxImmediateLagMs, ald.max / 1_000_000) * 100) / 100;
 
     rawRuns.push({
       run: r,
@@ -356,13 +403,26 @@ async function runLogStormBenchmark(iterations = 3): Promise<BenchmarkResult> {
 
   console.log = origConsoleLog;
 
-  const avgProducer = Math.round((rawRuns.reduce((s, r) => s + r.producerWallTimeMs, 0) / rawRuns.length) * 100) / 100;
-  const avgFlush = Math.round((rawRuns.reduce((s, r) => s + r.flushWallTimeMs, 0) / rawRuns.length) * 100) / 100;
-  const avgTotal = Math.round((rawRuns.reduce((s, r) => s + r.totalWallTimeMs, 0) / rawRuns.length) * 100) / 100;
+  const avgProducer =
+    Math.round(
+      (rawRuns.reduce((s, r) => s + r.producerWallTimeMs, 0) / rawRuns.length) *
+        100,
+    ) / 100;
+  const avgFlush =
+    Math.round(
+      (rawRuns.reduce((s, r) => s + r.flushWallTimeMs, 0) / rawRuns.length) *
+        100,
+    ) / 100;
+  const avgTotal =
+    Math.round(
+      (rawRuns.reduce((s, r) => s + r.totalWallTimeMs, 0) / rawRuns.length) *
+        100,
+    ) / 100;
   const avgLinesPerSec = Math.round(lineCount / (avgTotal / 1000));
 
   return {
-    scenario: "Log Storm (20,000 entries: separated producer latency & completed disk writes)",
+    scenario:
+      "Log Storm (20,000 entries: separated producer latency & completed disk writes)",
     durationMs: avgTotal,
     details: {
       platform: `${os.platform()} ${os.release()} (${os.arch()})`,
@@ -388,14 +448,25 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
       name: `Performance Optimization Mod ${i}`,
       description: `Essential FPS boosting and memory management tool number ${i} for Lampas SMP.`,
       filename: `mod-${i}.jar`,
-      categories: [i % 3 === 0 ? "performance" : i % 3 === 1 ? "visual" : "utility"],
+      categories: [
+        i % 3 === 0 ? "performance" : i % 3 === 1 ? "visual" : "utility",
+      ],
       required: i < 20,
       enabled: true,
       author: `Author ${i % 50}`,
     });
   }
 
-  const searchQueries = ["perf", "fps", "opt", "boost", "util", "50", "99", "nomatch"];
+  const searchQueries = [
+    "perf",
+    "fps",
+    "opt",
+    "boost",
+    "util",
+    "50",
+    "99",
+    "nomatch",
+  ];
 
   // 1. Baseline naive search (repeated lowercase allocation on keystroke)
   const startNaive = performance.now();
@@ -407,7 +478,7 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
         (m) =>
           m.name.toLowerCase().includes(lower) ||
           m.description.toLowerCase().includes(lower) ||
-          m.author.toLowerCase().includes(lower)
+          m.author.toLowerCase().includes(lower),
       );
       naiveMatches += matches.length;
     }
@@ -425,7 +496,9 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
       m.filename || "",
       m.description || "",
       ...(m.categories || []),
-    ].join(" ").toLowerCase(),
+    ]
+      .join(" ")
+      .toLowerCase(),
   }));
   const endPrecompute = performance.now();
   const precomputeDuration = endPrecompute - startPrecompute;
@@ -436,7 +509,9 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
   for (let rep = 0; rep < 5; rep++) {
     for (const q of searchQueries) {
       const lower = q.toLowerCase();
-      const matches = indexedCatalog.filter((m) => m._searchKey.includes(lower));
+      const matches = indexedCatalog.filter((m) =>
+        m._searchKey.includes(lower),
+      );
       indexedMatches += matches.length;
     }
   }
@@ -444,7 +519,8 @@ async function runModCatalogSearchBenchmark(): Promise<BenchmarkResult> {
   const searchKeyDuration = endSearchKey - startSearchKey;
 
   return {
-    scenario: "Mod Catalog Search (2,000 entries, 40 un-debounced searches: baseline vs _searchKey index)",
+    scenario:
+      "Mod Catalog Search (2,000 entries, 40 un-debounced searches: baseline vs _searchKey index)",
     durationMs: searchKeyDuration,
     details: {
       catalogSize: count,
@@ -469,33 +545,53 @@ export async function runAllBenchmarks(): Promise<BenchmarkResult[]> {
 
   const warmSyncRes = await runWarmSyncBenchmark();
   results.push(warmSyncRes);
-  console.log(`[1/5] ${warmSyncRes.scenario}: ${warmSyncRes.details.wallTimeMs} ms`);
+  console.log(
+    `[1/5] ${warmSyncRes.scenario}: ${warmSyncRes.details.wallTimeMs} ms`,
+  );
 
   const fullRepairRes = await runFullRepairBenchmark();
   results.push(fullRepairRes);
-  console.log(`[2/5] ${fullRepairRes.scenario}: ${fullRepairRes.details.wallTimeMs} ms`);
+  console.log(
+    `[2/5] ${fullRepairRes.scenario}: ${fullRepairRes.details.wallTimeMs} ms`,
+  );
 
   const moveRes = await runDirectoryMoveBenchmark();
   results.push(moveRes);
-  console.log(`[3/5] ${moveRes.scenario}: Rename ${moveRes.details.renameWallTimeMs} ms | Copy+Verify ${moveRes.details.copyVerifyWallTimeMs} ms`);
+  console.log(
+    `[3/5] ${moveRes.scenario}: Rename ${moveRes.details.renameWallTimeMs} ms | Copy+Verify ${moveRes.details.copyVerifyWallTimeMs} ms`,
+  );
 
   const logStormRes = await runLogStormBenchmark(3);
   results.push(logStormRes);
   console.log(`[4/5] ${logStormRes.scenario}:`);
-  console.log(`      Producer Enqueue Avg: ${logStormRes.details.avgProducerWallTimeMs} ms`);
-  console.log(`      Disk Flush Avg:       ${logStormRes.details.avgFlushWallTimeMs} ms`);
-  console.log(`      Total Wall Time Avg:  ${logStormRes.details.avgTotalWallTimeMs} ms (${logStormRes.details.avgLinesPerSec} lines/sec)`);
+  console.log(
+    `      Producer Enqueue Avg: ${logStormRes.details.avgProducerWallTimeMs} ms`,
+  );
+  console.log(
+    `      Disk Flush Avg:       ${logStormRes.details.avgFlushWallTimeMs} ms`,
+  );
+  console.log(
+    `      Total Wall Time Avg:  ${logStormRes.details.avgTotalWallTimeMs} ms (${logStormRes.details.avgLinesPerSec} input entries/sec, including dropped entries)`,
+  );
   console.log(`      Raw Runs (3 reps):`);
   for (const r of logStormRes.details.rawRuns) {
-    console.log(`        Run ${r.run}: producer=${r.producerWallTimeMs}ms, flush=${r.flushWallTimeMs}ms, total=${r.totalWallTimeMs}ms, produced=${r.produced}, written=${r.written}, dropped=${r.dropped}, maxLag=${r.eventLoopLagMaxMs}ms`);
+    console.log(
+      `        Run ${r.run}: producer=${r.producerWallTimeMs}ms, flush=${r.flushWallTimeMs}ms, total=${r.totalWallTimeMs}ms, produced=${r.produced}, written=${r.written}, dropped=${r.dropped}, maxLag=${r.eventLoopLagMaxMs}ms`,
+    );
   }
 
   const catalogRes = await runModCatalogSearchBenchmark();
   results.push(catalogRes);
   console.log(`[5/5] ${catalogRes.scenario}:`);
-  console.log(`      Baseline Naive Search:    ${catalogRes.details.baselineNaiveWallTimeMs} ms`);
-  console.log(`      Ingestion Precompute:     ${catalogRes.details.precomputeIndexMs} ms`);
-  console.log(`      Production _searchKey:   ${catalogRes.details.searchKeyWallTimeMs} ms (avg ${catalogRes.details.searchKeyAvgPerSearchMs} ms/search, ${catalogRes.details.speedup} faster)`);
+  console.log(
+    `      Baseline Naive Search:    ${catalogRes.details.baselineNaiveWallTimeMs} ms`,
+  );
+  console.log(
+    `      Ingestion Precompute:     ${catalogRes.details.precomputeIndexMs} ms`,
+  );
+  console.log(
+    `      Production _searchKey:   ${catalogRes.details.searchKeyWallTimeMs} ms (avg ${catalogRes.details.searchKeyAvgPerSearchMs} ms/search, ${catalogRes.details.speedup} faster)`,
+  );
 
   // Cleanup bench directory
   try {

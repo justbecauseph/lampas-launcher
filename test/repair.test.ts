@@ -1,4 +1,13 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,28 +39,31 @@ const { LauncherSync } = await import("../src/sync");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { JavaRuntimeManager } = await import("../src/java-runtime");
 
-const bootstrapSpy = spyOn(MinecraftBootstrap, "prepareGameEnvironment").mockImplementation(async (
-  targetDir: string,
-  runtime: any,
-  _onLog: any,
-  verificationMode?: string
-) => {
-  bootstrapCalls.push({ gameDir: targetDir, runtime, verificationMode });
-  return {
-    classpath: ["C:\\Game\\libraries\\fabric.jar"],
-    mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
-    assetIndex: "26.2",
-  };
-});
+const bootstrapSpy = spyOn(
+  MinecraftBootstrap,
+  "prepareGameEnvironment",
+).mockImplementation(
+  async (
+    targetDir: string,
+    runtime: any,
+    _onLog: any,
+    verificationMode?: string,
+  ) => {
+    bootstrapCalls.push({ gameDir: targetDir, runtime, verificationMode });
+    return {
+      classpath: ["C:\\Game\\libraries\\fabric.jar"],
+      mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      assetIndex: "26.2",
+    };
+  },
+);
 
-const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(async (
-  targetDir: string,
-  _onLog: any,
-  mode?: string
-) => {
-  javaCalls.push({ gameDir: targetDir, mode });
-  return "C:\\Java25\\bin\\java.exe";
-});
+const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(
+  async (targetDir: string, _onLog: any, mode?: string) => {
+    javaCalls.push({ gameDir: targetDir, mode });
+    return "C:\\Java25\\bin\\java.exe";
+  },
+);
 
 beforeAll(() => {
   fs.mkdirSync(userDataDir, { recursive: true });
@@ -96,22 +108,35 @@ describe("LauncherSync.repairInstallation runtime forwarding (PLAN.md Part E & S
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: sentinelVersion },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: sentinelVersion },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -120,7 +145,9 @@ describe("LauncherSync.repairInstallation runtime forwarding (PLAN.md Part E & S
       },
     });
 
-    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, { token: "mock-token" });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       const result = await LauncherSync.repairInstallation(() => {});

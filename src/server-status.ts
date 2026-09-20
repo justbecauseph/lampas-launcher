@@ -1,4 +1,8 @@
-import { ConfigManager, normalizePortalUrl, PortalRedirectPolicyError } from "./config";
+import {
+  ConfigManager,
+  normalizePortalUrl,
+  PortalRedirectPolicyError,
+} from "./config";
 import { LauncherLogger } from "./logger";
 import type {
   MinecraftServerState,
@@ -32,17 +36,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function requireRecord(value: unknown, name: string): Record<string, unknown> {
-  if (!isRecord(value)) throw new Error(`Invalid server status response: ${name} must be an object`);
+  if (!isRecord(value))
+    throw new Error(
+      `Invalid server status response: ${name} must be an object`,
+    );
   return value;
 }
 
 function parsePlayer(value: unknown, index: number): OnlineMinecraftPlayer {
   const player = requireRecord(value, `players.list[${index}]`);
   if (typeof player.uuid !== "string" || !player.uuid.trim()) {
-    throw new Error(`Invalid server status response: players.list[${index}].uuid must be a string`);
+    throw new Error(
+      `Invalid server status response: players.list[${index}].uuid must be a string`,
+    );
   }
   if (typeof player.username !== "string" || !player.username.trim()) {
-    throw new Error(`Invalid server status response: players.list[${index}].username must be a string`);
+    throw new Error(
+      `Invalid server status response: players.list[${index}].username must be a string`,
+    );
   }
   return { uuid: player.uuid, username: player.username };
 }
@@ -54,27 +65,48 @@ export function parseServerStatus(value: unknown): ServerStatus {
   const players = requireRecord(root.players, "players");
   const presence = requireRecord(root.presence, "presence");
 
-  if (typeof server.state !== "string" || !SERVER_STATES.has(server.state as MinecraftServerState)) {
-    throw new Error("Invalid server status response: server.state is not supported");
+  if (
+    typeof server.state !== "string" ||
+    !SERVER_STATES.has(server.state as MinecraftServerState)
+  ) {
+    throw new Error(
+      "Invalid server status response: server.state is not supported",
+    );
   }
   if (typeof server.managementConnected !== "boolean") {
-    throw new Error("Invalid server status response: server.managementConnected must be a boolean");
+    throw new Error(
+      "Invalid server status response: server.managementConnected must be a boolean",
+    );
   }
 
   const online = players.online;
-  if (online !== null && (typeof online !== "number" || !Number.isInteger(online) || online < 0)) {
-    throw new Error("Invalid server status response: players.online must be a non-negative integer or null");
+  if (
+    online !== null &&
+    (typeof online !== "number" || !Number.isInteger(online) || online < 0)
+  ) {
+    throw new Error(
+      "Invalid server status response: players.online must be a non-negative integer or null",
+    );
   }
   if (!Array.isArray(players.list)) {
-    throw new Error("Invalid server status response: players.list must be an array");
+    throw new Error(
+      "Invalid server status response: players.list must be an array",
+    );
   }
   const list = players.list.map(parsePlayer);
 
-  if (typeof presence.freshness !== "string" || !PRESENCE_FRESHNESS.has(presence.freshness as PresenceFreshness)) {
-    throw new Error("Invalid server status response: presence.freshness is not supported");
+  if (
+    typeof presence.freshness !== "string" ||
+    !PRESENCE_FRESHNESS.has(presence.freshness as PresenceFreshness)
+  ) {
+    throw new Error(
+      "Invalid server status response: presence.freshness is not supported",
+    );
   }
   if (presence.updatedAt !== null && typeof presence.updatedAt !== "string") {
-    throw new Error("Invalid server status response: presence.updatedAt must be a string or null");
+    throw new Error(
+      "Invalid server status response: presence.updatedAt must be a string or null",
+    );
   }
 
   return {
@@ -91,10 +123,16 @@ export function parseServerStatus(value: unknown): ServerStatus {
 }
 
 export class ServerStatusClient {
-  static async getStatus(options: ServerStatusRequestOptions = {}): Promise<ServerStatus> {
+  static async getStatus(
+    options: ServerStatusRequestOptions = {},
+  ): Promise<ServerStatus> {
     const config = ConfigManager.get();
     const portalUrl = normalizePortalUrl(config.portalUrl);
-    if (!config.token || !config.sessionPortalUrl || config.sessionPortalUrl !== portalUrl) {
+    if (
+      !config.token ||
+      !config.sessionPortalUrl ||
+      config.sessionPortalUrl !== portalUrl
+    ) {
       throw new Error("Portal session is not available");
     }
 
@@ -118,20 +156,47 @@ export class ServerStatusClient {
       });
       const durationMs = Date.now() - startedAt;
 
-      if ((response.status >= 300 && response.status < 400) || response.type === "opaqueredirect") {
-        LauncherLogger.logApiResponse("GET", url, response.status, durationMs, "Redirect rejected");
-        throw new PortalRedirectPolicyError(response.status, response.headers.get("location"), url);
+      if (
+        (response.status >= 300 && response.status < 400) ||
+        response.type === "opaqueredirect"
+      ) {
+        await response.body?.cancel().catch(() => undefined);
+        LauncherLogger.logApiResponse(
+          "GET",
+          url,
+          response.status,
+          durationMs,
+          "Redirect rejected",
+        );
+        throw new PortalRedirectPolicyError(
+          response.status,
+          response.headers.get("location"),
+          url,
+        );
       }
 
       if (!response.ok) {
-        LauncherLogger.logApiResponse("GET", url, response.status, durationMs, response.statusText);
+        await response.body?.cancel().catch(() => undefined);
+        LauncherLogger.logApiResponse(
+          "GET",
+          url,
+          response.status,
+          durationMs,
+          response.statusText,
+        );
         throw new Error(`Server status request failed (${response.status})`);
       }
 
       let payload: unknown;
       try {
-        payload = await response.json();
-      } catch {
+        const { readResponseJson } = await import("./transfer-limits");
+        payload = await readResponseJson(
+          response,
+          1024 * 1024,
+          controller.signal,
+        );
+      } catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason || error;
         throw new Error("Server status response was not valid JSON");
       }
 
@@ -141,13 +206,16 @@ export class ServerStatusClient {
         players: status.players.online,
         freshness: status.presence.freshness,
       });
-      LauncherLogger.info(`[ServerStatus] ${status.server.state}, players=${status.players.online ?? "unknown"}, freshness=${status.presence.freshness}`);
+      LauncherLogger.info(
+        `[ServerStatus] ${status.server.state}, players=${status.players.online ?? "unknown"}, freshness=${status.presence.freshness}`,
+      );
       return status;
     } catch (error: any) {
       const durationMs = Date.now() - startedAt;
-      const message = error?.name === "AbortError"
-        ? `Server status request timed out after ${timeoutMs}ms`
-        : error?.message || String(error);
+      const message =
+        error?.name === "AbortError"
+          ? `Server status request timed out after ${timeoutMs}ms`
+          : error?.message || String(error);
       const normalizedError = new Error(message, { cause: error });
       LauncherLogger.logApiError("GET", url, normalizedError, durationMs);
       throw normalizedError;

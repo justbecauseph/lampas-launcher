@@ -10,10 +10,14 @@ import {
 describe("Phase 1 — runBoundedPool", () => {
   test("empty pool returns empty array immediately", async () => {
     let workerCalled = false;
-    const result = await runBoundedPool([], async () => {
-      workerCalled = true;
-      return "never";
-    }, { concurrency: 4 });
+    const result = await runBoundedPool(
+      [],
+      async () => {
+        workerCalled = true;
+        return "never";
+      },
+      { concurrency: 4 },
+    );
 
     expect(result).toEqual([]);
     expect(workerCalled).toBe(false);
@@ -33,7 +37,7 @@ describe("Phase 1 — runBoundedPool", () => {
         activeConcurrency--;
         return item * 2;
       },
-      { concurrency: 3 }
+      { concurrency: 3 },
     );
 
     expect(maxConcurrency).toBeLessThanOrEqual(3);
@@ -52,7 +56,7 @@ describe("Phase 1 — runBoundedPool", () => {
         completionOrder.push(index);
         return `item-${index}`;
       },
-      { concurrency: 4 }
+      { concurrency: 4 },
     );
 
     // Completion order was out of order
@@ -73,8 +77,8 @@ describe("Phase 1 — runBoundedPool", () => {
           invokedCount++;
           return true;
         },
-        { concurrency: 2, signal: controller.signal }
-      )
+        { concurrency: 2, signal: controller.signal },
+      ),
     ).rejects.toThrow();
 
     expect(invokedCount).toBe(0);
@@ -103,7 +107,7 @@ describe("Phase 1 — runBoundedPool", () => {
           });
         });
       },
-      { concurrency: 2, signal: controller.signal }
+      { concurrency: 2, signal: controller.signal },
     );
 
     await expect(poolPromise).rejects.toThrow("Mid-flight abort");
@@ -149,7 +153,7 @@ describe("Phase 1 — runBoundedPool", () => {
         // Subsequent items should never be scheduled
         return "unreachable";
       },
-      { concurrency: 2 }
+      { concurrency: 2 },
     );
 
     await expect(poolPromise).rejects.toThrow("Worker 0 fatal disk error");
@@ -173,7 +177,7 @@ describe("Phase 1 — runBoundedPool", () => {
         writes.push(item);
         return item;
       },
-      { concurrency: 1 }
+      { concurrency: 1 },
     );
 
     await expect(promise).rejects.toThrow("Immediate failure");
@@ -229,7 +233,7 @@ describe("Phase 1 — OperationSingleFlight", () => {
 
     // Incompatible identity for the same destination path while task 1 is in-flight
     await expect(
-      singleFlight.do(dest, identity2, async () => "task2-result")
+      singleFlight.do(dest, identity2, async () => "task2-result"),
     ).rejects.toThrow(TaskConflictError);
 
     // Ensure task 1 completes successfully

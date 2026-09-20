@@ -25,7 +25,8 @@ export interface StoredCredentialRecord {
   updatedAt: number;
 }
 
-export type StorageBackendType = "windows_dpapi" | "linux_keyring" | "session_only";
+export type StorageBackendType =
+  "windows_dpapi" | "linux_keyring" | "session_only";
 
 export interface SaveCredentialsResult {
   success: boolean;
@@ -127,11 +128,17 @@ export class CredentialStore {
       }
 
       if (process.platform === "linux") {
-        const backend = typeof storage.getSelectedStorageBackend === "function"
-          ? storage.getSelectedStorageBackend()
-          : "unknown";
+        const backend =
+          typeof storage.getSelectedStorageBackend === "function"
+            ? storage.getSelectedStorageBackend()
+            : "unknown";
 
-        const approvedLinuxBackends = ["gnome_libsecret", "kwallet", "kwallet5", "kwallet6"];
+        const approvedLinuxBackends = [
+          "gnome_libsecret",
+          "kwallet",
+          "kwallet5",
+          "kwallet6",
+        ];
         if (approvedLinuxBackends.includes(backend)) {
           return "linux_keyring";
         }
@@ -159,12 +166,26 @@ export class CredentialStore {
     if (!record || typeof record !== "object") return false;
     const v = record.version ?? record.schemaVersion;
     if (v !== 1) return false;
-    if (typeof record.portalUrl !== "string" || !record.portalUrl.trim()) return false;
+    if (typeof record.portalUrl !== "string" || !record.portalUrl.trim())
+      return false;
 
-    if (record.portalAccountId !== undefined && typeof record.portalAccountId !== "string") return false;
-    if (record.accountId !== undefined && typeof record.accountId !== "string") return false;
-    if (record.portalUsername !== undefined && typeof record.portalUsername !== "string") return false;
-    if (record.accountUsername !== undefined && typeof record.accountUsername !== "string") return false;
+    if (
+      record.portalAccountId !== undefined &&
+      typeof record.portalAccountId !== "string"
+    )
+      return false;
+    if (record.accountId !== undefined && typeof record.accountId !== "string")
+      return false;
+    if (
+      record.portalUsername !== undefined &&
+      typeof record.portalUsername !== "string"
+    )
+      return false;
+    if (
+      record.accountUsername !== undefined &&
+      typeof record.accountUsername !== "string"
+    )
+      return false;
 
     const rawAccountId = record.portalAccountId ?? record.accountId;
     if (typeof rawAccountId !== "string") return false;
@@ -191,18 +212,37 @@ export class CredentialStore {
     }
 
     if (typeof record.token !== "string" || !record.token.trim()) return false;
-    if (record.refreshToken !== undefined && typeof record.refreshToken !== "string") return false;
-    if (record.minecraftAccessToken !== undefined && typeof record.minecraftAccessToken !== "string") return false;
+    if (
+      record.refreshToken !== undefined &&
+      typeof record.refreshToken !== "string"
+    )
+      return false;
+    if (
+      record.minecraftAccessToken !== undefined &&
+      typeof record.minecraftAccessToken !== "string"
+    )
+      return false;
     if (record.minecraftUuid !== undefined) {
       if (typeof record.minecraftUuid !== "string") return false;
       const trimmedUuid = record.minecraftUuid.trim();
-      if (!/^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$/.test(trimmedUuid)) return false;
-      if (/^(?:0{8}-0{4}-0{4}-0{4}-0{12}|0{32})$/.test(trimmedUuid)) return false;
+      if (
+        !/^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$/.test(
+          trimmedUuid,
+        )
+      )
+        return false;
+      if (/^(?:0{8}-0{4}-0{4}-0{4}-0{12}|0{32})$/.test(trimmedUuid))
+        return false;
     }
     if (record.minecraftUsername !== undefined) {
       if (typeof record.minecraftUsername !== "string") return false;
       const trimmedName = record.minecraftUsername.trim();
-      if (!trimmedName || trimmedName.toLowerCase() === "player" || trimmedName.toLowerCase() === "account") return false;
+      if (
+        !trimmedName ||
+        trimmedName.toLowerCase() === "player" ||
+        trimmedName.toLowerCase() === "account"
+      )
+        return false;
     }
     return true;
   }
@@ -211,7 +251,9 @@ export class CredentialStore {
    * Atomically encrypts and persists credentials to disk.
    * If the detected storage provider is "session_only", disk persistence is skipped.
    */
-  static saveCredentials(record: StoredCredentialRecord): SaveCredentialsResult {
+  static saveCredentials(
+    record: StoredCredentialRecord,
+  ): SaveCredentialsResult {
     if (!this.validateRecord(record)) {
       const err = "Invalid credential record schema";
       this.lastPersistenceError = err;
@@ -225,7 +267,9 @@ export class CredentialStore {
 
     const backend = this.detectStorageBackend();
     if (backend === "session_only") {
-      LauncherLogger.info("[CredentialStore] Operating in session-only mode; secrets held in memory only.");
+      LauncherLogger.info(
+        "[CredentialStore] Operating in session-only mode; secrets held in memory only.",
+      );
       this.lastPersistenceError = null;
       return { success: true, backend: "session_only", sessionOnly: true };
     }
@@ -273,13 +317,13 @@ export class CredentialStore {
       // Hardening: exclusive unique temporary file with O_CREAT | O_EXCL and 0o600 mode
       const uniqueTemp = path.join(
         dir,
-        `credentials.enc.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(8).toString("hex")}`
+        `credentials.enc.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(8).toString("hex")}`,
       );
 
       const fd = fs.openSync(
         uniqueTemp,
         fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-        0o600
+        0o600,
       );
 
       try {
@@ -289,10 +333,12 @@ export class CredentialStore {
             fd,
             encryptedBuffer,
             totalWritten,
-            encryptedBuffer.length - totalWritten
+            encryptedBuffer.length - totalWritten,
           );
           if (written <= 0) {
-            throw new Error("Zero-progress write encountered during credential persistence");
+            throw new Error(
+              "Zero-progress write encountered during credential persistence",
+            );
           }
           totalWritten += written;
         }
@@ -303,9 +349,17 @@ export class CredentialStore {
 
       // Verify created temporary file: regular file, no symlink, and no pre-existing hardlinks
       const stats = fs.lstatSync(uniqueTemp);
-      if (!stats.isFile() || stats.isSymbolicLink() || (typeof stats.nlink === "number" && stats.nlink > 1)) {
-        try { fs.unlinkSync(uniqueTemp); } catch {}
-        throw new Error("Temporary credential file verification failed: irregular file or hardlink detected");
+      if (
+        !stats.isFile() ||
+        stats.isSymbolicLink() ||
+        (typeof stats.nlink === "number" && stats.nlink > 1)
+      ) {
+        try {
+          fs.unlinkSync(uniqueTemp);
+        } catch {}
+        throw new Error(
+          "Temporary credential file verification failed: irregular file or hardlink detected",
+        );
       }
 
       // Atomic rename temporary file over target destination FIRST.
@@ -324,21 +378,33 @@ export class CredentialStore {
         try {
           fs.unlinkSync(markerFile);
         } catch (markerErr: any) {
-          try { fs.unlinkSync(targetFile); } catch {}
-          const safeErr = "Failed to clear invalidation marker after credential commit";
+          try {
+            fs.unlinkSync(targetFile);
+          } catch {}
+          const safeErr =
+            "Failed to clear invalidation marker after credential commit";
           this.lastPersistenceError = safeErr;
           LauncherLogger.error(`[CredentialStore] ${safeErr}`);
-          return { success: false, backend, sessionOnly: false, error: safeErr };
+          return {
+            success: false,
+            backend,
+            sessionOnly: false,
+            error: safeErr,
+          };
         }
       }
 
       this.lastPersistenceError = null;
-      LauncherLogger.info(`[CredentialStore] Credentials protected and persisted via ${backend}`);
+      LauncherLogger.info(
+        `[CredentialStore] Credentials protected and persisted via ${backend}`,
+      );
       return { success: true, backend, sessionOnly: false };
     } catch (err: any) {
       const sanitizedMsg = sanitizeProviderError(err, "encrypt");
       this.lastPersistenceError = sanitizedMsg;
-      LauncherLogger.error(`[CredentialStore] Failed to persist protected credentials: ${sanitizedMsg}`);
+      LauncherLogger.error(
+        `[CredentialStore] Failed to persist protected credentials: ${sanitizedMsg}`,
+      );
       // Clean up any temporary files matching credentials.enc.tmp* in directory
       try {
         const dir = this.getCredentialsDir();
@@ -346,12 +412,19 @@ export class CredentialStore {
           const files = fs.readdirSync(dir);
           for (const f of files) {
             if (f.startsWith("credentials.enc.tmp")) {
-              try { fs.unlinkSync(path.join(dir, f)); } catch {}
+              try {
+                fs.unlinkSync(path.join(dir, f));
+              } catch {}
             }
           }
         }
       } catch {}
-      return { success: false, backend, sessionOnly: false, error: sanitizedMsg };
+      return {
+        success: false,
+        backend,
+        sessionOnly: false,
+        error: sanitizedMsg,
+      };
     }
   }
 
@@ -368,7 +441,9 @@ export class CredentialStore {
 
     const markerFile = this.getInvalidationMarkerPath();
     if (fs.existsSync(markerFile)) {
-      LauncherLogger.warn("[CredentialStore] Durable invalidation marker exists; refusing to load stale credentials.");
+      LauncherLogger.warn(
+        "[CredentialStore] Durable invalidation marker exists; refusing to load stale credentials.",
+      );
       try {
         if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
         fs.unlinkSync(markerFile);
@@ -378,7 +453,9 @@ export class CredentialStore {
 
     const backend = this.detectStorageBackend();
     if (backend === "session_only") {
-      LauncherLogger.warn("[CredentialStore] Encrypted credentials exist on disk but current backend is session-only; refusing to load.");
+      LauncherLogger.warn(
+        "[CredentialStore] Encrypted credentials exist on disk but current backend is session-only; refusing to load.",
+      );
       return null;
     }
 
@@ -393,7 +470,9 @@ export class CredentialStore {
       try {
         decrypted = storage.decryptString(encryptedBuffer);
       } catch (decErr: any) {
-        LauncherLogger.warn(`[CredentialStore] Decryption failed (${sanitizeProviderError(decErr, "decrypt")})`);
+        LauncherLogger.warn(
+          `[CredentialStore] Decryption failed (${sanitizeProviderError(decErr, "decrypt")})`,
+        );
         this.clearCredentials();
         return null;
       }
@@ -402,13 +481,17 @@ export class CredentialStore {
       try {
         parsed = JSON.parse(decrypted);
       } catch {
-        LauncherLogger.warn("[CredentialStore] Stored credentials JSON invalid; clearing credentials file.");
+        LauncherLogger.warn(
+          "[CredentialStore] Stored credentials JSON invalid; clearing credentials file.",
+        );
         this.clearCredentials();
         return null;
       }
 
       if (!this.validateRecord(parsed)) {
-        LauncherLogger.warn("[CredentialStore] Stored credentials failed schema validation; clearing credentials file.");
+        LauncherLogger.warn(
+          "[CredentialStore] Stored credentials failed schema validation; clearing credentials file.",
+        );
         this.clearCredentials();
         return null;
       }
@@ -429,7 +512,9 @@ export class CredentialStore {
 
       return normalized;
     } catch (err: any) {
-      LauncherLogger.error(`[CredentialStore] Failed to load credentials: ${err.message}`);
+      LauncherLogger.error(
+        `[CredentialStore] Failed to load credentials: ${err.message}`,
+      );
       return null;
     }
   }
@@ -456,7 +541,9 @@ export class CredentialStore {
       } catch (err: any) {
         error = sanitizeCleanupError(err);
         this.lastCleanupError = error;
-        LauncherLogger.warn(`[CredentialStore] Could not delete stored credentials: ${error}`);
+        LauncherLogger.warn(
+          `[CredentialStore] Could not delete stored credentials: ${error}`,
+        );
         // Attempt overwrite with empty buffer so corrupt bytes cannot decrypt
         try {
           fs.writeFileSync(targetFile, Buffer.alloc(0));
@@ -464,7 +551,11 @@ export class CredentialStore {
         } catch {}
         // Write durable invalidation marker so restart cannot resurrect old credentials
         try {
-          fs.writeFileSync(markerFile, JSON.stringify({ invalidatedAt: Date.now(), error }), { mode: 0o600 });
+          fs.writeFileSync(
+            markerFile,
+            JSON.stringify({ invalidatedAt: Date.now(), error }),
+            { mode: 0o600 },
+          );
           markerWritten = fs.existsSync(markerFile);
         } catch {}
       }
@@ -502,7 +593,8 @@ export class CredentialStore {
       this.lastCleanupError = null;
     }
 
-    const durablyInvalidated = !targetExisted || deletedTarget || destroyedTarget || markerWritten;
+    const durablyInvalidated =
+      !targetExisted || deletedTarget || destroyedTarget || markerWritten;
     const success = !error;
     return {
       success,
@@ -515,16 +607,35 @@ export class CredentialStore {
   }
 }
 
-function sanitizeProviderError(err: any, operation: "encrypt" | "decrypt"): string {
+function sanitizeProviderError(
+  err: any,
+  operation: "encrypt" | "decrypt",
+): string {
   if (!err) return `${operation} operation failed`;
   const msg = (err.message || String(err)).toLowerCase();
-  if (msg.includes("revoked") || msg.includes("denied") || msg.includes("permission") || msg.includes("eacces") || msg.includes("eperm")) {
+  if (
+    msg.includes("revoked") ||
+    msg.includes("denied") ||
+    msg.includes("permission") ||
+    msg.includes("eacces") ||
+    msg.includes("eperm")
+  ) {
     return "Secure storage access denied by system policy";
   }
-  if (msg.includes("locked") || msg.includes("unavailable") || msg.includes("daemon") || msg.includes("keyring")) {
+  if (
+    msg.includes("locked") ||
+    msg.includes("unavailable") ||
+    msg.includes("daemon") ||
+    msg.includes("keyring")
+  ) {
     return "Secure storage provider is locked or unavailable";
   }
-  if (msg.includes("ciphertext") || msg.includes("corrupt") || msg.includes("payload") || msg.includes("invalid")) {
+  if (
+    msg.includes("ciphertext") ||
+    msg.includes("corrupt") ||
+    msg.includes("payload") ||
+    msg.includes("invalid")
+  ) {
     return "Stored credentials failed integrity or decryption check";
   }
   if (msg.includes("full") || msg.includes("space") || msg.includes("enospc")) {
@@ -539,7 +650,12 @@ function sanitizeCleanupError(err: any): string {
   if (msg.includes("busy") || msg.includes("locked") || msg.includes("ebusy")) {
     return "Failed to delete stored credentials file: resource busy or locked";
   }
-  if (msg.includes("permission") || msg.includes("eacces") || msg.includes("eperm") || msg.includes("denied")) {
+  if (
+    msg.includes("permission") ||
+    msg.includes("eacces") ||
+    msg.includes("eperm") ||
+    msg.includes("denied")
+  ) {
     return "Failed to delete stored credentials file: permission denied";
   }
   return "Failed to delete stored credentials file: disk error";
