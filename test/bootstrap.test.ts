@@ -9,12 +9,74 @@ mock.module("electron", () => ({
   shell: { openExternal: async () => undefined },
 }));
 
-const { MinecraftBootstrap, parseMavenCoordinate, mavenToPath } =
-  await import("../src/minecraft-bootstrap");
+const {
+  MinecraftBootstrap,
+  parseMavenCoordinate,
+  mavenToPath,
+  isLibraryAllowed,
+} = await import("../src/minecraft-bootstrap");
+import versionMetadata from "../src/version-meta-26.2.json";
+import type { MavenCoordinate } from "../src/minecraft-bootstrap";
 const { PortalPolicy } = await import("../src/config");
 import type { MinecraftRuntimeDefinition } from "../src/types";
 
 describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)", () => {
+  test("selects one FreeType native for each architecture from the actual pinned metadata", () => {
+    const libraries = versionMetadata.libraries as MavenCoordinate[];
+    for (const [platform, arch, artifact] of [
+      ["win32", "x64", "lwjgl-freetype-natives-windows"],
+      ["win32", "ia32", "lwjgl-freetype-natives-windows-x86"],
+      ["win32", "arm64", "lwjgl-freetype-natives-windows-arm64"],
+      ["linux", "x64", "lwjgl-freetype-natives-linux"],
+      ["linux", "arm64", "lwjgl-freetype-natives-linux-arm64"],
+      ["darwin", "x64", "lwjgl-freetype-natives-macos"],
+      ["darwin", "arm64", "lwjgl-freetype-natives-macos-arm64"],
+    ] as const) {
+      const selected = libraries.filter((lib) =>
+        isLibraryAllowed(lib, platform, arch),
+      );
+      expect(
+        selected
+          .filter((lib) => lib.name.includes("lwjgl-freetype-natives-"))
+          .map((lib) => parseMavenCoordinate(lib.name).artifact),
+      ).toEqual([artifact]);
+      expect(
+        selected.some((lib) => lib.name === "org.lwjgl:lwjgl-freetype:3.4.1"),
+      ).toBe(true);
+    }
+  });
+
+  test("filters native classifiers even when OS rules are generic or absent", () => {
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-windows-arm64" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(false);
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-windows" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(true);
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-linux" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(false);
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-windows-unknown" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(false);
+  });
+
   test("parseMavenCoordinate correctly parses 3-part and 4-part coordinates", () => {
     const standard = parseMavenCoordinate("net.fabricmc:fabric-loader:0.19.3");
     expect(standard).toEqual({

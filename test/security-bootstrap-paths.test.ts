@@ -234,6 +234,47 @@ describe("bootstrap and Fabric metadata path ownership regressions", () => {
     expect(fs.readdirSync(path.join(gameDir, "natives"))).toEqual([]);
   });
 
+  test("fast native extraction refreshes cached outputs when archive selection changes", async () => {
+    const root = tempRoot("lampas-bootstrap-native-selection-");
+    const gameDir = path.join(root, "game");
+    fs.mkdirSync(path.join(gameDir, "natives"), { recursive: true });
+    const nativeName =
+      process.platform === "win32"
+        ? "freetype.dll"
+        : process.platform === "darwin"
+          ? "libfreetype.dylib"
+          : "libfreetype.so";
+    const oldArchive = path.join(root, "old-architecture.jar");
+    const newArchive = path.join(root, "current-architecture.jar");
+    fs.writeFileSync(
+      oldArchive,
+      zipSync({ [nativeName]: new Uint8Array([1]) }),
+    );
+    fs.writeFileSync(
+      newArchive,
+      zipSync({ [nativeName]: new Uint8Array([2]) }),
+    );
+    const extract = (archive: string) =>
+      (MinecraftBootstrap as any).ensureNatives(
+        gameDir,
+        "26.2",
+        [{ path: archive, changed: false }],
+        () => {},
+        "fast",
+      );
+    await extract(oldArchive);
+    await extract(newArchive);
+    expect([
+      ...fs.readFileSync(path.join(gameDir, "natives", nativeName)),
+    ]).toEqual([2]);
+    // An unchanged receipt must permit reuse without reopening the archive.
+    fs.unlinkSync(newArchive);
+    await extract(newArchive);
+    expect([
+      ...fs.readFileSync(path.join(gameDir, "natives", nativeName)),
+    ]).toEqual([2]);
+  });
+
   test("native repair preserves stale output when its receipt ownership hash no longer matches", async () => {
     const root = tempRoot("lampas-bootstrap-native-stale-");
     const gameDir = path.join(root, "game");

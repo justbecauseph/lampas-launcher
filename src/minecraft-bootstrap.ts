@@ -49,24 +49,46 @@ export interface MavenCoordinate {
   };
 }
 
-function isLibraryAllowed(lib: MavenCoordinate): boolean {
+export function isLibraryAllowed(
+  lib: MavenCoordinate,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): boolean {
+  const currentOs =
+    platform === "win32" ? "windows" : platform === "darwin" ? "osx" : platform;
+  const coord = parseMavenCoordinate(lib.name);
+  // The pinned metadata gives all Windows native variants a generic Windows
+  // allow rule. Select the concrete native variant before evaluating those
+  // rules; otherwise x64, x86 and ARM64 DLLs collide during extraction.
+  const native = /(?:^|-)natives-(windows|linux|macos|osx)(?:-(.+))?$/.exec(
+    coord.classifier ?? coord.artifact,
+  );
+  if (native) {
+    const nativeOs = native[1] === "macos" ? "osx" : native[1];
+    const nativeArch = {
+      x64: "x64",
+      x86: "ia32",
+      arm64: "arm64",
+      arm32: "arm",
+      riscv64: "riscv64",
+    }[native[2] || "x64"];
+    if (nativeOs !== currentOs || nativeArch !== arch) return false;
+  }
   if (!lib.rules || lib.rules.length === 0) return true;
 
-  const currentOs =
-    process.platform === "win32"
-      ? "windows"
-      : process.platform === "darwin"
-        ? "osx"
-        : "linux";
+  const metadataArch =
+    arch === "ia32" ? "x86" : arch === "arm" ? "arm32" : arch;
+  const matchesOs = (name: string) =>
+    name === currentOs || name === `${currentOs}-${metadataArch}`;
   let allowed = false;
 
   for (const rule of lib.rules) {
     if (rule.action === "allow") {
-      if (!rule.os || rule.os.name === currentOs) {
+      if (!rule.os || matchesOs(rule.os.name)) {
         allowed = true;
       }
     } else if (rule.action === "disallow") {
-      if (rule.os && rule.os.name === currentOs) {
+      if (rule.os && matchesOs(rule.os.name)) {
         allowed = false;
       }
     }
@@ -104,6 +126,7 @@ interface NativeReceipt {
   version: string;
   platform: string;
   arch: string;
+  archives: string[] | null;
   files: string[];
   fileHashes: Record<string, string>;
 }
@@ -327,6 +350,11 @@ function readNativeReceipt(
       version: minecraftVersion,
       platform: process.platform,
       arch: process.arch,
+      archives:
+        Array.isArray(raw.archives) &&
+        raw.archives.every((value) => typeof value === "string")
+          ? raw.archives
+          : null,
       files,
       fileHashes,
     };
@@ -572,7 +600,7 @@ export class MinecraftBootstrap {
 
     // 3. Download Mojang & LWJGL Libraries (Fastutil, Gson, Guava, Log4j, LWJGL, etc.)
     const allLibs = (versionMeta262.libraries || []) as MavenCoordinate[];
-    const allowedLibs = allLibs.filter(isLibraryAllowed);
+    const allowedLibs = allLibs.filter((lib) => isLibraryAllowed(lib));
     onLog(
       `[Bootstrap] Verifying ${allowedLibs.length} core game libraries (Mojang & LWJGL)...`,
     );
@@ -678,7 +706,12 @@ export class MinecraftBootstrap {
     let needsNativeExtraction = false;
     if (
       verificationMode === "full" ||
-      nativeArchives.some((archive) => archive.changed)
+      nativeArchives.some((archive) => archive.changed) ||
+      (nativeArchives.length > 0 &&
+        JSON.stringify(previousReceipt?.archives?.slice().sort()) !==
+          JSON.stringify(
+            nativeArchives.map((archive) => path.basename(archive.path)).sort(),
+          ))
     ) {
       needsNativeExtraction = true;
     } else if (!fs.existsSync(nativeMarker) && !fs.existsSync(legacyMarker)) {
