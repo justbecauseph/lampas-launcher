@@ -841,6 +841,15 @@ app.whenReady().then(async () => {
   // IPC Handlers: Sync & Repair
   registerSecureHandler("sync:start", IpcSchemas.noArgs, async () => {
     const op = OperationCoordinator.acquire("sync", "Modpack synchronization");
+    const log = (level: "INFO" | "ERROR", message: string) => {
+      const sanitized = LauncherLogger.sanitize(message);
+      LauncherLogger.log(level, sanitized);
+      logTransport?.push({
+        timestamp: new Date().toLocaleTimeString(),
+        level,
+        message: sanitized,
+      });
+    };
     const throttledProgress = op.createThrottledProgress<SyncProgress>(
       (progress) => safeSend("sync:progress", progress),
       100,
@@ -848,14 +857,27 @@ app.whenReady().then(async () => {
         p.status === "complete" || p.status === "error" || p.percent === 100,
     );
     try {
-      LauncherLogger.info("Starting modpack synchronization...");
+      log(
+        "INFO",
+        "[Sync] Starting modpack integrity verification and synchronization...",
+      );
       return await LauncherSync.syncClient((progress) => {
         if (progress.message) {
-          LauncherLogger.info(`[Sync] ${progress.message}`);
+          log(
+            progress.status === "error" ? "ERROR" : "INFO",
+            `[Sync] ${progress.message}`,
+          );
         }
         throttledProgress(progress);
       });
+    } catch (error) {
+      log(
+        "ERROR",
+        `[Sync] Verification failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
     } finally {
+      logTransport?.flushSession();
       op.release();
     }
   });
