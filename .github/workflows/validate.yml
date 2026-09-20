@@ -52,6 +52,12 @@ jobs:
       - name: Verify packaged fuses
         run: node scripts/verify-fuses.cjs
 
+      - name: Configure Linux sandbox helpers
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox release/linux-unpacked/chrome-sandbox
+
       - name: Windows packaged smoke
         if: runner.os == 'Windows'
         run: bun test/smoke/electron-smoke.ts --strict
