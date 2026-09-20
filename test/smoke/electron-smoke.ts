@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { sanitizeLogText } from "../../src/privacy";
 
 interface SmokeCheckResult {
   name: string;
@@ -80,7 +81,7 @@ async function runProcess(
       stderr += d.toString();
     });
 
-    proc.on("close", (code) => {
+    proc.on("close", (code, signal) => {
       clearTimeout(timer);
       // The Windows portable wrapper does not forward its child console. Read
       // only this invocation's fresh profile so its actual application events
@@ -93,6 +94,12 @@ async function runProcess(
       );
       if (fs.existsSync(logPath))
         stdout += "\n" + fs.readFileSync(logPath, "utf8");
+      if (code !== 0 || timedOut) {
+        console.error(
+          `[Smoke process failed: ${path.basename(cmd)}, exit=${code}, signal=${signal}, timedOut=${timedOut}]`,
+        );
+        console.error(sanitizeLogText((stdout + "\n" + stderr).slice(-16000)));
+      }
       resolve({ code, stdout, stderr, timedOut, profile });
     });
 
