@@ -14,7 +14,7 @@ test("release inventory hashes actual artifact bytes and rejects mismatched tag 
     ...process.env,
     GITHUB_SHA: "",
     GITHUB_REF_TYPE: "tag",
-    GITHUB_REF_NAME: "v1.3.0",
+    GITHUB_REF_NAME: "v1.4.0",
   };
   try {
     execFileSync("git", ["init", "--quiet"], { cwd: fixture });
@@ -37,7 +37,7 @@ test("release inventory hashes actual artifact bytes and rejects mismatched tag 
     );
     fs.writeFileSync(
       path.join(fixture, "package.json"),
-      JSON.stringify({ name: "fixture", version: "1.3.0" }),
+      JSON.stringify({ name: "fixture", version: "1.4.0" }),
     );
     fs.writeFileSync(
       path.join(fixture, "bun.lock"),
@@ -53,7 +53,7 @@ test("release inventory hashes actual artifact bytes and rejects mismatched tag 
       }),
     );
     fs.mkdirSync(path.join(fixture, "release"));
-    const artifact = "LampasLauncher-1.3.0-Windows.exe";
+    const artifact = "LampasLauncher-1.4.0-Windows.exe";
     fs.writeFileSync(
       path.join(fixture, "release", artifact),
       "synthetic-distributable-bytes",

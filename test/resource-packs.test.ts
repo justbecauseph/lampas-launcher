@@ -8,7 +8,7 @@ mock.module("electron", () => ({
   app: {
     getPath: () => os.tmpdir(),
     getName: () => "Lampas Launcher",
-    getVersion: () => "1.3.0",
+    getVersion: () => "1.4.0",
   },
 }));
 

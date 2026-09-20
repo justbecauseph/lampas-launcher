@@ -373,7 +373,7 @@ mock.module("electron", () => ({
   app: {
     getPath: (name: string) => (name === "userData" ? userDataDir : testRoot),
     getName: () => "Lampas Launcher",
-    getVersion: () => "1.3.0",
+    getVersion: () => "1.4.0",
     whenReady: () => readyPromise,
     on: () => {},
     quit: () => {},
