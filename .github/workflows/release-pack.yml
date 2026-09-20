@@ -1,78 +1,127 @@
-name: Release Modpack & Launcher
+name: Validate and Build Launcher Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      channel:
-        description: "Target release channel"
-        required: true
-        default: "stable"
-        type: choice
-        options:
-          - stable
-          - beta
-          - dev
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Validate and package (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
             script: package:win
           - os: ubuntu-latest
             script: package:linux
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
+      - name: Checkout exact workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
-
-      - name: Install dependencies
+      - name: Frozen install
         run: bun install --frozen-lockfile
-
-      - name: Build Launcher
+      - name: Install pinned Electron binary
+        run: node node_modules/electron/install.js
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Build
+        run: bun run build
+      - name: Test exact artifact-producing commit
+        run: bun test
+      - name: Audit dependencies
+        run: bun audit
+      - name: Package without publishing
         run: bun run ${{ matrix.script }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+      - name: Verify packaged fuses
+        run: node scripts/verify-fuses.cjs
+      - name: Windows packaged smoke
+        if: runner.os == 'Windows'
+        run: bun test/smoke/electron-smoke.ts --strict
+      - name: Linux packaged smoke
+        if: runner.os == 'Linux'
+        run: xvfb-run -a bun test/smoke/electron-smoke.ts --strict
+      - name: Generate SBOM and artifact checksums
+        run: bun run security:artifacts
+      - name: Windows packaged module workflow and repair restart
+        if: runner.os == 'Windows'
+        run: node node_modules/electron/cli.js test/smoke/packaged-workflow.cjs --asar=release/win-unpacked/resources/app.asar "--user-data-dir=$env:RUNNER_TEMP/lampas-packaged-workflow-ci"
+      - name: Linux packaged module workflow and repair restart
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node node_modules/electron/cli.js test/smoke/packaged-workflow.cjs --asar=release/linux-unpacked/resources/app.asar --user-data-dir="$RUNNER_TEMP/lampas-packaged-workflow-ci" --password-store=basic
+      - name: Require valid Windows signatures for publication
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          APPROVED_SIGNING_THUMBPRINT: ${{ vars.APPROVED_SIGNING_THUMBPRINT }}
+        run: |
+          if (-not $env:APPROVED_SIGNING_THUMBPRINT) { throw 'Publication blocked: approved signing certificate identity is not configured' }
+          $artifacts = Get-ChildItem -LiteralPath release -Filter '*.exe'
+          if ($artifacts.Count -eq 0) { throw 'No Windows artifacts found' }
+          foreach ($artifact in $artifacts) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $artifact.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Publication blocked: $($artifact.Name) lacks a valid approved signature. Configure approved signing custody before release."
+            }
+            if ($signature.SignerCertificate.Thumbprint -ne $env:APPROVED_SIGNING_THUMBPRINT) { throw 'Publication blocked: unexpected signing certificate identity' }
+          }
+      - name: Upload verified build artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: launcher-${{ matrix.os }}
+          name: launcher-${{ matrix.os }}-${{ github.sha }}
           path: |
             release/*.exe
             release/*.AppImage
             release/*.tar.gz
+            release/*.cdx.json
+            release/SHA256SUMS-*.txt
           if-no-files-found: error
 
   release:
-    name: Create GitHub Release
+    name: Attest and publish verified artifacts
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v7
+      - name: Download artifacts from this run
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: release-artifacts
           merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Verify checksums
+        working-directory: release-artifacts
+        run: sha256sum --check SHA256SUMS-*.txt
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: |
+            release-artifacts/*.exe
+            release-artifacts/*.AppImage
+            release-artifacts/*.tar.gz
+            release-artifacts/*.cdx.json
+            release-artifacts/SHA256SUMS-*.txt
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             release-artifacts/*.exe
             release-artifacts/*.AppImage
             release-artifacts/*.tar.gz
+            release-artifacts/*.cdx.json
+            release-artifacts/SHA256SUMS-*.txt
           generate_release_notes: true

@@ -1,15 +1,24 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 /**
  * REGRESSION GATES (Phases 1-7)
- * 
+ *
  * These tests define the TARGET invariants required by PLAN.md.
  * In Phase 0 (Baseline), these tests fail because the underlying defects (F06, F08)
  * are still present in the baseline codebase.
- * 
+ *
  * They are marked `test.skip` by default so the Phase 0 baseline test run remains green.
  * As each phase is implemented (e.g. Phase 1 for operation guard, Phase 3 for full repair),
  * the corresponding tests here will be unskipped and become required passing gates.
@@ -30,7 +39,7 @@ mock.module("electron", () => ({
 }));
 
 const { LauncherLogger } = await import("../src/logger");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager } = await import("../src/client-mods");
 const { GameRunner } = await import("../src/game-runner");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
@@ -41,16 +50,19 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.resetForTesting();
   GameRunner.resetForTesting();
 
   ConfigManager.set({
-    token: "mock-token",
     portalUrl: "http://localhost:3000",
     selectedChannel: "stable",
     gameDir,
     customClientMods: [],
     disabledClientMods: [],
+  });
+  ConfigManager.establishSession("http://localhost:3000", {
+    token: "mock-token",
   });
 });
 
@@ -59,6 +71,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  PortalPolicy.resetForTesting();
   GameRunner.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
@@ -77,7 +90,9 @@ describe("Phase 1 Regression Gate — Guarded Mod Mutators (F08)", () => {
 
     expect(() => {
       ClientModManager.add([modFile]);
-    }).toThrow(/Cannot modify client mods while an operation or Minecraft is running/);
+    }).toThrow(
+      /Cannot modify client mods while an operation or Minecraft is running/,
+    );
   });
 
   test("[Phase 1 Gate] GameRunner.killGame retains runningProcess until actual exit settlement", () => {
@@ -85,7 +100,9 @@ describe("Phase 1 Regression Gate — Guarded Mod Mutators (F08)", () => {
     // isGameRunning() must stay true until child process emits exit
     const fakeProc: any = {
       killed: false,
-      kill: () => { fakeProc.killed = true; },
+      kill: () => {
+        fakeProc.killed = true;
+      },
     };
     (GameRunner as any).runningProcess = fakeProc;
 
@@ -106,20 +123,35 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
 
     // Pre-create the asset object with matching SHA-1 and size so full repair verifies it without downloading
     const assetContent = Buffer.from("test-asset-data");
-    const assetHash = require("node:crypto").createHash("sha1").update(assetContent).digest("hex");
-    const objPath = path.join(assetsDir, "objects", assetHash.substring(0, 2), assetHash);
+    const assetHash = require("node:crypto")
+      .createHash("sha1")
+      .update(assetContent)
+      .digest("hex");
+    const objPath = path.join(
+      assetsDir,
+      "objects",
+      assetHash.substring(0, 2),
+      assetHash,
+    );
     fs.mkdirSync(path.dirname(objPath), { recursive: true });
     fs.writeFileSync(objPath, assetContent);
 
-    const responseBody = JSON.stringify({ objects: { "test.png": { hash: assetHash, size: assetContent.length } } });
-    const correctSha1 = require("node:crypto").createHash("sha1").update(responseBody).digest("hex");
+    const responseBody = JSON.stringify({
+      objects: { "test.png": { hash: assetHash, size: assetContent.length } },
+    });
+    const correctSha1 = require("node:crypto")
+      .createHash("sha1")
+      .update(responseBody)
+      .digest("hex");
 
     let redownloaded = false;
     const server = Bun.serve({
       port: 0,
       fetch(req) {
         redownloaded = true;
-        return new Response(responseBody, { headers: { "Content-Type": "application/json" } });
+        return new Response(responseBody, {
+          headers: { "Content-Type": "application/json" },
+        });
       },
     });
 
@@ -133,7 +165,7 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
           size: Buffer.byteLength(responseBody),
         },
         () => {},
-        "full"
+        "full",
       );
       expect(redownloaded).toBe(true);
     } finally {
@@ -145,7 +177,11 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
     const nativesDir = path.join(gameDir, "natives");
     fs.mkdirSync(nativesDir, { recursive: true });
 
-    const markerPath = path.join(gameDir, ".lampas", "natives-26.2-" + process.platform + ".complete");
+    const markerPath = path.join(
+      gameDir,
+      ".lampas",
+      "natives-26.2-" + process.platform + ".complete",
+    );
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, new Date().toISOString(), "utf-8");
 
@@ -164,7 +200,7 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
       "26.2",
       [{ path: mockNativeJar, changed: false }],
       () => {},
-      "full"
+      "full",
     );
 
     expect(fs.readdirSync(nativesDir).length).toBeGreaterThan(0);

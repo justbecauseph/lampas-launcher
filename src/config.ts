@@ -1,8 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import { app } from "electron";
 import { LauncherLogger } from "./logger";
 import { writeAtomicFileSync } from "./file-transfer";
+import { SessionManager } from "./session-manager";
 import type { LauncherConfig } from "./types";
 
 export function getDefaultGameDir(): string {
@@ -11,12 +13,14 @@ export function getDefaultGameDir(): string {
   }
   return path.join(
     process.env.APPDATA || process.env.HOME || process.cwd(),
-    ".minecraft-lampas"
+    ".minecraft-lampas",
   );
 }
 
 export function getUserDataDir(): string {
-  return app ? app.getPath("userData") : path.join(process.env.APPDATA || process.cwd(), ".lampas-launcher");
+  return app
+    ? app.getPath("userData")
+    : path.join(process.env.APPDATA || process.cwd(), ".lampas-launcher");
 }
 
 const DEFAULT_CONFIG: LauncherConfig = {
@@ -29,19 +33,29 @@ const DEFAULT_CONFIG: LauncherConfig = {
   disabledClientMods: [],
   customClientMods: [],
   noSync: false,
+  externalImages: false,
 };
 
-export function normalizePortalUrl(url?: string): string {
-  let normalized = (url || "https://dev.lampas.town").trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//i.test(normalized)) {
-    normalized = `https://${normalized}`;
-  }
-  // Auto-upgrade remote HTTP to HTTPS (preserve http only for local loopback dev)
-  if (normalized.startsWith("http://") && !normalized.includes("localhost") && !normalized.includes("127.0.0.1")) {
-    normalized = normalized.replace(/^http:\/\//i, "https://");
-  }
-  return normalized;
-}
+import {
+  normalizePortalUrl,
+  isExactLoopbackHost,
+  portalFetch,
+  PortalRedirectPolicyError,
+  PortalPolicyError,
+  PortalPolicy,
+  type DevelopmentPortalPolicy,
+} from "./portal-policy";
+export {
+  normalizePortalUrl,
+  validateWebUrl,
+  isApprovedRemoteHost,
+  isExactLoopbackHost,
+  portalFetch,
+  PortalRedirectPolicyError,
+  PortalPolicyError,
+  PortalPolicy,
+  type DevelopmentPortalPolicy,
+} from "./portal-policy";
 
 function valuesEqual(a: any, b: any): boolean {
   if (a === b) return true;
@@ -58,15 +72,23 @@ function formatConfigValue(key: string, value: any): string {
   if (value === undefined || value === null) {
     return "<unset>";
   }
-  if (key === "token" || key === "refreshToken" || key === "minecraftAccessToken") {
+  if (
+    key === "token" ||
+    key === "refreshToken" ||
+    key === "minecraftAccessToken"
+  ) {
     return "[REDACTED]";
   }
   if (typeof value === "string") {
-    return value.length > 80 ? `"${value.slice(0, 77)}..."` : JSON.stringify(value);
+    return value.length > 80
+      ? `"${value.slice(0, 77)}..."`
+      : JSON.stringify(value);
   }
   if (typeof value === "object") {
     const serialized = JSON.stringify(value);
-    return serialized.length > 80 ? `${serialized.slice(0, 77)}...` : serialized;
+    return serialized.length > 80
+      ? `${serialized.slice(0, 77)}...`
+      : serialized;
   }
   return String(value);
 }
@@ -74,6 +96,19 @@ function formatConfigValue(key: string, value: any): string {
 export class ConfigManager {
   private static configPath: string;
   private static cachedConfig: LauncherConfig | null = null;
+
+  static getConfigPath(): string {
+    this.initPath();
+    return this.configPath;
+  }
+
+  static getSessionGeneration(): number {
+    return SessionManager.getSessionEpoch();
+  }
+
+  static incrementSessionGeneration(): number {
+    return SessionManager.advanceSessionEpoch();
+  }
 
   private static initPath() {
     if (!this.configPath) {
@@ -83,6 +118,25 @@ export class ConfigManager {
       }
       this.configPath = path.join(userDataDir, "config.json");
     }
+  }
+
+  static {
+    SessionManager.addSessionListener((creds) => {
+      if (ConfigManager.cachedConfig) {
+        if (creds) {
+          ConfigManager.cachedConfig.token = creds.token;
+          ConfigManager.cachedConfig.refreshToken = creds.refreshToken;
+          ConfigManager.cachedConfig.minecraftAccessToken =
+            creds.minecraftAccessToken;
+          ConfigManager.cachedConfig.sessionPortalUrl = creds.portalUrl;
+        } else {
+          delete ConfigManager.cachedConfig.token;
+          delete ConfigManager.cachedConfig.refreshToken;
+          delete ConfigManager.cachedConfig.minecraftAccessToken;
+          delete ConfigManager.cachedConfig.sessionPortalUrl;
+        }
+      }
+    });
   }
 
   static get(): LauncherConfig {
@@ -97,16 +151,27 @@ export class ConfigManager {
         const data = fs.readFileSync(this.configPath, "utf-8");
         const parsed = JSON.parse(data);
         loaded = { ...DEFAULT_CONFIG, ...parsed };
+        delete (loaded as any).token;
+        delete (loaded as any).refreshToken;
+        delete (loaded as any).minecraftAccessToken;
+        delete (loaded as any).sessionPortalUrl;
 
         // Legacy migration: automatically regard existing configuration or existing installation as configured
         if (parsed.gameDirConfigured === undefined) {
           const resolvedDir =
-            typeof parsed.gameDir === "string" && parsed.gameDir.trim().length > 0
+            typeof parsed.gameDir === "string" &&
+            parsed.gameDir.trim().length > 0
               ? parsed.gameDir
               : defaultGameDir;
-          const hasInstallation = fs.existsSync(path.join(resolvedDir, ".lampas", "installation.json"));
+          const hasInstallation = fs.existsSync(
+            path.join(resolvedDir, ".lampas", "installation.json"),
+          );
 
-          if ((typeof parsed.gameDir === "string" && parsed.gameDir.trim().length > 0) || hasInstallation) {
+          if (
+            (typeof parsed.gameDir === "string" &&
+              parsed.gameDir.trim().length > 0) ||
+            hasInstallation
+          ) {
             loaded.gameDirConfigured = true;
           } else {
             loaded.gameDirConfigured = false;
@@ -117,29 +182,90 @@ export class ConfigManager {
       }
     } else {
       loaded = { ...DEFAULT_CONFIG };
-      const hasInstallation = fs.existsSync(path.join(defaultGameDir, ".lampas", "installation.json"));
+      const hasInstallation = fs.existsSync(
+        path.join(defaultGameDir, ".lampas", "installation.json"),
+      );
       loaded.gameDirConfigured = hasInstallation;
     }
 
     loaded.portalUrl = normalizePortalUrl(loaded.portalUrl);
+
+    // Phase 3 Security: Main-only Session Authority & Credential Separation
+    // Initialize SessionManager with config path and active portal
+    SessionManager.initialize(this.configPath, loaded.portalUrl);
+
+    // Populate in-memory credentials from SessionManager (secrets never live in config.json on disk)
+    const creds = SessionManager.getCredentials();
+    if (creds && creds.token) {
+      loaded.token = creds.token;
+      loaded.refreshToken = creds.refreshToken;
+      loaded.minecraftAccessToken = creds.minecraftAccessToken;
+      loaded.sessionPortalUrl = creds.portalUrl;
+    }
 
     if (!loaded.gameDir) {
       loaded.gameDir = defaultGameDir;
     }
 
     loaded.noSync = Boolean(loaded.noSync);
-
+    loaded.externalImages = Boolean(loaded.externalImages);
     this.cachedConfig = loaded;
-    return loaded;
+    return this.cachedConfig;
   }
 
   static set(newConfig: Partial<LauncherConfig>): LauncherConfig {
     this.initPath();
-    const current = this.get();
-    const updated = { ...current, ...newConfig };
-    if (updated.portalUrl) {
-      updated.portalUrl = normalizePortalUrl(updated.portalUrl);
+    const current = { ...this.get() };
+
+    // Security invariant: sessionPortalUrl cannot be forged or modified via generic set()
+    const attemptedSessionPortalForgery = "sessionPortalUrl" in newConfig;
+    const sanitizedConfig = { ...newConfig };
+    delete (sanitizedConfig as any).sessionPortalUrl;
+    delete (sanitizedConfig as any).token;
+    delete (sanitizedConfig as any).refreshToken;
+    delete (sanitizedConfig as any).minecraftAccessToken;
+
+    const updated = { ...current, ...sanitizedConfig };
+
+    // Phase 3 SEC-03/SEC-08: Credential mutation is removed from generic ConfigManager.set().
+    // Preserves token-free renderer DTOs and origin isolation. Sessions must be managed
+    // exclusively via SessionManager (or ConfigManager.establishSession / clearSession).
+    updated.token = current.token;
+    updated.refreshToken = current.refreshToken;
+    updated.minecraftAccessToken = current.minecraftAccessToken;
+    updated.sessionPortalUrl = current.sessionPortalUrl;
+
+    if (sanitizedConfig.portalUrl !== undefined) {
+      const priorCanonical = normalizePortalUrl(current.portalUrl);
+      const nextCanonical = normalizePortalUrl(sanitizedConfig.portalUrl);
+      updated.portalUrl = nextCanonical;
+
+      // Phase 1 Security: Advance authentication generation on any actual active portal origin change,
+      // independently of whether an active session was already established.
+      const originChanged = priorCanonical !== nextCanonical;
+      const sessionMismatch = Boolean(
+        current.sessionPortalUrl && nextCanonical !== current.sessionPortalUrl,
+      );
+
+      if (originChanged || sessionMismatch) {
+        SessionManager.onPortalUrlChanged(nextCanonical);
+        updated.token = undefined;
+        updated.refreshToken = undefined;
+        updated.minecraftAccessToken = undefined;
+        updated.sessionPortalUrl = undefined;
+        this.incrementSessionGeneration();
+      }
     }
+
+    // Ensure sessionPortalUrl remains unset if there are no tokens
+    if (
+      !updated.token &&
+      !updated.refreshToken &&
+      !updated.minecraftAccessToken
+    ) {
+      updated.sessionPortalUrl = undefined;
+    }
+
     if (updated.noSync !== undefined) {
       updated.noSync = Boolean(updated.noSync);
     }
@@ -149,12 +275,110 @@ export class ConfigManager {
       }
     }
 
-    // Persist to disk FIRST using atomic write before updating in-memory state or emitting change logs
+    return this.persistAndEmit(current, updated);
+  }
+
+  /**
+   * Main-only operation to establish newly authenticated credentials with an explicit issuing origin.
+   */
+  static establishSession(
+    issuingOrigin: string,
+    credentials: {
+      token?: string;
+      refreshToken?: string;
+      minecraftAccessToken?: string;
+      portalAccountId?: string;
+      portalUsername?: string;
+    },
+    extraSettings?: Partial<LauncherConfig>,
+  ): LauncherConfig {
+    this.initPath();
+    const current = { ...this.get() };
+
+    if (credentials.token) {
+      const tokenHash = crypto
+        .createHash("sha256")
+        .update(credentials.token)
+        .digest("hex")
+        .slice(0, 10);
+      const portalAccountId =
+        credentials.portalAccountId || `config-account-${tokenHash}`;
+      const portalUsername =
+        credentials.portalUsername || `ConfigUser-${tokenHash.slice(0, 4)}`;
+      SessionManager.establishSession(issuingOrigin, {
+        token: credentials.token,
+        refreshToken: credentials.refreshToken,
+        minecraftAccessToken: credentials.minecraftAccessToken,
+        portalAccountId,
+        portalUsername,
+      });
+    }
+
+    const canonicalOrigin = normalizePortalUrl(issuingOrigin);
+    const updated: LauncherConfig = {
+      ...current,
+      ...extraSettings,
+      portalUrl: canonicalOrigin,
+      sessionPortalUrl: canonicalOrigin,
+      token: credentials.token,
+      refreshToken: credentials.refreshToken,
+      minecraftAccessToken: credentials.minecraftAccessToken,
+    };
+
+    for (const key of Object.keys(updated) as Array<keyof LauncherConfig>) {
+      if (updated[key] === undefined) {
+        delete updated[key];
+      }
+    }
+
+    return this.persistAndEmit(current, updated);
+  }
+
+  /**
+   * Main-only operation to clear the active authenticated session.
+   */
+  static clearSession(): LauncherConfig {
+    this.initPath();
+    const current = { ...this.get() };
+    SessionManager.clearSession();
+
+    const updated: LauncherConfig = {
+      ...current,
+      token: undefined,
+      refreshToken: undefined,
+      minecraftAccessToken: undefined,
+      sessionPortalUrl: undefined,
+    };
+
+    for (const key of Object.keys(updated) as Array<keyof LauncherConfig>) {
+      if (updated[key] === undefined) {
+        delete updated[key];
+      }
+    }
+
+    return this.persistAndEmit(current, updated);
+  }
+
+  private static persistAndEmit(
+    current: LauncherConfig,
+    updated: LauncherConfig,
+  ): LauncherConfig {
+    // Phase 3 Security: Settings persistence must NEVER serialize tokens or secret fields to disk
+    const toPersist = { ...updated };
+    delete (toPersist as any).token;
+    delete (toPersist as any).refreshToken;
+    delete (toPersist as any).minecraftAccessToken;
+    delete (toPersist as any).sessionPortalUrl;
+
     const dir = path.dirname(this.configPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    writeAtomicFileSync(this.configPath, JSON.stringify(updated, null, 2), "utf-8");
+    writeAtomicFileSync(
+      this.configPath,
+      JSON.stringify(toPersist, null, 2),
+      "utf-8",
+    );
 
     // Only after persistence succeeds, log all changed configuration properties
     const allKeys = new Set([
@@ -164,11 +388,11 @@ export class ConfigManager {
 
     for (const key of allKeys) {
       if (!valuesEqual(current[key], updated[key])) {
-        const oldValStr = formatConfigValue(key, current[key]);
-        const newValStr = formatConfigValue(key, updated[key]);
-        LauncherLogger.info(`[Config] ${key} changed: ${oldValStr} -> ${newValStr}`);
+        LauncherLogger.info(`[Config] ${key} changed`);
         if (key === "noSync") {
-          LauncherLogger.info(`[Settings] No-sync mode ${updated.noSync ? "enabled" : "disabled"}`);
+          LauncherLogger.info(
+            `[Settings] No-sync mode ${updated.noSync ? "enabled" : "disabled"}`,
+          );
         }
       }
     }
@@ -180,5 +404,6 @@ export class ConfigManager {
   static resetForTesting(): void {
     this.cachedConfig = null;
     this.configPath = "";
+    SessionManager.resetForTesting();
   }
 }

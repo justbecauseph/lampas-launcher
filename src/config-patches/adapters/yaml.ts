@@ -14,7 +14,9 @@ function deepEqual(a: any, b: any): boolean {
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
   if (keysA.length !== keysB.length) return false;
-  return keysA.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+  return keysA.every(
+    (k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]),
+  );
 }
 
 export class YamlConfigAdapter implements ConfigPatchAdapter {
@@ -39,7 +41,9 @@ export class YamlConfigAdapter implements ConfigPatchAdapter {
 
     for (const op of operations) {
       if (op.op === "replaceLiteral") {
-        throw new Error("YAML adapter does not support 'replaceLiteral' operations");
+        throw new Error(
+          "YAML adapter does not support 'replaceLiteral' operations",
+        );
       }
 
       const hasKey = doc.hasIn(op.path);
@@ -50,7 +54,7 @@ export class YamlConfigAdapter implements ConfigPatchAdapter {
           continue;
         }
         details.push(
-          `${op.path.join(".")}: ${hasKey ? JSON.stringify(currentVal) : "(unset)"} → ${JSON.stringify(op.value)}`
+          `${op.path.join(".")}: ${hasKey ? JSON.stringify(currentVal) : "(unset)"} → ${JSON.stringify(op.value)}`,
         );
         doc.setIn(op.path, op.value);
         changed = true;
@@ -58,7 +62,9 @@ export class YamlConfigAdapter implements ConfigPatchAdapter {
         if (!hasKey) {
           continue;
         }
-        details.push(`${op.path.join(".")}: removed (${JSON.stringify(currentVal)})`);
+        details.push(
+          `${op.path.join(".")}: removed (${JSON.stringify(currentVal)})`,
+        );
         doc.deleteIn(op.path);
         changed = true;
       }

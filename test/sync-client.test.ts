@@ -1,10 +1,20 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-client-sync-test-"));
+const testRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "lampas-client-sync-test-"),
+);
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
 
@@ -18,7 +28,7 @@ mock.module("electron", () => ({
 }));
 
 const { LauncherLogger } = await import("../src/logger");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 
 beforeAll(() => {
@@ -27,18 +37,22 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.resetForTesting();
   ConfigManager.set({
-    token: "mock-token",
     portalUrl: "http://localhost:3000",
     selectedChannel: "stable",
     gameDir,
     customClientMods: [],
     disabledClientMods: [],
   });
+  ConfigManager.establishSession("http://localhost:3000", {
+    token: "mock-token",
+  });
 });
 
 afterAll(() => {
+  PortalPolicy.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
@@ -64,7 +78,7 @@ describe("LauncherSync client sync integration", () => {
     fs.writeFileSync(
       optionsPath,
       'resourcePacks:["vanilla","file/UserTheme.zip","file/fa-player-extension.jar"]\n',
-      "utf-8"
+      "utf-8",
     );
 
     // Mock Portal serving v2 release & manifest
@@ -73,14 +87,24 @@ describe("LauncherSync client sync integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.1.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.1.0",
+            release: "/api/v1/releases/2.1.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.1.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.1.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.1.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.1.0/server-manifest",
             launch: {
               requiredResourcePacks: [
                 {
@@ -95,16 +119,19 @@ describe("LauncherSync client sync integration", () => {
         }
         if (url.pathname === "/api/v1/releases/2.1.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.1.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [
               {
                 path: "resourcepacks/fa-player-extension.jar",
                 hashes: { sha256: v2Sha },
                 size: v2Size,
-                download: { url: `/api/v1/blobs/${v2Sha}` },
+                download: { url: `/api/v1/blobs/${v2Sha}`, provider: "lampas" },
                 policy: "MANAGED",
               },
             ],
@@ -113,14 +140,19 @@ describe("LauncherSync client sync integration", () => {
         }
         if (url.pathname === `/api/v1/blobs/${v2Sha}`) {
           return new Response(v2Content, {
-            headers: { "Content-Type": "application/java-archive", "Content-Length": v2Size.toString() },
+            headers: {
+              "Content-Type": "application/java-archive",
+              "Content-Length": v2Size.toString(),
+            },
           });
         }
         return new Response("Not Found", { status: 404 });
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       const result = await LauncherSync.syncClient(() => {});
@@ -130,24 +162,37 @@ describe("LauncherSync client sync integration", () => {
       // Verify file content on disk was replaced with v2
       const diskContent = fs.readFileSync(packFile);
       expect(diskContent.equals(v2Content)).toBe(true);
-      expect(crypto.createHash("sha256").update(diskContent).digest("hex")).toBe(v2Sha);
+      expect(
+        crypto.createHash("sha256").update(diskContent).digest("hex"),
+      ).toBe(v2Sha);
 
       // Verify options.txt preserved user pack and has managed pack enabled
       const updatedOptions = fs.readFileSync(optionsPath, "utf-8");
-      expect(updatedOptions).toContain('resourcePacks:["vanilla","file/UserTheme.zip","file/fa-player-extension.jar"]');
+      expect(updatedOptions).toContain(
+        'resourcePacks:["vanilla","file/UserTheme.zip","file/fa-player-extension.jar"]',
+      );
 
       // Verify installation state has v2 hash
       const installState = JSON.parse(
-        fs.readFileSync(path.join(gameDir, ".lampas", "installation.json"), "utf-8")
+        fs.readFileSync(
+          path.join(gameDir, ".lampas", "installation.json"),
+          "utf-8",
+        ),
       );
-      expect(installState.files["resourcepacks/fa-player-extension.jar"].sha256).toBe(v2Sha);
+      expect(
+        installState.files["resourcepacks/fa-player-extension.jar"].sha256,
+      ).toBe(v2Sha);
     } finally {
       server.stop(true);
     }
   });
 
   test("preserves unmanifested user resource packs on disk and in options.txt", async () => {
-    const userPackFile = path.join(gameDir, "resourcepacks", "CustomUserPack.zip");
+    const userPackFile = path.join(
+      gameDir,
+      "resourcepacks",
+      "CustomUserPack.zip",
+    );
     fs.mkdirSync(path.dirname(userPackFile), { recursive: true });
     fs.writeFileSync(userPackFile, "custom user pack data");
 
@@ -155,7 +200,7 @@ describe("LauncherSync client sync integration", () => {
     fs.writeFileSync(
       optionsPath,
       'resourcePacks:["vanilla","file/CustomUserPack.zip"]\n',
-      "utf-8"
+      "utf-8",
     );
 
     const server = Bun.serve({
@@ -163,23 +208,36 @@ describe("LauncherSync client sync integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
             launch: {},
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -188,7 +246,9 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       const result = await LauncherSync.syncClient(() => {});
@@ -199,7 +259,9 @@ describe("LauncherSync client sync integration", () => {
 
       // Verify user pack remains enabled in options.txt
       const optionsContent = fs.readFileSync(optionsPath, "utf-8");
-      expect(optionsContent).toContain('resourcePacks:["vanilla","file/CustomUserPack.zip"]');
+      expect(optionsContent).toContain(
+        'resourcePacks:["vanilla","file/CustomUserPack.zip"]',
+      );
     } finally {
       server.stop(true);
     }
@@ -215,36 +277,56 @@ describe("LauncherSync client sync integration", () => {
       files: {},
       managedResourcePacks: [],
     };
-    fs.writeFileSync(stateFile, JSON.stringify(initialInstallation, null, 2), "utf-8");
+    fs.writeFileSync(
+      stateFile,
+      JSON.stringify(initialInstallation, null, 2),
+      "utf-8",
+    );
 
     const server = Bun.serve({
       port: 0,
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
             launch: {},
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [
               {
                 path: "mods/failing-mod.jar",
                 hashes: { sha256: "c".repeat(64) },
                 size: 500,
-                download: { url: "/api/v1/blobs/corrupted" },
+                download: {
+                  url: "/api/v1/blobs/corrupted",
+                  provider: "lampas",
+                },
                 policy: "MANAGED",
               },
             ],
@@ -258,13 +340,17 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow();
 
       // Verify installation.json was NOT updated to 2.0.0
-      const currentInstallation = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+      const currentInstallation = JSON.parse(
+        fs.readFileSync(stateFile, "utf-8"),
+      );
       expect(currentInstallation.version).toBe("1.0.0");
     } finally {
       server.stop(true);
@@ -281,25 +367,42 @@ describe("LauncherSync client sync integration", () => {
       files: {},
       managedResourcePacks: [],
     };
-    fs.writeFileSync(stateFile, JSON.stringify(initialInstallation, null, 2), "utf-8");
+    fs.writeFileSync(
+      stateFile,
+      JSON.stringify(initialInstallation, null, 2),
+      "utf-8",
+    );
 
     // Required pack declares sha256 of "aaa..." but downloaded file has "bbb..."
     const packContent = Buffer.from("pack-content-bbb");
-    const packSha = crypto.createHash("sha256").update(packContent).digest("hex");
+    const packSha = crypto
+      .createHash("sha256")
+      .update(packContent)
+      .digest("hex");
 
     const server = Bun.serve({
       port: 0,
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
             launch: {
               requiredResourcePacks: [
                 {
@@ -315,16 +418,22 @@ describe("LauncherSync client sync integration", () => {
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [
               {
                 path: "resourcepacks/corrupted.zip",
                 hashes: { sha256: packSha },
                 size: packContent.length,
-                download: { url: `/api/v1/blobs/${packSha}` },
+                download: {
+                  url: `/api/v1/blobs/${packSha}`,
+                  provider: "lampas",
+                },
                 policy: "MANAGED",
               },
             ],
@@ -338,13 +447,19 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
-      await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(/failed integrity verification/);
+      await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
+        /failed integrity verification/,
+      );
 
       // State remains previous version
-      const currentInstallation = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+      const currentInstallation = JSON.parse(
+        fs.readFileSync(stateFile, "utf-8"),
+      );
       expect(currentInstallation.version).toBe("1.0.0");
     } finally {
       server.stop(true);
@@ -357,29 +472,45 @@ describe("LauncherSync client sync integration", () => {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
             launch: {},
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [
               {
                 path: "../../malicious.txt",
                 hashes: { sha256: "d".repeat(64) },
                 size: 10,
-                download: { url: "/api/v1/blobs/malicious" },
+                download: {
+                  url: "/api/v1/blobs/malicious",
+                  provider: "lampas",
+                },
                 policy: "MANAGED",
               },
             ],
@@ -390,11 +521,13 @@ describe("LauncherSync client sync integration", () => {
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-        /Unsafe relative path in manifest/
+        /Unsafe relative path in manifest/,
       );
     } finally {
       server.stop(true);

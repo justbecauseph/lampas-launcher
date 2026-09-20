@@ -7,7 +7,11 @@ import { initSettingsView } from "./views/settings-view";
 import { initPlayView } from "./views/play-view";
 
 // Toast notification helper
-function showToast(message: string, type: "info" | "success" | "error" = "info", duration = 3500): void {
+function showToast(
+  message: string,
+  type: "info" | "success" | "error" = "info",
+  duration = 3500,
+): void {
   const container = document.getElementById("toast-container");
   if (!container) return;
 
@@ -28,17 +32,32 @@ function showToast(message: string, type: "info" | "success" | "error" = "info",
 
 // Tab navigation helper
 function initNavigation(): (tabId: string) => void {
-  const navPlay = document.getElementById("nav-play") as HTMLButtonElement | null;
-  const navMods = document.getElementById("nav-mods") as HTMLButtonElement | null;
-  const navConsole = document.getElementById("nav-console") as HTMLButtonElement | null;
-  const navSettings = document.getElementById("nav-settings") as HTMLButtonElement | null;
+  const navPlay = document.getElementById(
+    "nav-play",
+  ) as HTMLButtonElement | null;
+  const navMods = document.getElementById(
+    "nav-mods",
+  ) as HTMLButtonElement | null;
+  const navConsole = document.getElementById(
+    "nav-console",
+  ) as HTMLButtonElement | null;
+  const navSettings = document.getElementById(
+    "nav-settings",
+  ) as HTMLButtonElement | null;
 
   const tabPlay = document.getElementById("tab-play") as HTMLElement | null;
   const tabMods = document.getElementById("tab-mods") as HTMLElement | null;
-  const tabConsole = document.getElementById("tab-console") as HTMLElement | null;
-  const tabSettings = document.getElementById("tab-settings") as HTMLElement | null;
+  const tabConsole = document.getElementById(
+    "tab-console",
+  ) as HTMLElement | null;
+  const tabSettings = document.getElementById(
+    "tab-settings",
+  ) as HTMLElement | null;
 
-  const tabs: Record<string, { nav: HTMLButtonElement | null; tab: HTMLElement | null }> = {
+  const tabs: Record<
+    string,
+    { nav: HTMLButtonElement | null; tab: HTMLElement | null }
+  > = {
     "tab-play": { nav: navPlay, tab: tabPlay },
     "tab-mods": { nav: navMods, tab: tabMods },
     "tab-console": { nav: navConsole, tab: tabConsole },
@@ -67,9 +86,15 @@ function initNavigation(): (tabId: string) => void {
 
 // Window control buttons
 function initWindowControls(): void {
-  const btnMinimize = document.getElementById("btn-minimize") as HTMLButtonElement | null;
-  const btnMaximize = document.getElementById("btn-maximize") as HTMLButtonElement | null;
-  const btnClose = document.getElementById("btn-close") as HTMLButtonElement | null;
+  const btnMinimize = document.getElementById(
+    "btn-minimize",
+  ) as HTMLButtonElement | null;
+  const btnMaximize = document.getElementById(
+    "btn-maximize",
+  ) as HTMLButtonElement | null;
+  const btnClose = document.getElementById(
+    "btn-close",
+  ) as HTMLButtonElement | null;
 
   if (btnMinimize) btnMinimize.onclick = () => window.lampas.window.minimize();
   if (btnMaximize) btnMaximize.onclick = () => window.lampas.window.maximize();
@@ -86,6 +111,7 @@ async function startApp(): Promise<void> {
     allocatedRamGb: 4,
     gameDir: "",
     noSync: false,
+    externalImages: false,
   };
 
   // Initialize Console View
@@ -95,6 +121,7 @@ async function startApp(): Promise<void> {
   const authView = initAuthView({
     showToast,
     getPortalUrl: () => activeConfig.portalUrl,
+    externalImages: () => Boolean(activeConfig.externalImages),
     onUserChanged: (user: RendererUserProfile | null) => {
       const btnPlayText = document.getElementById("btn-play-text");
       if (btnPlayText) {
@@ -133,10 +160,13 @@ async function startApp(): Promise<void> {
     },
     getGameDir: () => activeConfig.gameDir,
     switchToTab,
+    externalImages: () => Boolean(activeConfig.externalImages),
   });
 
   // Initialize Server Status View
-  const disposeServerStatus = initServerStatusView(() => !!authView.getCurrentUser());
+  const disposeServerStatus = initServerStatusView(
+    () => !!authView.getCurrentUser(),
+  );
 
   // App Initialization
   try {
@@ -159,7 +189,7 @@ async function startApp(): Promise<void> {
 
     // Auth verification
     try {
-      const authRes = await window.lampas.auth.refresh(initialConfig.portalUrl);
+      const authRes = await window.lampas.auth.refresh();
       if (authRes.valid && authRes.user) {
         authView.updateUserUI(authRes.user);
       } else {

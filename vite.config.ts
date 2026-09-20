@@ -6,7 +6,7 @@ export default defineConfig({
   base: "./",
   build: {
     outDir: path.resolve(__dirname, "dist/renderer"),
-    emptyOutDir: false,
+    emptyOutDir: true,
     target: "es2022",
     rollupOptions: {
       input: path.resolve(__dirname, "ui/index.html"),

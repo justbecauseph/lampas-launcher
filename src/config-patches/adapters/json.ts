@@ -23,7 +23,9 @@ function deepEqual(a: any, b: any): boolean {
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
   if (keysA.length !== keysB.length) return false;
-  return keysA.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+  return keysA.every(
+    (k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]),
+  );
 }
 
 export class JsonConfigAdapter implements ConfigPatchAdapter {
@@ -36,7 +38,7 @@ export class JsonConfigAdapter implements ConfigPatchAdapter {
     if (errors.length > 0) {
       const first = errors[0];
       throw new Error(
-        `JSON parse error: ${printParseErrorCode(first.error)} at offset ${first.offset}`
+        `JSON parse error: ${printParseErrorCode(first.error)} at offset ${first.offset}`,
       );
     }
   }
@@ -48,7 +50,9 @@ export class JsonConfigAdapter implements ConfigPatchAdapter {
 
     for (const op of operations) {
       if (op.op === "replaceLiteral") {
-        throw new Error("JSON adapter does not support 'replaceLiteral' operations");
+        throw new Error(
+          "JSON adapter does not support 'replaceLiteral' operations",
+        );
       }
 
       const tree = parseTree(current);
@@ -61,10 +65,12 @@ export class JsonConfigAdapter implements ConfigPatchAdapter {
             continue;
           }
           details.push(
-            `${op.path.join(".")}: ${JSON.stringify(currentVal)} → ${JSON.stringify(op.value)}`
+            `${op.path.join(".")}: ${JSON.stringify(currentVal)} → ${JSON.stringify(op.value)}`,
           );
         } else {
-          details.push(`${op.path.join(".")}: (unset) → ${JSON.stringify(op.value)}`);
+          details.push(
+            `${op.path.join(".")}: (unset) → ${JSON.stringify(op.value)}`,
+          );
         }
 
         const edits = modify(current, op.path, op.value, {
@@ -77,7 +83,9 @@ export class JsonConfigAdapter implements ConfigPatchAdapter {
           continue;
         }
         const currentVal = getNodeValue(targetNode);
-        details.push(`${op.path.join(".")}: removed (${JSON.stringify(currentVal)})`);
+        details.push(
+          `${op.path.join(".")}: removed (${JSON.stringify(currentVal)})`,
+        );
 
         const edits = modify(current, op.path, undefined, {
           formattingOptions: { insertSpaces: true, tabSize: 2 },

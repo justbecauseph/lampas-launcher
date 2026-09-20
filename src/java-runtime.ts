@@ -2,7 +2,259 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { ConfigManager } from "./config";
-import { downloadVerified, fetchJsonWithRetry, hashFile } from "./file-transfer";
+import {
+  downloadVerified,
+  fetchJsonWithRetry,
+  hashFile,
+} from "./file-transfer";
+import { runBoundedPool } from "./async-pool";
+import { TRANSFER_LIMITS, TransferLimitError } from "./transfer-limits";
+import {
+  assertSubordinateRoot,
+  canonicalizeRelativePath,
+  checkPhysicalAncestry,
+  normalizePathKey,
+  resolveAndContainPath,
+  validateDigestString,
+} from "./path-policy";
+
+const MAX_JAVA_MANIFEST_ENTRIES = 100_000;
+const MAX_JAVA_MANIFEST_PATH_BYTES = 4096;
+// These caps describe one managed repair operation. They are checked while
+// validating the complete upstream manifest, before the runtime directory is
+// created or any destination is opened. A 2 GiB file cap keeps one transfer
+// bounded; the 4 GiB aggregate cap covers the largest supported Java image.
+const MAX_JAVA_RUNTIME_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_JAVA_RUNTIME_OPERATION_BYTES = 4 * 1024 * 1024 * 1024;
+
+export interface ValidatedJavaRuntimeManifestEntry {
+  relativePath: string;
+  type: "file" | "directory";
+  executable: boolean;
+  downloads?: {
+    raw: {
+      url: string;
+      sha1: string;
+      size: number;
+    };
+  };
+}
+
+/**
+ * Validates the complete Mojang runtime manifest before the managed runtime
+ * directory is created or any file is downloaded. Every file has a bound
+ * digest and size, and path collisions are rejected after canonicalization.
+ */
+export function validateJavaRuntimeManifest(
+  manifest: unknown,
+): ValidatedJavaRuntimeManifestEntry[] {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("Java runtime manifest must be an object.");
+  }
+  const files = (manifest as Record<string, unknown>).files;
+  if (!files || typeof files !== "object" || Array.isArray(files)) {
+    throw new Error("Java runtime manifest is missing a files object.");
+  }
+
+  const rawEntries = Object.entries(files as Record<string, unknown>);
+  if (
+    rawEntries.length === 0 ||
+    rawEntries.length > MAX_JAVA_MANIFEST_ENTRIES
+  ) {
+    throw new Error(
+      `Java runtime manifest has an invalid file count (${rawEntries.length}).`,
+    );
+  }
+
+  const entries: ValidatedJavaRuntimeManifestEntry[] = [];
+  const byPath = new Map<string, ValidatedJavaRuntimeManifestEntry>();
+  let expectedRuntimeBytes = 0;
+  for (const [rawPath, rawInfo] of rawEntries) {
+    if (Buffer.byteLength(rawPath, "utf8") > MAX_JAVA_MANIFEST_PATH_BYTES) {
+      throw new Error(
+        `Java runtime manifest path exceeds ${MAX_JAVA_MANIFEST_PATH_BYTES} bytes.`,
+      );
+    }
+    const relativePath = canonicalizeRelativePath(rawPath);
+    const key = normalizePathKey(relativePath);
+    if (byPath.has(key)) {
+      throw new Error(
+        `Java runtime manifest contains duplicate path '${relativePath}'.`,
+      );
+    }
+    if (!rawInfo || typeof rawInfo !== "object" || Array.isArray(rawInfo)) {
+      throw new Error(
+        `Java runtime manifest entry '${relativePath}' is malformed.`,
+      );
+    }
+    const info = rawInfo as Record<string, any>;
+    if (info.type !== "file" && info.type !== "directory") {
+      throw new Error(
+        `Java runtime manifest entry '${relativePath}' has an invalid type.`,
+      );
+    }
+
+    if (info.type === "directory") {
+      const entry: ValidatedJavaRuntimeManifestEntry = {
+        relativePath,
+        type: "directory",
+        executable: false,
+      };
+      entries.push(entry);
+      byPath.set(key, entry);
+      continue;
+    }
+
+    const raw = info.downloads?.raw;
+    if (!raw || typeof raw !== "object") {
+      throw new Error(
+        `Java runtime file '${relativePath}' is missing its raw download metadata.`,
+      );
+    }
+    if (typeof raw.url !== "string" || !raw.url.trim()) {
+      throw new Error(
+        `Java runtime file '${relativePath}' is missing its download URL.`,
+      );
+    }
+    try {
+      const parsedUrl = new URL(raw.url);
+      if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+        throw new Error("URL must use HTTP or HTTPS.");
+      }
+    } catch (error: any) {
+      throw new Error(
+        `Java runtime file '${relativePath}' has an invalid download URL: ${error.message}`,
+      );
+    }
+    const sha1 = validateDigestString(raw.sha1, "sha1");
+    if (!Number.isSafeInteger(raw.size) || raw.size < 0) {
+      throw new Error(
+        `Java runtime file '${relativePath}' has an invalid expected size.`,
+      );
+    }
+    if (raw.size > MAX_JAVA_RUNTIME_FILE_BYTES) {
+      throw new TransferLimitError(
+        "Java runtime file",
+        MAX_JAVA_RUNTIME_FILE_BYTES,
+        raw.size,
+      );
+    }
+    expectedRuntimeBytes += raw.size;
+    if (expectedRuntimeBytes > MAX_JAVA_RUNTIME_OPERATION_BYTES) {
+      throw new TransferLimitError(
+        "Java runtime operation",
+        MAX_JAVA_RUNTIME_OPERATION_BYTES,
+        expectedRuntimeBytes,
+      );
+    }
+    const entry: ValidatedJavaRuntimeManifestEntry = {
+      relativePath,
+      type: "file",
+      executable: info.executable === true,
+      downloads: { raw: { url: raw.url.trim(), sha1, size: raw.size } },
+    };
+    entries.push(entry);
+    byPath.set(key, entry);
+  }
+
+  // A file cannot also be an ancestor of another manifest destination. A
+  // directory ancestor is expected and may be omitted from the manifest.
+  for (const entry of entries) {
+    const segments = entry.relativePath.split("/");
+    let ancestor = "";
+    for (let i = 0; i < segments.length - 1; i++) {
+      ancestor = ancestor ? `${ancestor}/${segments[i]}` : segments[i];
+      const parent = byPath.get(normalizePathKey(ancestor));
+      if (parent?.type === "file") {
+        throw new Error(
+          `Java runtime manifest file '${parent.relativePath}' collides with descendant '${entry.relativePath}'.`,
+        );
+      }
+    }
+  }
+
+  return entries;
+}
+
+async function fetchVerifiedJavaRuntimeManifest(
+  manifestReference: unknown,
+  runtimeRoot: string,
+): Promise<unknown> {
+  if (!manifestReference || typeof manifestReference !== "object") {
+    throw new Error("Java runtime metadata is missing its manifest reference.");
+  }
+  const reference = manifestReference as Record<string, unknown>;
+  if (typeof reference.url !== "string" || !reference.url.trim()) {
+    throw new Error("Java runtime manifest reference is missing a URL.");
+  }
+  let manifestUrl: URL;
+  try {
+    manifestUrl = new URL(reference.url);
+  } catch {
+    throw new Error("Java runtime manifest reference has an invalid URL.");
+  }
+  if (manifestUrl.protocol !== "https:") {
+    throw new Error("Java runtime manifest reference must use HTTPS.");
+  }
+  const expectedSha1 = validateDigestString(reference.sha1 as string, "sha1");
+  if (!Number.isSafeInteger(reference.size) || (reference.size as number) < 0) {
+    throw new Error(
+      "Java runtime manifest reference has an invalid expected size.",
+    );
+  }
+  if ((reference.size as number) > TRANSFER_LIMITS.jsonBytes) {
+    throw new TransferLimitError(
+      "Java runtime manifest",
+      TRANSFER_LIMITS.jsonBytes,
+      reference.size as number,
+    );
+  }
+
+  await fs.promises.mkdir(runtimeRoot, { recursive: true });
+  await checkPhysicalAncestry(path.dirname(runtimeRoot), runtimeRoot, {
+    disallowSymlinks: true,
+  });
+  const stagingDir = path.join(
+    runtimeRoot,
+    `.manifest-staging.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`,
+  );
+  await checkPhysicalAncestry(runtimeRoot, stagingDir, {
+    disallowSymlinks: true,
+  });
+  let ownsStagingDir = false;
+  try {
+    await fs.promises.mkdir(stagingDir);
+    ownsStagingDir = true;
+    await checkPhysicalAncestry(runtimeRoot, stagingDir, {
+      disallowSymlinks: true,
+    });
+    const stagedManifest = path.join(stagingDir, "manifest.json");
+    await downloadVerified(manifestUrl.href, stagedManifest, {
+      algorithm: "sha1",
+      expectedHash: expectedSha1,
+      expectedSize: reference.size as number,
+      maxBytes: TRANSFER_LIMITS.jsonBytes,
+      transport: "public-metadata",
+      headers: { "User-Agent": "Lampas-Launcher/1.0" },
+      timeoutMs: 60_000,
+    });
+    const stat = await fs.promises.stat(stagedManifest);
+    if (stat.size > TRANSFER_LIMITS.jsonBytes) {
+      throw new TransferLimitError(
+        "Java runtime manifest",
+        TRANSFER_LIMITS.jsonBytes,
+        stat.size,
+      );
+    }
+    return JSON.parse(await fs.promises.readFile(stagedManifest, "utf-8"));
+  } finally {
+    if (ownsStagingDir) {
+      await fs.promises
+        .rm(stagingDir, { recursive: true, force: true })
+        .catch(() => undefined);
+    }
+  }
+}
 
 export class JavaRuntimeManager {
   private static probeCache = new Map<string, number | null>();
@@ -70,7 +322,7 @@ export class JavaRuntimeManager {
             } else {
               resolve("");
             }
-          }
+          },
         );
       });
 
@@ -90,7 +342,7 @@ export class JavaRuntimeManager {
   static async ensureJava25(
     gameDir: string,
     onLog: (msg: string) => void,
-    verificationMode: "fast" | "full" = "fast"
+    verificationMode: "fast" | "full" = "fast",
   ): Promise<string> {
     const config = ConfigManager.get();
 
@@ -109,16 +361,21 @@ export class JavaRuntimeManager {
       "runtime",
       "java-runtime-epsilon",
       "bin",
-      process.platform === "win32" ? "javaw.exe" : "java"
+      process.platform === "win32" ? "javaw.exe" : "java",
     );
     if (fs.existsSync(localRuntimeJava)) {
-      const ver = await this.checkJavaVersion(localRuntimeJava);
-      if (ver && ver >= 25) {
-        if (verificationMode === "fast") {
+      if (verificationMode === "fast") {
+        const ver = await this.checkJavaVersion(localRuntimeJava);
+        if (ver && ver >= 25) {
           onLog(`[Java] Found local Java ${ver}: ${localRuntimeJava}`);
           return localRuntimeJava;
         }
-        onLog(`[Java] Fully verifying local Java ${ver}: ${localRuntimeJava}`);
+      } else {
+        // A managed executable is untrusted until the runtime manifest has
+        // repaired and re-hashed it. Do not execute it during full repair.
+        onLog(
+          `[Java] Preparing full verification of managed Java: ${localRuntimeJava}`,
+        );
       }
     }
 
@@ -127,26 +384,40 @@ export class JavaRuntimeManager {
 
     if (process.env.JAVA_HOME) {
       searchPaths.push(
-        path.join(process.env.JAVA_HOME, "bin", process.platform === "win32" ? "javaw.exe" : "java")
+        path.join(
+          process.env.JAVA_HOME,
+          "bin",
+          process.platform === "win32" ? "javaw.exe" : "java",
+        ),
       );
     }
 
     if (process.platform === "win32") {
       searchPaths.push(
-        path.join(process.env.LOCALAPPDATA || "", "Programs", "Eclipse Adoptium", "jdk-25", "bin", "javaw.exe"),
+        path.join(
+          process.env.LOCALAPPDATA || "",
+          "Programs",
+          "Eclipse Adoptium",
+          "jdk-25",
+          "bin",
+          "javaw.exe",
+        ),
         "C:\\Program Files\\Microsoft\\jdk-25\\bin\\javaw.exe",
         "C:\\Program Files\\Eclipse Adoptium\\jdk-25\\bin\\javaw.exe",
-        "C:\\Program Files\\Java\\jdk-25\\bin\\javaw.exe"
+        "C:\\Program Files\\Java\\jdk-25\\bin\\javaw.exe",
       );
     } else {
       searchPaths.push(
         "/usr/lib/jvm/java-25-openjdk/bin/java",
         "/usr/lib/jvm/java-25/bin/java",
-        "/opt/jdk-25/bin/java"
+        "/opt/jdk-25/bin/java",
       );
     }
 
-    for (const p of verificationMode === "full" && fs.existsSync(localRuntimeJava) ? [] : searchPaths) {
+    for (const p of verificationMode === "full" &&
+    fs.existsSync(localRuntimeJava)
+      ? []
+      : searchPaths) {
       const ver = await this.checkJavaVersion(p);
       if (ver && ver >= 25) {
         onLog(`[Java] Located system Java ${ver}: ${p}`);
@@ -165,60 +436,94 @@ export class JavaRuntimeManager {
     }
 
     // 5. If not found on machine, download and provision OpenJDK 25 from Mojang runtime CDN
-    onLog(`[Java] Java 25 not detected. Provisioning official OpenJDK 25 (java-runtime-epsilon)...`);
+    onLog(
+      `[Java] Java 25 not detected. Provisioning official OpenJDK 25 (java-runtime-epsilon)...`,
+    );
     const runtimeDest = path.join(gameDir, "runtime", "java-runtime-epsilon");
-    await fs.promises.mkdir(runtimeDest, { recursive: true });
+    assertSubordinateRoot(gameDir, path.join(gameDir, "runtime"));
+    assertSubordinateRoot(gameDir, runtimeDest);
 
     try {
       const platformKey =
         process.platform === "win32"
           ? "windows-x64"
           : process.platform === "darwin"
-          ? "mac-os"
-          : "linux";
+            ? "mac-os"
+            : "linux";
       const allRuntimes: any = await fetchJsonWithRetry(
-        "https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json"
+        "https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json",
       );
       const epsilonEntries = allRuntimes[platformKey]?.["java-runtime-epsilon"];
 
       if (!epsilonEntries || epsilonEntries.length === 0) {
-        throw new Error(`Java 25 (java-runtime-epsilon) not available for platform ${platformKey}`);
+        throw new Error(
+          `Java 25 (java-runtime-epsilon) not available for platform ${platformKey}`,
+        );
       }
 
-      const manifestUrl = epsilonEntries[0].manifest.url;
-      const manifest: any = await fetchJsonWithRetry(manifestUrl);
-      const files: Record<string, any> = manifest.files || {};
+      const manifestReference = epsilonEntries[0].manifest;
+      const manifest: any = await fetchVerifiedJavaRuntimeManifest(
+        manifestReference,
+        path.join(gameDir, "runtime"),
+      );
+      const entries = validateJavaRuntimeManifest(manifest);
+
+      // Resolve and inspect every destination before creating the runtime
+      // directory. This prevents a malformed entry discovered late in the
+      // manifest from leaving a partially provisioned managed tree.
+      for (const entry of entries) {
+        const targetPath = resolveAndContainPath(
+          runtimeDest,
+          entry.relativePath,
+        );
+        await checkPhysicalAncestry(runtimeDest, targetPath, {
+          disallowSymlinks: true,
+        });
+      }
+      await fs.promises.mkdir(runtimeDest, { recursive: true });
+      await checkPhysicalAncestry(runtimeDest, runtimeDest, {
+        disallowSymlinks: true,
+      });
 
       let completed = 0;
-      const total = Object.keys(files).length;
-      const entries = Object.entries(files);
-      let nextFile = 0;
+      const total = entries.length;
       const concurrency = 6;
 
-      async function worker() {
-        while (nextFile < entries.length) {
-          const item = entries[nextFile++];
-          if (!item) break;
-          const [relPath, fileInfo] = item;
-          const targetPath = path.join(runtimeDest, relPath);
-          if (fileInfo.type === "directory") {
+      await runBoundedPool(
+        entries,
+        async (entry, _index, signal) => {
+          const targetPath = resolveAndContainPath(
+            runtimeDest,
+            entry.relativePath,
+          );
+          await checkPhysicalAncestry(runtimeDest, targetPath, {
+            disallowSymlinks: true,
+          });
+
+          if (entry.type === "directory") {
             await fs.promises.mkdir(targetPath, { recursive: true });
-            completed++;
-            continue;
-          }
+            await checkPhysicalAncestry(runtimeDest, targetPath, {
+              disallowSymlinks: true,
+            });
+          } else {
+            const raw = entry.downloads!.raw;
+            await fs.promises.mkdir(path.dirname(targetPath), {
+              recursive: true,
+            });
+            await checkPhysicalAncestry(runtimeDest, targetPath, {
+              disallowSymlinks: true,
+            });
 
-          if (fileInfo.type === "file" && fileInfo.downloads?.raw) {
-            await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-
-            const raw = fileInfo.downloads.raw;
             let isValid = false;
             if (fs.existsSync(targetPath)) {
               try {
-                const stat = await fs.promises.stat(targetPath);
-                const sizeOk = raw.size === undefined || stat.size === raw.size;
-                if (sizeOk) {
-                  const actualSha1 = await hashFile(targetPath, "sha1");
-                  isValid = !raw.sha1 || actualSha1 === raw.sha1;
+                const stat = await fs.promises.lstat(targetPath);
+                if (
+                  stat.isFile() &&
+                  stat.nlink === 1 &&
+                  stat.size === raw.size
+                ) {
+                  isValid = (await hashFile(targetPath, "sha1")) === raw.sha1;
                 }
               } catch {
                 isValid = false;
@@ -230,12 +535,17 @@ export class JavaRuntimeManager {
                 algorithm: "sha1",
                 expectedHash: raw.sha1,
                 expectedSize: raw.size,
+                maxBytes: MAX_JAVA_RUNTIME_FILE_BYTES,
                 headers: { "User-Agent": "Lampas-Launcher/1.0" },
                 timeoutMs: 60_000,
+                signal,
               });
             }
 
-            if (fileInfo.executable) {
+            await checkPhysicalAncestry(runtimeDest, targetPath, {
+              disallowSymlinks: true,
+            });
+            if (entry.executable) {
               try {
                 await fs.promises.chmod(targetPath, 0o755);
               } catch {}
@@ -244,29 +554,78 @@ export class JavaRuntimeManager {
 
           completed++;
           if (completed % 100 === 0 || completed === total) {
-            onLog(`[Java] Downloading OpenJDK 25: ${completed}/${total} files...`);
+            onLog(
+              `[Java] Downloading OpenJDK 25: ${completed}/${total} files...`,
+            );
           }
-        }
-      }
-
-      await Promise.all(
-        Array.from({ length: Math.min(concurrency, entries.length) }, () => worker())
+          return entry.relativePath;
+        },
+        { concurrency },
       );
 
-      // Validate the provisioned executable before announcing success
-      const provisionedVer = await this.checkJavaVersion(localRuntimeJava);
-      if (!provisionedVer || provisionedVer < 25) {
+      const executableCandidates =
+        process.platform === "win32"
+          ? ["bin/java.exe", "bin/javaw.exe"]
+          : ["bin/java"];
+      const executableEntry = executableCandidates
+        .map((candidate) =>
+          entries.find(
+            (entry) =>
+              entry.relativePath.toLowerCase() === candidate.toLowerCase(),
+          ),
+        )
+        .find((entry): entry is ValidatedJavaRuntimeManifestEntry =>
+          Boolean(entry),
+        );
+      if (!executableEntry?.downloads) {
         throw new Error(
-          `Provisioned Java at '${localRuntimeJava}' failed verification (detected: ${provisionedVer ?? "none"}).`
+          "Java runtime manifest does not contain a hashed managed executable.",
         );
       }
 
-      onLog(`[Java] OpenJDK 25 successfully installed and verified (${provisionedVer}) in: ${runtimeDest}`);
+      const executablePath = resolveAndContainPath(
+        runtimeDest,
+        executableEntry.relativePath,
+      );
+      await checkPhysicalAncestry(runtimeDest, executablePath, {
+        disallowSymlinks: true,
+      });
+      const executableStat = await fs.promises.lstat(executablePath);
+      if (
+        !executableStat.isFile() ||
+        executableStat.nlink !== 1 ||
+        executableStat.size !== executableEntry.downloads.raw.size
+      ) {
+        throw new Error(
+          `Provisioned Java executable '${executablePath}' failed regular-file verification.`,
+        );
+      }
+      const executableHash = await hashFile(executablePath, "sha1");
+      if (executableHash !== executableEntry.downloads.raw.sha1) {
+        throw new Error(
+          `Provisioned Java executable '${executablePath}' failed SHA-1 verification.`,
+        );
+      }
+
+      // Validate the provisioned executable only after its exact manifest bytes
+      // have been checked. The configured/system Java paths above remain an
+      // explicit trusted user choice.
+      this.clearProbeCache();
+      const provisionedVer = await this.checkJavaVersion(localRuntimeJava);
+      if (!provisionedVer || provisionedVer < 25) {
+        throw new Error(
+          `Provisioned Java at '${localRuntimeJava}' failed verification (detected: ${provisionedVer ?? "none"}).`,
+        );
+      }
+
+      onLog(
+        `[Java] OpenJDK 25 successfully installed and verified (${provisionedVer}) in: ${runtimeDest}`,
+      );
       return localRuntimeJava;
     } catch (err: any) {
       onLog(`[Java Error] Automatic Java 25 download failed: ${err.message}`);
       throw new Error(
-        `Minecraft 26.2 requires OpenJDK 25. Please install Java 25 or configure its path in settings.`
+        `Minecraft 26.2 requires OpenJDK 25. Please install Java 25 or configure its path in settings.`,
       );
     }
   }

@@ -10,7 +10,7 @@ export type { MinecraftRuntimeDefinition };
 export function validateRuntimeDefinition(
   minecraftOrObj: unknown,
   loaderArg?: unknown,
-  context: string = "runtime definition"
+  context: string = "runtime definition",
 ): MinecraftRuntimeDefinition {
   let minecraft: unknown = minecraftOrObj;
   let loader: unknown = loaderArg;
@@ -27,7 +27,9 @@ export function validateRuntimeDefinition(
   }
 
   if (typeof minecraft !== "string" || !minecraft.trim()) {
-    throw new Error(`Invalid ${context}: missing or empty 'minecraft' version.`);
+    throw new Error(
+      `Invalid ${context}: missing or empty 'minecraft' version.`,
+    );
   }
 
   if (!loader || typeof loader !== "object" || Array.isArray(loader)) {
@@ -39,10 +41,12 @@ export function validateRuntimeDefinition(
   if (loaderObj.type !== "fabric") {
     if (typeof loaderObj.type === "string" && loaderObj.type.trim()) {
       throw new Error(
-        `Invalid ${context}: unsupported loader type '${loaderObj.type}'. Only 'fabric' is supported.`
+        `Invalid ${context}: unsupported loader type '${loaderObj.type}'. Only 'fabric' is supported.`,
       );
     }
-    throw new Error(`Invalid ${context}: missing or invalid loader 'type' (expected 'fabric').`);
+    throw new Error(
+      `Invalid ${context}: missing or invalid loader 'type' (expected 'fabric').`,
+    );
   }
 
   if (typeof loaderObj.version !== "string" || !loaderObj.version.trim()) {
@@ -65,7 +69,7 @@ export function validateRuntimeDefinition(
  */
 export function resolveRuntimeDefinition(
   release: unknown,
-  manifest: unknown
+  manifest: unknown,
 ): MinecraftRuntimeDefinition {
   if (!release || typeof release !== "object" || Array.isArray(release)) {
     throw new Error("Invalid release descriptor: missing or not an object.");
@@ -77,24 +81,32 @@ export function resolveRuntimeDefinition(
   const rel = release as Record<string, unknown>;
   const man = manifest as Record<string, unknown>;
 
-  const releaseRuntime = validateRuntimeDefinition(rel.minecraft, rel.loader, "release descriptor");
-  const manifestRuntime = validateRuntimeDefinition(man.minecraft, man.loader, "client manifest");
+  const releaseRuntime = validateRuntimeDefinition(
+    rel.minecraft,
+    rel.loader,
+    "release descriptor",
+  );
+  const manifestRuntime = validateRuntimeDefinition(
+    man.minecraft,
+    man.loader,
+    "client manifest",
+  );
 
   if (releaseRuntime.minecraft !== manifestRuntime.minecraft) {
     throw new Error(
-      `Invalid Lampas release: release descriptor requires Minecraft ${releaseRuntime.minecraft}, client manifest requires Minecraft ${manifestRuntime.minecraft}.`
+      `Invalid Lampas release: release descriptor requires Minecraft ${releaseRuntime.minecraft}, client manifest requires Minecraft ${manifestRuntime.minecraft}.`,
     );
   }
 
   if (releaseRuntime.loader.type !== manifestRuntime.loader.type) {
     throw new Error(
-      `Invalid Lampas release: release descriptor requires loader type '${releaseRuntime.loader.type}', client manifest requires loader type '${manifestRuntime.loader.type}'.`
+      `Invalid Lampas release: release descriptor requires loader type '${releaseRuntime.loader.type}', client manifest requires loader type '${manifestRuntime.loader.type}'.`,
     );
   }
 
   if (releaseRuntime.loader.version !== manifestRuntime.loader.version) {
     throw new Error(
-      `Invalid Lampas release: release descriptor requires Fabric ${releaseRuntime.loader.version}, client manifest requires Fabric ${manifestRuntime.loader.version}.`
+      `Invalid Lampas release: release descriptor requires Fabric ${releaseRuntime.loader.version}, client manifest requires Fabric ${manifestRuntime.loader.version}.`,
     );
   }
 

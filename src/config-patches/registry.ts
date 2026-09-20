@@ -26,7 +26,7 @@ export class AdapterRegistry {
     if (!adapter) {
       if (name === "json5") {
         throw new Error(
-          `Adapter 'json5' is currently unsupported: safe comment/formatting preservation cannot be guaranteed.`
+          `Adapter 'json5' is currently unsupported: safe comment/formatting preservation cannot be guaranteed.`,
         );
       }
       throw new Error(`Unsupported config patch adapter '${name}'.`);

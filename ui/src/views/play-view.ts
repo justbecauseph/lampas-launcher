@@ -6,13 +6,19 @@ import type {
 import { formatFriendlyError } from "../utils";
 
 export interface PlayViewOptions {
-  showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
+  showToast: (
+    message: string,
+    type: "info" | "success" | "error",
+    duration?: number,
+  ) => void;
   getUser: () => RendererUserProfile | null;
   clearConsole: () => void;
   appendLog: (level: "INFO" | "WARN" | "ERROR", message: string) => void;
   switchToTab: (tabId: string) => void;
   isNoSync?: () => boolean;
-  onStatusChange?: (state: "idle" | "syncing" | "launching" | "running") => void;
+  onStatusChange?: (
+    state: "idle" | "syncing" | "launching" | "running",
+  ) => void;
 }
 
 export function initPlayView(options: PlayViewOptions): {
@@ -21,29 +27,67 @@ export function initPlayView(options: PlayViewOptions): {
   setGameStatus: (state: "idle" | "syncing" | "launching" | "running") => void;
   dispose: () => void;
 } {
-  const { showToast, getUser, clearConsole, appendLog, switchToTab, isNoSync, onStatusChange } = options;
+  const {
+    showToast,
+    getUser,
+    clearConsole,
+    appendLog,
+    switchToTab,
+    isNoSync,
+    onStatusChange,
+  } = options;
 
-  const btnPlay = document.getElementById("btn-play") as HTMLButtonElement | null;
-  const btnPlayText = document.getElementById("btn-play-text") as HTMLElement | null;
-  const btnPlaySpinner = document.getElementById("btn-play-spinner") as HTMLElement | null;
-  const btnStop = document.getElementById("btn-stop") as HTMLButtonElement | null;
-  const playTargetContainer = document.getElementById("play-target-container") as HTMLElement | null;
-  const playTargetServer = document.getElementById("play-target-server") as HTMLElement | null;
-  const progressContainer = document.getElementById("progress-container") as HTMLElement | null;
-  const progressFill = document.getElementById("progress-fill") as HTMLElement | null;
-  const progressMsg = document.getElementById("progress-msg") as HTMLElement | null;
-  const progressPercent = document.getElementById("progress-percent") as HTMLElement | null;
+  const btnPlay = document.getElementById(
+    "btn-play",
+  ) as HTMLButtonElement | null;
+  const btnPlayText = document.getElementById(
+    "btn-play-text",
+  ) as HTMLElement | null;
+  const btnPlaySpinner = document.getElementById(
+    "btn-play-spinner",
+  ) as HTMLElement | null;
+  const btnStop = document.getElementById(
+    "btn-stop",
+  ) as HTMLButtonElement | null;
+  const playTargetContainer = document.getElementById(
+    "play-target-container",
+  ) as HTMLElement | null;
+  const playTargetServer = document.getElementById(
+    "play-target-server",
+  ) as HTMLElement | null;
+  const progressContainer = document.getElementById(
+    "progress-container",
+  ) as HTMLElement | null;
+  const progressFill = document.getElementById(
+    "progress-fill",
+  ) as HTMLElement | null;
+  const progressMsg = document.getElementById(
+    "progress-msg",
+  ) as HTMLElement | null;
+  const progressPercent = document.getElementById(
+    "progress-percent",
+  ) as HTMLElement | null;
 
-  const titlebarStatusDot = document.getElementById("titlebar-status-dot") as HTMLElement | null;
-  const titlebarStatusText = document.getElementById("titlebar-status-text") as HTMLElement | null;
-  const runtimeLoaderVersion = document.getElementById("runtime-loader-version") as HTMLElement | null;
-  const runtimeMinecraftVersion = document.getElementById("runtime-minecraft-version") as HTMLElement | null;
+  const titlebarStatusDot = document.getElementById(
+    "titlebar-status-dot",
+  ) as HTMLElement | null;
+  const titlebarStatusText = document.getElementById(
+    "titlebar-status-text",
+  ) as HTMLElement | null;
+  const runtimeLoaderVersion = document.getElementById(
+    "runtime-loader-version",
+  ) as HTMLElement | null;
+  const runtimeMinecraftVersion = document.getElementById(
+    "runtime-minecraft-version",
+  ) as HTMLElement | null;
 
   let isLaunching = false;
   let isGameRunning = false;
   const disposers: Array<() => void> = [];
 
-  function setGameStatus(state: "idle" | "syncing" | "launching" | "running"): void {
+  function setGameStatus(
+    state: "idle" | "syncing" | "launching" | "running",
+  ): void {
     if (titlebarStatusDot) {
       titlebarStatusDot.className = `status-dot status-dot-${state}`;
     }
@@ -87,16 +131,24 @@ export function initPlayView(options: PlayViewOptions): {
         btnPlay.disabled = false;
         btnPlay.classList.remove("btn-running");
       }
-      if (btnPlayText) btnPlayText.innerText = getUser() ? "PLAY" : "LOG IN TO PLAY";
+      if (btnPlayText)
+        btnPlayText.innerText = getUser() ? "PLAY" : "LOG IN TO PLAY";
       if (btnPlaySpinner) btnPlaySpinner.classList.add("hidden");
       if (btnStop) btnStop.classList.add("hidden");
       if (progressContainer) progressContainer.classList.add("hidden");
 
-      appendLog("INFO", `Minecraft process terminated (exit code ${code ?? 0})`);
+      appendLog(
+        "INFO",
+        `Minecraft process terminated (exit code ${code ?? 0})`,
+      );
       if (code === 0 || code === null) {
         showToast("Minecraft closed.", "info");
       } else {
-        showToast(`Minecraft closed unexpectedly (exit code ${code}). Check Console for details.`, "error", 6000);
+        showToast(
+          `Minecraft closed unexpectedly (exit code ${code}). Check Console for details.`,
+          "error",
+          6000,
+        );
       }
     });
     disposers.push(unsub);
@@ -123,13 +175,9 @@ export function initPlayView(options: PlayViewOptions): {
         return;
       }
 
-      if (isGameRunning) {
-        // If game is running, clicking Play button jumps to Console tab
-        switchToTab("tab-console");
-        return;
-      }
+      switchToTab("tab-console");
 
-      if (isLaunching) return;
+      if (isGameRunning || isLaunching) return;
 
       isLaunching = true;
       clearConsole();
@@ -144,11 +192,15 @@ export function initPlayView(options: PlayViewOptions): {
         if (progressContainer) progressContainer.classList.add("hidden");
 
         setGameStatus("launching");
-        appendLog("INFO", "No-sync mode enabled: Skipping modpack synchronization.");
+        appendLog(
+          "INFO",
+          "No-sync mode enabled: Skipping modpack synchronization.",
+        );
 
         try {
           if (window.lampas.sync?.getInstalledRuntime) {
-            const installedRuntime = await window.lampas.sync.getInstalledRuntime();
+            const installedRuntime =
+              await window.lampas.sync.getInstalledRuntime();
             if (installedRuntime) {
               updateRuntimeSpecsUI(installedRuntime);
               if (installedRuntime.launch) {
@@ -162,7 +214,7 @@ export function initPlayView(options: PlayViewOptions): {
         showToast("No-sync mode active. Launching game...", "info", 2500);
 
         try {
-          await window.lampas.game.launch(user);
+          await window.lampas.game.launch();
 
           isGameRunning = true;
           isLaunching = false;
@@ -183,18 +235,24 @@ export function initPlayView(options: PlayViewOptions): {
             btnPlay.disabled = false;
             btnPlay.classList.remove("btn-running");
           }
-          if (btnPlayText) btnPlayText.innerText = getUser() ? "PLAY" : "LOG IN TO PLAY";
+          if (btnPlayText)
+            btnPlayText.innerText = getUser() ? "PLAY" : "LOG IN TO PLAY";
           if (btnPlaySpinner) btnPlaySpinner.classList.add("hidden");
           if (btnStop) btnStop.classList.add("hidden");
           if (progressContainer) progressContainer.classList.add("hidden");
 
-          showToast(`Could not launch Minecraft: ${formatFriendlyError(err)}`, "error", 6000);
+          showToast(
+            `Could not launch Minecraft: ${formatFriendlyError(err)}`,
+            "error",
+            6000,
+          );
           appendLog("ERROR", err.message);
         }
         return;
       }
 
-      if (btnPlayText) btnPlayText.innerText = isRepair ? "REPAIRING..." : "SYNCING...";
+      if (btnPlayText)
+        btnPlayText.innerText = isRepair ? "REPAIRING..." : "SYNCING...";
       if (btnPlaySpinner) btnPlaySpinner.classList.remove("hidden");
       if (btnStop) btnStop.classList.remove("hidden");
       if (progressContainer) progressContainer.classList.remove("hidden");
@@ -202,16 +260,24 @@ export function initPlayView(options: PlayViewOptions): {
       setGameStatus("syncing");
 
       try {
-        const unsubProgress = window.lampas.sync.onProgress((prog: SyncProgress) => {
-          if (progressMsg) progressMsg.innerText = prog.message || "Synchronizing...";
-          if (progressPercent) progressPercent.innerText = `${prog.percent}%`;
-          if (progressFill) progressFill.style.width = `${prog.percent}%`;
-          if (prog.status === "downloading" && btnPlayText) {
-            btnPlayText.innerText = "DOWNLOADING...";
-          }
-        });
+        const unsubProgress = window.lampas.sync.onProgress(
+          (prog: SyncProgress) => {
+            if (progressMsg)
+              progressMsg.innerText = prog.message || "Synchronizing...";
+            if (progressPercent) progressPercent.innerText = `${prog.percent}%`;
+            if (progressFill) progressFill.style.width = `${prog.percent}%`;
+            if (prog.status === "downloading" && btnPlayText) {
+              btnPlayText.innerText = "DOWNLOADING...";
+            }
+          },
+        );
 
-        appendLog("INFO", isRepair ? "Initiating full repair synchronization..." : "Initiating synchronization...");
+        appendLog(
+          "INFO",
+          isRepair
+            ? "Initiating full repair synchronization..."
+            : "Initiating synchronization...",
+        );
         const syncResult = isRepair
           ? await window.lampas.sync.repair()
           : await window.lampas.sync.start();
@@ -230,10 +296,17 @@ export function initPlayView(options: PlayViewOptions): {
         if (progressFill) progressFill.style.width = "100%";
         if (progressPercent) progressPercent.innerText = "100%";
 
-        appendLog("INFO", `Modpack v${syncResult.version} synchronized. Bootstrapping runtime...`);
-        showToast(`Modpack v${syncResult.version} verified. Launching game...`, "info", 2500);
+        appendLog(
+          "INFO",
+          `Modpack v${syncResult.version} synchronized. Bootstrapping runtime...`,
+        );
+        showToast(
+          `Modpack v${syncResult.version} verified. Launching game...`,
+          "info",
+          2500,
+        );
 
-        await window.lampas.game.launch(user, syncResult.release);
+        await window.lampas.game.launch();
 
         isGameRunning = true;
         isLaunching = false;
@@ -254,12 +327,17 @@ export function initPlayView(options: PlayViewOptions): {
           btnPlay.disabled = false;
           btnPlay.classList.remove("btn-running");
         }
-        if (btnPlayText) btnPlayText.innerText = getUser() ? "PLAY" : "LOG IN TO PLAY";
+        if (btnPlayText)
+          btnPlayText.innerText = getUser() ? "PLAY" : "LOG IN TO PLAY";
         if (btnPlaySpinner) btnPlaySpinner.classList.add("hidden");
         if (btnStop) btnStop.classList.add("hidden");
         if (progressContainer) progressContainer.classList.add("hidden");
 
-        showToast(`Could not launch Minecraft: ${formatFriendlyError(err)}`, "error", 6000);
+        showToast(
+          `Could not launch Minecraft: ${formatFriendlyError(err)}`,
+          "error",
+          6000,
+        );
         appendLog("ERROR", err.message);
       }
     };
@@ -273,7 +351,10 @@ export function initPlayView(options: PlayViewOptions): {
         await window.lampas.game.kill();
         showToast("Stopping Minecraft...", "info");
       } catch (err: any) {
-        showToast(`Could not stop Minecraft: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not stop Minecraft: ${formatFriendlyError(err)}`,
+          "error",
+        );
       } finally {
         btnStop.disabled = false;
         btnStop.innerText = "STOP";

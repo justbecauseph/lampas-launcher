@@ -17,16 +17,19 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
 
     for (const op of operations) {
       if (op.op === "replaceLiteral") {
-        throw new Error("INI adapter does not support 'replaceLiteral' operations");
+        throw new Error(
+          "INI adapter does not support 'replaceLiteral' operations",
+        );
       }
       if (op.path.length !== 1 && op.path.length !== 2) {
         throw new Error(
-          `INI adapter requires path [section, key] or [key], got [${op.path.join(", ")}]`
+          `INI adapter requires path [section, key] or [key], got [${op.path.join(", ")}]`,
         );
       }
 
       const section = op.path.length === 2 ? String(op.path[0]) : "";
-      const key = op.path.length === 2 ? String(op.path[1]) : String(op.path[0]);
+      const key =
+        op.path.length === 2 ? String(op.path[1]) : String(op.path[0]);
       const lines = current.split(/\r?\n/);
 
       let inSection = !section;
@@ -45,12 +48,16 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
             if (inSection && section && !keyFound) {
               insertIndex = newLines.length;
             }
-            inSection = section ? secMatch[1].toLowerCase() === section.toLowerCase() : false;
+            inSection = section
+              ? secMatch[1].toLowerCase() === section.toLowerCase()
+              : false;
             if (inSection) sectionFound = true;
           }
 
           if (inSection && !keyFound) {
-            const kvMatch = line.match(/^([ \t]*)([^=:\s]+)([ \t]*[=:][ \t]*)(.*)$/);
+            const kvMatch = line.match(
+              /^([ \t]*)([^=:\s]+)([ \t]*[=:][ \t]*)(.*)$/,
+            );
             if (kvMatch && kvMatch[2].toLowerCase() === key.toLowerCase()) {
               keyFound = true;
               if (kvMatch[4].trim() === targetVal) {
@@ -59,9 +66,11 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
               }
               changed = true;
               details.push(
-                `${section ? section + "." : ""}${key}: ${kvMatch[4].trim()} → ${targetVal}`
+                `${section ? section + "." : ""}${key}: ${kvMatch[4].trim()} → ${targetVal}`,
               );
-              newLines.push(`${kvMatch[1]}${kvMatch[2]}${kvMatch[3]}${targetVal}`);
+              newLines.push(
+                `${kvMatch[1]}${kvMatch[2]}${kvMatch[3]}${targetVal}`,
+              );
               continue;
             }
           }
@@ -77,15 +86,22 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
             newLines.push(newEntry);
           }
           changed = true;
-          details.push(`${section ? section + "." : ""}${key}: (unset) → ${targetVal}`);
+          details.push(
+            `${section ? section + "." : ""}${key}: (unset) → ${targetVal}`,
+          );
         } else if (!sectionFound) {
-          if (newLines.length > 0 && newLines[newLines.length - 1].trim() !== "") {
+          if (
+            newLines.length > 0 &&
+            newLines[newLines.length - 1].trim() !== ""
+          ) {
             newLines.push("");
           }
           newLines.push(`[${section}]`);
           newLines.push(`${key}=${targetVal}`);
           changed = true;
-          details.push(`${section ? section + "." : ""}${key}: (unset) → ${targetVal}`);
+          details.push(
+            `${section ? section + "." : ""}${key}: (unset) → ${targetVal}`,
+          );
         }
 
         current = newLines.join("\n");
@@ -95,16 +111,20 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
           const line = lines[i];
           const secMatch = line.match(/^[ \t]*\[([a-zA-Z0-9_.-]+)\]/);
           if (secMatch) {
-            inSection = section ? secMatch[1].toLowerCase() === section.toLowerCase() : false;
+            inSection = section
+              ? secMatch[1].toLowerCase() === section.toLowerCase()
+              : false;
           }
 
           if (inSection && !keyFound) {
-            const kvMatch = line.match(/^([ \t]*)([^=:\s]+)([ \t]*[=:][ \t]*)(.*)$/);
+            const kvMatch = line.match(
+              /^([ \t]*)([^=:\s]+)([ \t]*[=:][ \t]*)(.*)$/,
+            );
             if (kvMatch && kvMatch[2].toLowerCase() === key.toLowerCase()) {
               keyFound = true;
               changed = true;
               details.push(
-                `${section ? section + "." : ""}${key}: removed (${kvMatch[4].trim()})`
+                `${section ? section + "." : ""}${key}: removed (${kvMatch[4].trim()})`,
               );
               continue;
             }

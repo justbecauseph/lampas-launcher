@@ -7,7 +7,10 @@ describe("server status UI view model", () => {
       server: { state: "online" },
       players: {
         online: 12,
-        list: Array.from({ length: 12 }, (_, index) => ({ uuid: String(index), username: `Player${index}` })),
+        list: Array.from({ length: 12 }, (_, index) => ({
+          uuid: String(index),
+          username: `Player${index}`,
+        })),
       },
     });
 
@@ -19,15 +22,25 @@ describe("server status UI view model", () => {
   });
 
   test("gives explicit guidance for starting, offline, and unknown states", () => {
-    expect(getServerStatusView({ server: { state: "starting" }, players: { online: null, list: [] } }).detail)
-      .toContain("launch while it starts");
-    expect(getServerStatusView({ server: { state: "offline" }, players: { online: null, list: [] } }).detail)
-      .toContain("still launch");
-    expect(getServerStatusView(null)).toEqual(expect.objectContaining({
-      state: "unknown",
-      label: "STATUS UNAVAILABLE",
-      count: "— players",
-    }));
+    expect(
+      getServerStatusView({
+        server: { state: "starting" },
+        players: { online: null, list: [] },
+      }).detail,
+    ).toContain("launch while it starts");
+    expect(
+      getServerStatusView({
+        server: { state: "offline" },
+        players: { online: null, list: [] },
+      }).detail,
+    ).toContain("still launch");
+    expect(getServerStatusView(null)).toEqual(
+      expect.objectContaining({
+        state: "unknown",
+        label: "STATUS UNAVAILABLE",
+        count: "— players",
+      }),
+    );
   });
 
   test("uses the empty-state copy when nobody is online", () => {

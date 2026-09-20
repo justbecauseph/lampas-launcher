@@ -6,7 +6,11 @@ import type {
 import { formatFriendlyError } from "../utils";
 
 export interface SettingsViewOptions {
-  showToast: (message: string, type: "info" | "success" | "error", duration?: number) => void;
+  showToast: (
+    message: string,
+    type: "info" | "success" | "error",
+    duration?: number,
+  ) => void;
   onConfigChanged: (config: RendererSettingsDto) => void;
   switchToTab?: (tabId: string) => void;
 }
@@ -25,47 +29,114 @@ export function initSettingsView(options: SettingsViewOptions): {
 } {
   const { showToast, onConfigChanged, switchToTab } = options;
 
-  const ramSlider = document.getElementById("ram-slider") as HTMLInputElement | null;
-  const ramDisplay = document.getElementById("ram-display") as HTMLElement | null;
-  const settingRamVal = document.getElementById("setting-ram-val") as HTMLElement | null;
-  const gamedirDisplay = document.getElementById("gamedir-display") as HTMLElement | null;
-  const settingGamedirInput = (document.getElementById("setting-gamedir-input") || document.getElementById("setting-gamedir")) as HTMLInputElement | null;
-  const btnSettingsOpenDir = (document.getElementById("btn-settings-open-dir") || document.getElementById("btn-open-gamedir")) as HTMLButtonElement | null;
-  const btnSettingsMoveDir = (document.getElementById("btn-settings-move-dir") || document.getElementById("btn-move-gamedir")) as HTMLButtonElement | null;
-  const btnRepairSettings = document.getElementById("btn-repair-settings") as HTMLButtonElement | null;
-  const btnSaveSettings = document.getElementById("btn-save-settings") as HTMLButtonElement | null;
-  const settingPortal = document.getElementById("setting-portal") as HTMLInputElement | null;
-  const settingJavaArgs = (document.getElementById("setting-java-args") || document.getElementById("setting-javaargs")) as HTMLInputElement | HTMLTextAreaElement | null;
-  const settingNoSync = (document.getElementById("setting-nosync") || document.getElementById("btn-toggle-nosync")) as HTMLInputElement | HTMLButtonElement | null;
-  const channelBtns = document.querySelectorAll<HTMLButtonElement>(".channel-btn");
-  const titlebarChannelBadge = document.getElementById("titlebar-channel-badge") as HTMLElement | null;
-  const titlebarNoSyncBadge = document.getElementById("titlebar-nosync-badge") as HTMLElement | null;
+  const ramSlider = document.getElementById(
+    "ram-slider",
+  ) as HTMLInputElement | null;
+  const ramDisplay = document.getElementById(
+    "ram-display",
+  ) as HTMLElement | null;
+  const settingRamVal = document.getElementById(
+    "setting-ram-val",
+  ) as HTMLElement | null;
+  const gamedirDisplay = document.getElementById(
+    "gamedir-display",
+  ) as HTMLElement | null;
+  const settingGamedirInput = (document.getElementById(
+    "setting-gamedir-input",
+  ) || document.getElementById("setting-gamedir")) as HTMLInputElement | null;
+  const btnSettingsOpenDir = (document.getElementById(
+    "btn-settings-open-dir",
+  ) || document.getElementById("btn-open-gamedir")) as HTMLButtonElement | null;
+  const btnSettingsMoveDir = (document.getElementById(
+    "btn-settings-move-dir",
+  ) || document.getElementById("btn-move-gamedir")) as HTMLButtonElement | null;
+  const btnRepairSettings = document.getElementById(
+    "btn-repair-settings",
+  ) as HTMLButtonElement | null;
+  const btnSaveSettings = document.getElementById(
+    "btn-save-settings",
+  ) as HTMLButtonElement | null;
+  const settingPortal = document.getElementById(
+    "setting-portal",
+  ) as HTMLInputElement | null;
+  const settingJavaArgs = (document.getElementById("setting-java-args") ||
+    document.getElementById("setting-javaargs")) as
+    HTMLInputElement | HTMLTextAreaElement | null;
+  const settingNoSync = (document.getElementById("setting-nosync") ||
+    document.getElementById("btn-toggle-nosync")) as
+    HTMLInputElement | HTMLButtonElement | null;
+  const settingExternalImages = document.getElementById(
+    "setting-external-images",
+  ) as HTMLInputElement | null;
+  const channelBtns =
+    document.querySelectorAll<HTMLButtonElement>(".channel-btn");
+  const titlebarChannelBadge = document.getElementById(
+    "titlebar-channel-badge",
+  ) as HTMLElement | null;
+  const titlebarNoSyncBadge = document.getElementById(
+    "titlebar-nosync-badge",
+  ) as HTMLElement | null;
 
   // Move Modal Elements
-  const modalMoveDir = (document.getElementById("modal-move-dir") || document.getElementById("move-modal")) as HTMLElement | null;
-  const moveModalConfirmView = document.getElementById("move-modal-confirm-view") as HTMLElement | null;
-  const moveModalProgressView = (document.getElementById("move-modal-progress-view") || document.getElementById("move-progress-modal")) as HTMLElement | null;
-  const moveSourcePath = document.getElementById("move-source-path") as HTMLElement | null;
-  const moveTargetPath = document.getElementById("move-target-path") as HTMLElement | null;
-  const btnCancelMove = document.getElementById("btn-cancel-move") as HTMLButtonElement | null;
-  const btnConfirmMove = document.getElementById("btn-confirm-move") as HTMLButtonElement | null;
-  const moveInput = document.getElementById("move-dir-input") as HTMLInputElement | null;
+  const modalMoveDir = (document.getElementById("modal-move-dir") ||
+    document.getElementById("move-modal")) as HTMLElement | null;
+  const moveModalConfirmView = document.getElementById(
+    "move-modal-confirm-view",
+  ) as HTMLElement | null;
+  const moveModalProgressView = (document.getElementById(
+    "move-modal-progress-view",
+  ) || document.getElementById("move-progress-modal")) as HTMLElement | null;
+  const moveSourcePath = document.getElementById(
+    "move-source-path",
+  ) as HTMLElement | null;
+  const moveTargetPath = document.getElementById(
+    "move-target-path",
+  ) as HTMLElement | null;
+  const btnCancelMove = document.getElementById(
+    "btn-cancel-move",
+  ) as HTMLButtonElement | null;
+  const btnConfirmMove = document.getElementById(
+    "btn-confirm-move",
+  ) as HTMLButtonElement | null;
+  const moveInput = document.getElementById(
+    "move-dir-input",
+  ) as HTMLInputElement | null;
   const moveError = document.getElementById("move-error") as HTMLElement | null;
-  const btnBrowseMove = document.getElementById("btn-browse-move") as HTMLButtonElement | null;
+  const btnBrowseMove = document.getElementById(
+    "btn-browse-move",
+  ) as HTMLButtonElement | null;
 
-  const moveProgressPhase = document.getElementById("move-progress-phase") as HTMLElement | null;
-  const moveProgressDetails = document.getElementById("move-progress-details") as HTMLElement | null;
-  const moveProgressPercent = document.getElementById("move-progress-percent") as HTMLElement | null;
-  const moveProgressFill = document.getElementById("move-progress-fill") as HTMLElement | null;
-  const moveProgressFile = document.getElementById("move-progress-file") as HTMLElement | null;
+  const moveProgressPhase = document.getElementById(
+    "move-progress-phase",
+  ) as HTMLElement | null;
+  const moveProgressDetails = document.getElementById(
+    "move-progress-details",
+  ) as HTMLElement | null;
+  const moveProgressPercent = document.getElementById(
+    "move-progress-percent",
+  ) as HTMLElement | null;
+  const moveProgressFill = document.getElementById(
+    "move-progress-fill",
+  ) as HTMLElement | null;
+  const moveProgressFile = document.getElementById(
+    "move-progress-file",
+  ) as HTMLElement | null;
 
   // Onboarding Modal Elements
-  const modalInitialDir = (document.getElementById("modal-initial-dir") || document.getElementById("dir-onboarding-modal")) as HTMLElement | null;
-  const initialGamedirInput = (document.getElementById("initial-gamedir-input") || document.getElementById("dir-input")) as HTMLInputElement | null;
-  const initialDirError = (document.getElementById("initial-dir-error") || document.getElementById("dir-error")) as HTMLElement | null;
-  const btnInitialBrowse = (document.getElementById("btn-initial-browse") || document.getElementById("btn-browse-dir")) as HTMLButtonElement | null;
-  const btnInitialConfirm = (document.getElementById("btn-initial-confirm") || document.getElementById("btn-confirm-dir")) as HTMLButtonElement | null;
-  const btnAcceptDefault = document.getElementById("btn-accept-default-dir") as HTMLButtonElement | null;
+  const modalInitialDir = (document.getElementById("modal-initial-dir") ||
+    document.getElementById("dir-onboarding-modal")) as HTMLElement | null;
+  const initialGamedirInput = (document.getElementById(
+    "initial-gamedir-input",
+  ) || document.getElementById("dir-input")) as HTMLInputElement | null;
+  const initialDirError = (document.getElementById("initial-dir-error") ||
+    document.getElementById("dir-error")) as HTMLElement | null;
+  const btnInitialBrowse = (document.getElementById("btn-initial-browse") ||
+    document.getElementById("btn-browse-dir")) as HTMLButtonElement | null;
+  const btnInitialConfirm = (document.getElementById("btn-initial-confirm") ||
+    document.getElementById("btn-confirm-dir")) as HTMLButtonElement | null;
+  const btnAcceptDefault = document.getElementById(
+    "btn-accept-default-dir",
+  ) as HTMLButtonElement | null;
 
   let currentConfig: RendererSettingsDto | null = null;
   let pendingMoveTargetPath = "";
@@ -102,7 +173,9 @@ export function initSettingsView(options: SettingsViewOptions): {
       if ("checked" in settingNoSync) {
         settingNoSync.checked = isNoSync;
       } else if (typeof settingNoSync.querySelector === "function") {
-        const toggle = settingNoSync.querySelector(".toggle-dot") as HTMLElement | null;
+        const toggle = settingNoSync.querySelector(
+          ".toggle-dot",
+        ) as HTMLElement | null;
         if (isNoSync) {
           settingNoSync.classList.add("bg-amber-600");
           settingNoSync.classList.remove("bg-slate-700");
@@ -119,12 +192,15 @@ export function initSettingsView(options: SettingsViewOptions): {
   async function checkInitialGameDir(status: DirectoryStatus): Promise<void> {
     if (!status.isConfigured && modalInitialDir) {
       modalInitialDir.classList.remove("hidden");
-      if (initialGamedirInput) initialGamedirInput.value = status.defaultGameDir;
+      if (initialGamedirInput)
+        initialGamedirInput.value = status.defaultGameDir;
 
       if (btnAcceptDefault) {
         btnAcceptDefault.onclick = async () => {
           try {
-            const updated = await window.lampas.gameDirectory.configure(status.defaultGameDir);
+            const updated = await window.lampas.gameDirectory.configure(
+              status.defaultGameDir,
+            );
             modalInitialDir.classList.add("hidden");
             updateGameDirUI(updated.gameDir);
             currentConfig = updated;
@@ -141,7 +217,9 @@ export function initSettingsView(options: SettingsViewOptions): {
 
       if (btnInitialBrowse) {
         btnInitialBrowse.onclick = async () => {
-          const res = await window.lampas.gameDirectory.browse(status.defaultGameDir);
+          const res = await window.lampas.gameDirectory.browse(
+            status.defaultGameDir,
+          );
           if (!res.canceled && res.filePaths?.[0] && initialGamedirInput) {
             initialGamedirInput.value = res.filePaths[0];
           }
@@ -156,7 +234,8 @@ export function initSettingsView(options: SettingsViewOptions): {
               const val = await window.lampas.gameDirectory.validate(target);
               if (!val.valid) {
                 if (initialDirError) {
-                  initialDirError.innerText = val.reason || "Invalid directory path";
+                  initialDirError.innerText =
+                    val.reason || "Invalid directory path";
                   initialDirError.classList.remove("hidden");
                 }
                 return;
@@ -189,8 +268,11 @@ export function initSettingsView(options: SettingsViewOptions): {
     if (settingRamVal) settingRamVal.innerText = `${ram} GB`;
 
     updateGameDirUI(config.gameDir || ".minecraft-lampas");
-    if (settingPortal) settingPortal.value = config.portalUrl || "https://dev.lampas.town";
+    if (settingPortal)
+      settingPortal.value = config.portalUrl || "https://dev.lampas.town";
     if (settingJavaArgs) settingJavaArgs.value = config.javaArgs || "";
+    if (settingExternalImages)
+      settingExternalImages.checked = Boolean(config.externalImages);
 
     updateNoSyncUI(config.noSync);
     applyChannel(config.selectedChannel || "stable");
@@ -207,7 +289,10 @@ export function initSettingsView(options: SettingsViewOptions): {
         currentConfig = updated;
         onConfigChanged(updated);
       } catch (err: any) {
-        showToast(`Could not update RAM allocation: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not update RAM allocation: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     });
   }
@@ -217,13 +302,21 @@ export function initSettingsView(options: SettingsViewOptions): {
     btn.onclick = async () => {
       const channel = btn.dataset.channel as "stable" | "beta" | "dev";
       try {
-        const updated = await window.lampas.config.set({ selectedChannel: channel });
+        const updated = await window.lampas.config.set({
+          selectedChannel: channel,
+        });
         applyChannel(channel);
         currentConfig = updated;
         onConfigChanged(updated);
-        showToast(`Release channel switched to ${channel.toUpperCase()}.`, "info");
+        showToast(
+          `Release channel switched to ${channel.toUpperCase()}.`,
+          "info",
+        );
       } catch (err: any) {
-        showToast(`Could not switch channel: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not switch channel: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
   });
@@ -231,7 +324,10 @@ export function initSettingsView(options: SettingsViewOptions): {
   // NoSync Toggle
   if (settingNoSync) {
     const handleNoSyncToggle = async () => {
-      const nextVal = "checked" in settingNoSync ? settingNoSync.checked : !currentConfig?.noSync;
+      const nextVal =
+        "checked" in settingNoSync
+          ? settingNoSync.checked
+          : !currentConfig?.noSync;
       try {
         const updated = await window.lampas.config.set({ noSync: nextVal });
         updateNoSyncUI(nextVal);
@@ -239,7 +335,10 @@ export function initSettingsView(options: SettingsViewOptions): {
         onConfigChanged(updated);
         showToast(`No-Sync mode ${nextVal ? "enabled" : "disabled"}.`, "info");
       } catch (err: any) {
-        showToast(`Could not update No-Sync setting: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not update No-Sync setting: ${formatFriendlyError(err)}`,
+          "error",
+        );
         updateNoSyncUI(currentConfig?.noSync);
       }
     };
@@ -251,10 +350,34 @@ export function initSettingsView(options: SettingsViewOptions): {
     }
   }
 
+  if (settingExternalImages) {
+    settingExternalImages.onchange = async () => {
+      try {
+        const updated = await window.lampas.config.set({
+          externalImages: settingExternalImages.checked,
+        });
+        currentConfig = updated;
+        onConfigChanged(updated);
+        showToast(
+          `External images ${updated.externalImages ? "enabled" : "disabled"}.`,
+          "info",
+        );
+      } catch (err: any) {
+        settingExternalImages.checked = Boolean(currentConfig?.externalImages);
+        showToast(
+          `Could not update external image setting: ${formatFriendlyError(err)}`,
+          "error",
+        );
+      }
+    };
+  }
+
   // Open Game Directory in file explorer
   if (btnSettingsOpenDir) {
     btnSettingsOpenDir.onclick = async () => {
-      if (currentConfig?.gameDir && window.lampas?.utils?.openPath) {
+      if (window.lampas?.utils?.openKnownLocation) {
+        await window.lampas.utils.openKnownLocation("gameDir");
+      } else if (currentConfig?.gameDir && window.lampas?.utils?.openPath) {
         await window.lampas.utils.openPath(currentConfig.gameDir);
       }
     };
@@ -275,27 +398,42 @@ export function initSettingsView(options: SettingsViewOptions): {
 
       // Standard ui/index.html flow: trigger browse dialog immediately
       try {
-        const browseRes = await window.lampas.gameDirectory.browse(currentConfig?.gameDir);
+        const browseRes = await window.lampas.gameDirectory.browse(
+          currentConfig?.gameDir,
+        );
         if (browseRes.canceled || !browseRes.filePaths?.length) {
           return;
         }
 
         const targetPath = browseRes.filePaths[0];
-        const valRes = await window.lampas.gameDirectory.validate(targetPath, currentConfig?.gameDir);
+        const valRes = await window.lampas.gameDirectory.validate(
+          targetPath,
+          currentConfig?.gameDir,
+        );
         if (!valRes.valid) {
-          showToast(valRes.reason || "Cannot use this location.", "error", 5000);
+          showToast(
+            valRes.reason || "Cannot use this location.",
+            "error",
+            5000,
+          );
           return;
         }
 
         pendingMoveTargetPath = targetPath;
-        if (moveSourcePath) moveSourcePath.innerText = currentConfig?.gameDir || "";
+        if (moveSourcePath)
+          moveSourcePath.innerText = currentConfig?.gameDir || "";
         if (moveTargetPath) moveTargetPath.innerText = targetPath;
 
-        if (moveModalConfirmView) moveModalConfirmView.classList.remove("hidden");
-        if (moveModalProgressView) moveModalProgressView.classList.add("hidden");
+        if (moveModalConfirmView)
+          moveModalConfirmView.classList.remove("hidden");
+        if (moveModalProgressView)
+          moveModalProgressView.classList.add("hidden");
         if (modalMoveDir) modalMoveDir.classList.remove("hidden");
       } catch (err: any) {
-        showToast(`Could not select directory: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not select directory: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
   }
@@ -309,7 +447,9 @@ export function initSettingsView(options: SettingsViewOptions): {
 
   if (btnBrowseMove) {
     btnBrowseMove.onclick = async () => {
-      const res = await window.lampas.gameDirectory.browse(currentConfig?.gameDir);
+      const res = await window.lampas.gameDirectory.browse(
+        currentConfig?.gameDir,
+      );
       if (!res.canceled && res.filePaths?.[0]) {
         if (moveInput) moveInput.value = res.filePaths[0];
         pendingMoveTargetPath = res.filePaths[0];
@@ -320,11 +460,15 @@ export function initSettingsView(options: SettingsViewOptions): {
 
   if (btnConfirmMove) {
     btnConfirmMove.onclick = async () => {
-      const targetPath = pendingMoveTargetPath || moveInput?.value?.trim() || "";
+      const targetPath =
+        pendingMoveTargetPath || moveInput?.value?.trim() || "";
       if (!targetPath) return;
 
       // Validation
-      const valRes = await window.lampas.gameDirectory.validate(targetPath, currentConfig?.gameDir);
+      const valRes = await window.lampas.gameDirectory.validate(
+        targetPath,
+        currentConfig?.gameDir,
+      );
       if (!valRes.valid) {
         if (moveError) {
           moveError.innerText = valRes.reason || "Invalid directory.";
@@ -335,39 +479,48 @@ export function initSettingsView(options: SettingsViewOptions): {
       }
 
       if (moveModalConfirmView) moveModalConfirmView.classList.add("hidden");
-      if (moveModalProgressView) moveModalProgressView.classList.remove("hidden");
+      if (moveModalProgressView)
+        moveModalProgressView.classList.remove("hidden");
 
-      if (moveProgressPhase) moveProgressPhase.innerText = "Preparing relocation...";
-      if (moveProgressDetails) moveProgressDetails.innerText = "Scanning files...";
+      if (moveProgressPhase)
+        moveProgressPhase.innerText = "Preparing relocation...";
+      if (moveProgressDetails)
+        moveProgressDetails.innerText = "Scanning files...";
       if (moveProgressPercent) moveProgressPercent.innerText = "0%";
       if (moveProgressFill) moveProgressFill.style.width = "0%";
       if (moveProgressFile) moveProgressFile.innerText = "";
 
-      const unsub = window.lampas.gameDirectory.onMoveProgress((prog: DirectoryMoveProgress) => {
-        if (moveProgressPhase) {
-          const phaseLabels: Record<string, string> = {
-            preparing: "Preparing relocation...",
-            moving: "Copying files to staging...",
-            verifying: "Verifying checksums and counts...",
-            cleaning: "Cleaning source directory...",
-            complete: "Relocation complete!",
-          };
-          moveProgressPhase.innerText = phaseLabels[prog.phase] || prog.phase;
-        }
-        if (moveProgressDetails) {
-          moveProgressDetails.innerText = `${prog.filesCompleted} / ${prog.totalFiles} files (${formatBytes(prog.bytesCompleted)} / ${formatBytes(prog.totalBytes)})`;
-        }
-        if (moveProgressPercent) moveProgressPercent.innerText = `${prog.percent}%`;
-        if (moveProgressFill) moveProgressFill.style.width = `${prog.percent}%`;
-        if (moveProgressFile) moveProgressFile.innerText = prog.currentFile || "";
-      });
+      const unsub = window.lampas.gameDirectory.onMoveProgress(
+        (prog: DirectoryMoveProgress) => {
+          if (moveProgressPhase) {
+            const phaseLabels: Record<string, string> = {
+              preparing: "Preparing relocation...",
+              moving: "Copying files to staging...",
+              verifying: "Verifying checksums and counts...",
+              cleaning: "Cleaning source directory...",
+              complete: "Relocation complete!",
+            };
+            moveProgressPhase.innerText = phaseLabels[prog.phase] || prog.phase;
+          }
+          if (moveProgressDetails) {
+            moveProgressDetails.innerText = `${prog.filesCompleted} / ${prog.totalFiles} files (${formatBytes(prog.bytesCompleted)} / ${formatBytes(prog.totalBytes)})`;
+          }
+          if (moveProgressPercent)
+            moveProgressPercent.innerText = `${prog.percent}%`;
+          if (moveProgressFill)
+            moveProgressFill.style.width = `${prog.percent}%`;
+          if (moveProgressFile)
+            moveProgressFile.innerText = prog.currentFile || "";
+        },
+      );
       disposers.push(unsub);
 
       try {
         const moveRes = await window.lampas.gameDirectory.move(targetPath);
         unsub();
         if (modalMoveDir) modalMoveDir.classList.add("hidden");
-        if (moveModalProgressView) moveModalProgressView.classList.add("hidden");
+        if (moveModalProgressView)
+          moveModalProgressView.classList.add("hidden");
         pendingMoveTargetPath = "";
 
         if (moveRes.success) {
@@ -377,14 +530,23 @@ export function initSettingsView(options: SettingsViewOptions): {
           currentConfig = freshConfig;
           onConfigChanged(freshConfig);
         } else {
-          showToast(`Relocation failed: ${formatFriendlyError(moveRes.error)}`, "error", 6000);
+          showToast(
+            `Relocation failed: ${formatFriendlyError(moveRes.error)}`,
+            "error",
+            6000,
+          );
         }
       } catch (err: any) {
         unsub();
         if (modalMoveDir) modalMoveDir.classList.add("hidden");
-        if (moveModalProgressView) moveModalProgressView.classList.add("hidden");
+        if (moveModalProgressView)
+          moveModalProgressView.classList.add("hidden");
         pendingMoveTargetPath = "";
-        showToast(`Relocation failed: ${formatFriendlyError(err)}`, "error", 6000);
+        showToast(
+          `Relocation failed: ${formatFriendlyError(err)}`,
+          "error",
+          6000,
+        );
       }
     };
   }
@@ -393,12 +555,17 @@ export function initSettingsView(options: SettingsViewOptions): {
   if (settingPortal) {
     settingPortal.onchange = async () => {
       try {
-        const updated = await window.lampas.config.set({ portalUrl: settingPortal.value.trim() });
+        const updated = await window.lampas.config.set({
+          portalUrl: settingPortal.value.trim(),
+        });
         currentConfig = updated;
         onConfigChanged(updated);
         showToast("Portal URL updated.", "info");
       } catch (err: any) {
-        showToast(`Could not save portal URL: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not save portal URL: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
   }
@@ -406,12 +573,17 @@ export function initSettingsView(options: SettingsViewOptions): {
   if (settingJavaArgs) {
     settingJavaArgs.onchange = async () => {
       try {
-        const updated = await window.lampas.config.set({ javaArgs: settingJavaArgs.value.trim() });
+        const updated = await window.lampas.config.set({
+          javaArgs: settingJavaArgs.value.trim(),
+        });
         currentConfig = updated;
         onConfigChanged(updated);
         showToast("JVM arguments updated.", "info");
       } catch (err: any) {
-        showToast(`Could not save JVM arguments: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not save JVM arguments: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
   }
@@ -419,22 +591,37 @@ export function initSettingsView(options: SettingsViewOptions): {
   if (btnSaveSettings) {
     btnSaveSettings.onclick = async () => {
       try {
-        const ram = ramSlider ? parseInt(ramSlider.value, 10) : (currentConfig?.allocatedRamGb || 4);
-        const portalUrl = settingPortal?.value?.trim() || currentConfig?.portalUrl || "https://dev.lampas.town";
+        const ram = ramSlider
+          ? parseInt(ramSlider.value, 10)
+          : currentConfig?.allocatedRamGb || 4;
+        const portalUrl =
+          settingPortal?.value?.trim() ||
+          currentConfig?.portalUrl ||
+          "https://dev.lampas.town";
         const javaArgs = settingJavaArgs?.value?.trim() || "";
-        const noSync = settingNoSync && "checked" in settingNoSync ? Boolean(settingNoSync.checked) : Boolean(currentConfig?.noSync);
+        const noSync =
+          settingNoSync && "checked" in settingNoSync
+            ? Boolean(settingNoSync.checked)
+            : Boolean(currentConfig?.noSync);
+        const externalImages =
+          settingExternalImages?.checked ??
+          Boolean(currentConfig?.externalImages);
 
         const updated = await window.lampas.config.set({
           allocatedRamGb: ram,
           portalUrl,
           javaArgs,
           noSync,
+          externalImages,
         });
         currentConfig = updated;
         onConfigChanged(updated);
         showToast("Settings saved successfully!", "success");
       } catch (err: any) {
-        showToast(`Could not save settings: ${formatFriendlyError(err)}`, "error");
+        showToast(
+          `Could not save settings: ${formatFriendlyError(err)}`,
+          "error",
+        );
       }
     };
   }
@@ -453,7 +640,9 @@ export function initSettingsView(options: SettingsViewOptions): {
         btnRepairSettings.disabled = true;
         showToast("Verifying and repairing game files...", "info");
         const res = await window.lampas.sync.repair();
-        const completionMsg = res?.message || "Repair complete! All game files, assets, and libraries verified.";
+        const completionMsg =
+          res?.message ||
+          "Repair complete! All game files, assets, and libraries verified.";
         showToast(completionMsg, "success", 4500);
       } catch (err: any) {
         showToast(`Repair failed: ${formatFriendlyError(err)}`, "error", 6000);

@@ -1,6 +1,6 @@
 /**
  * Bounded work primitive and operation-local single-flight.
- * 
+ *
  * Invariants:
  * 1. Strictly bounded concurrency.
  * 2. Deterministic, input-ordered results (critical for classpath ordering).
@@ -17,9 +17,13 @@ export interface PoolOptions {
 }
 
 export class TaskConflictError extends Error {
-  constructor(destination: string, existingIdentity: string, newIdentity: string) {
+  constructor(
+    destination: string,
+    existingIdentity: string,
+    newIdentity: string,
+  ) {
     super(
-      `Conflicting task identity for destination '${destination}': existing '${existingIdentity}' vs new '${newIdentity}'`
+      `Conflicting task identity for destination '${destination}': existing '${existingIdentity}' vs new '${newIdentity}'`,
     );
     this.name = "TaskConflictError";
   }
@@ -42,7 +46,7 @@ export class OperationAbortedError extends Error {
 export async function runBoundedPool<T, R>(
   items: readonly T[],
   worker: (item: T, index: number, signal: AbortSignal) => Promise<R>,
-  options: PoolOptions
+  options: PoolOptions,
 ): Promise<R[]> {
   if (items.length === 0) {
     return [];
@@ -57,7 +61,9 @@ export async function runBoundedPool<T, R>(
       throw new OperationAbortedError();
     }
     const onParentAbort = () => {
-      abortController.abort(options.signal?.reason || new OperationAbortedError());
+      abortController.abort(
+        options.signal?.reason || new OperationAbortedError(),
+      );
     };
     options.signal.addEventListener("abort", onParentAbort, { once: true });
   }
@@ -112,12 +118,15 @@ export async function runBoundedPool<T, R>(
  * but immediately rejects conflicting identities for the same destination.
  */
 export class OperationSingleFlight {
-  private inFlight = new Map<string, { identity: string; promise: Promise<any> }>();
+  private inFlight = new Map<
+    string,
+    { identity: string; promise: Promise<any> }
+  >();
 
   async do<R>(
     destination: string,
     identity: string,
-    factory: () => Promise<R>
+    factory: () => Promise<R>,
   ): Promise<R> {
     const normKey = path.resolve(destination).toLowerCase();
     const existing = this.inFlight.get(normKey);

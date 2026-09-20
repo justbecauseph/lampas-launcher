@@ -44,10 +44,13 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
   });
 
   test("ui/index.html does not contain remote font requests", () => {
-    const html = fs.readFileSync(path.join(__dirname, "../ui/index.html"), "utf-8");
+    const html = fs.readFileSync(
+      path.join(__dirname, "../ui/index.html"),
+      "utf-8",
+    );
     expect(html).not.toContain("fonts.googleapis.com");
     expect(html).not.toContain("fonts.gstatic.com");
-    expect(html).toContain('<link rel="stylesheet" href="fonts.css">');
+    expect(html).toMatch(/<link\s+rel="stylesheet"\s+href="fonts\.css"\s*\/?>/);
   });
 
   test("local fonts and OFL licenses are present in ui/assets/fonts/", () => {
@@ -79,10 +82,13 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
   });
 
   test("ui/fonts.css defines all required @font-face declarations", () => {
-    const css = fs.readFileSync(path.join(__dirname, "../ui/fonts.css"), "utf-8");
-    expect(css).toContain("font-family: 'IBM Plex Sans'");
-    expect(css).toContain("font-family: 'IBM Plex Mono'");
-    expect(css).toContain("font-family: 'Rajdhani'");
+    const css = fs.readFileSync(
+      path.join(__dirname, "../ui/fonts.css"),
+      "utf-8",
+    );
+    expect(css).toMatch(/font-family:\s*["']IBM Plex Sans["']/);
+    expect(css).toMatch(/font-family:\s*["']IBM Plex Mono["']/);
+    expect(css).toMatch(/font-family:\s*["']Rajdhani["']/);
     expect(css).toContain("IBMPlexSans-Regular.woff2");
     expect(css).toContain("IBMPlexMono-Regular.woff2");
     expect(css).toContain("Rajdhani-Bold.woff2");
@@ -91,7 +97,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
   test("mod-view template eliminates inline onerror attribute in favor of programmatic handling", () => {
     const modsViewSource = fs.readFileSync(
       path.join(__dirname, "../ui/src/views/mods-view.ts"),
-      "utf-8"
+      "utf-8",
     );
     expect(modsViewSource).not.toContain("onerror=");
     expect(modsViewSource).toMatch(/\.addEventListener\(\s*["']error["']/);
@@ -102,7 +108,10 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       server: { state: "online", managementConnected: true },
       players: {
         online: 10,
-        list: Array.from({ length: 10 }, (_, i) => ({ uuid: `uuid-${i}`, username: `User${i}` })),
+        list: Array.from({ length: 10 }, (_, i) => ({
+          uuid: `uuid-${i}`,
+          username: `User${i}`,
+        })),
       },
       presence: { freshness: "live", updatedAt: new Date().toISOString() },
     });
@@ -119,7 +128,11 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     const mainJs = path.join(rootDir, "dist/main.js");
     const preloadJs = path.join(rootDir, "dist/preload.js");
 
-    if (!fs.existsSync(prodIndex) || !fs.existsSync(mainJs) || !fs.existsSync(preloadJs)) {
+    if (
+      !fs.existsSync(prodIndex) ||
+      !fs.existsSync(mainJs) ||
+      !fs.existsSync(preloadJs)
+    ) {
       const { execSync } = require("node:child_process");
       execSync("bun run build", { cwd: rootDir, stdio: "pipe" });
     }
@@ -134,11 +147,15 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     expect(prodHtml).toMatch(/href="\.\/assets\/index-[^"]+\.css"/);
   });
 
-  test("auth-view renders mc-heads.net avatar image, handles onerror fallback, and resets to 'P' on logout", () => {
+  test("auth-view uses the brokered avatar image when opted in, handles fallback, and resets to 'P' on logout", async () => {
     // Check source code requirements
-    const authSource = fs.readFileSync(path.join(__dirname, "../ui/src/views/auth-view.ts"), "utf-8");
+    const authSource = fs.readFileSync(
+      path.join(__dirname, "../ui/src/views/auth-view.ts"),
+      "utf-8",
+    );
     expect(authSource).not.toContain("crafatar.com");
-    expect(authSource).toContain("https://mc-heads.net/avatar/");
+    expect(authSource).not.toContain("https://mc-heads.net/avatar/");
+    expect(authSource).toMatch(/window\.lampas\.cosmetics\s*\.getAvatar/);
 
     // Mock DOM elements
     const elements = new Map<string, any>();
@@ -183,15 +200,29 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     reg("user-role");
 
     const prevDoc = (globalThis as any).document;
+    const prevWindow = (globalThis as any).window;
     (globalThis as any).document = {
       getElementById: (id: string) => elements.get(id) || null,
       createElement: (tag: string) => new MockEl(""),
+    };
+    (globalThis as any).window = {
+      lampas: {
+        cosmetics: {
+          getAvatar: async () => ({
+            dataUrl: "data:image/png;base64,AA==",
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+          }),
+        },
+      },
     };
 
     try {
       const auth = initAuthView({
         showToast: () => {},
         getPortalUrl: () => "https://dev.lampas.town",
+        externalImages: () => true,
         onUserChanged: () => {},
       });
 
@@ -211,11 +242,12 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       };
 
       auth.updateUserUI(sampleUser);
+      await Promise.resolve();
 
       // Verify img element was added inside #user-avatar
       expect(userAvatar.children.length).toBe(1);
       const img = userAvatar.children[0];
-      expect(img.src).toBe("https://mc-heads.net/avatar/069a79f444e94726a5befca90e38aaf5/64");
+      expect(img.src).toBe("data:image/png;base64,AA==");
       expect(img.alt).toBe("Steve's avatar");
 
       // 3. Test onerror fallback to initial
@@ -231,12 +263,16 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       expect(userAvatar.innerText).toBe("P");
     } finally {
       (globalThis as any).document = prevDoc;
+      (globalThis as any).window = prevWindow;
     }
   });
 
   test("settings-view populates #setting-gamedir-input and binds directory buttons", async () => {
     // Check source code requirements
-    const settingsSource = fs.readFileSync(path.join(__dirname, "../ui/src/views/settings-view.ts"), "utf-8");
+    const settingsSource = fs.readFileSync(
+      path.join(__dirname, "../ui/src/views/settings-view.ts"),
+      "utf-8",
+    );
     expect(settingsSource).toContain("setting-gamedir-input");
 
     const elements = new Map<string, any>();
@@ -310,7 +346,10 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
           },
         },
         gameDirectory: {
-          browse: async () => ({ canceled: false, filePaths: ["D:/NewMinecraft"] }),
+          browse: async () => ({
+            canceled: false,
+            filePaths: ["D:/NewMinecraft"],
+          }),
           validate: async () => ({ valid: true }),
           move: async () => ({ success: true, gameDir: "D:/NewMinecraft" }),
           onMoveProgress: () => () => {},
@@ -343,12 +382,16 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       });
 
       // Verify #setting-gamedir-input is populated
-      expect(gamedirInput.value).toBe("C:/Users/markj/AppData/Roaming/.minecraft-lampas");
+      expect(gamedirInput.value).toBe(
+        "C:/Users/markj/AppData/Roaming/.minecraft-lampas",
+      );
 
       // Verify Open Folder button works
       expect(typeof openDirBtn.onclick).toBe("function");
       await openDirBtn.onclick();
-      expect(openedPath).toBe("C:/Users/markj/AppData/Roaming/.minecraft-lampas");
+      expect(openedPath).toBe(
+        "C:/Users/markj/AppData/Roaming/.minecraft-lampas",
+      );
 
       // Verify Move Installation button is wired
       expect(typeof moveDirBtn.onclick).toBe("function");
@@ -360,8 +403,19 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       expect(repairCalled).toBe(true);
 
       // Verify toasts: initial info toast followed by success completion toast
-      expect(toasts.some((t) => t.type === "info" && t.message.includes("Verifying"))).toBe(true);
-      expect(toasts.some((t) => t.type === "success" && (t.message.includes("repaired") || t.message.includes("Repair complete")))).toBe(true);
+      expect(
+        toasts.some(
+          (t) => t.type === "info" && t.message.includes("Verifying"),
+        ),
+      ).toBe(true);
+      expect(
+        toasts.some(
+          (t) =>
+            t.type === "success" &&
+            (t.message.includes("repaired") ||
+              t.message.includes("Repair complete")),
+        ),
+      ).toBe(true);
     } finally {
       (globalThis as any).document = prevDoc;
       (globalThis as any).window = prevWin;
@@ -370,7 +424,10 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
 
   test("mods-view wires all Client Loadout header buttons (add, repair, verify, open folder)", async () => {
     // Check source code requirements
-    const modsSource = fs.readFileSync(path.join(__dirname, "../ui/src/views/mods-view.ts"), "utf-8");
+    const modsSource = fs.readFileSync(
+      path.join(__dirname, "../ui/src/views/mods-view.ts"),
+      "utf-8",
+    );
     expect(modsSource).toContain("btn-add-mods");
     expect(modsSource).toContain("btn-repair-pack");
     expect(modsSource).toContain("btn-verify-pack");

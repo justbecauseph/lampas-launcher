@@ -17,11 +17,19 @@
     "smoke": "bun test/smoke/electron-smoke.ts",
     "dev": "concurrently \"tsc -w\" \"vite\" \"electron .\"",
     "build": "tsc && vite build",
+    "format:check": "bunx prettier -c .",
+    "format": "bunx prettier -w .",
     "package:dir": "tsc && vite build && electron-builder --dir --publish never",
     "package:win": "tsc && vite build && electron-builder --win --publish never",
     "package:linux": "tsc && vite build && electron-builder --linux --publish never",
     "package:all": "tsc && vite build && electron-builder -mwl --publish never",
-    "start": "electron ."
+    "start": "electron .",
+    "security:artifacts": "bun scripts/security-artifacts.ts",
+    "security:fuses": "node scripts/verify-fuses.cjs",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "**/*": "prettier --write --ignore-unknown"
   },
   "dependencies": {
     "fflate": "^0.8.3",
@@ -35,19 +43,32 @@
     "concurrently": "^9.1.2",
     "electron": "44.0.0",
     "electron-builder": "^26.15.3",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
+    "prettier": "3.9.8",
     "typescript": "^5.8.2",
     "vite": "^6.2.0"
   },
+  "trustedDependencies": [
+    "electron"
+  ],
   "build": {
     "appId": "town.lampas.launcher",
     "productName": "Lampas Launcher",
     "publish": null,
+    "beforePack": "scripts/pack-security.cjs",
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "onlyLoadAppFromAsar": true,
+      "enableEmbeddedAsarIntegrityValidation": true
+    },
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
-      "ui/**/*",
       "assets/**/*",
       "package.json"
     ],

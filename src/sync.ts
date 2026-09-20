@@ -3,14 +3,43 @@ import * as path from "node:path";
 import { ConfigManager, normalizePortalUrl } from "./config";
 import { MinecraftBootstrap } from "./minecraft-bootstrap";
 import { JavaRuntimeManager } from "./java-runtime";
-import { copyAtomic, copyVerified, downloadVerified, fetchJsonWithRetry, hashFile, HttpResponseError, writeAtomicFile } from "./file-transfer";
+import {
+  copyAtomic,
+  copyVerified,
+  downloadVerified,
+  fetchJsonWithRetry,
+  fetchPortalJsonWithRetry,
+  hashFile,
+  writeAtomicFile,
+} from "./file-transfer";
 import { reconcileRequiredResourcePacks } from "./resource-packs";
 import { app } from "electron";
 import { reconcileConfigPatches } from "./config-patches";
 import { LauncherLogger } from "./logger";
 import { resolveRuntimeDefinition } from "./runtime-definition";
 import { runBoundedPool } from "./async-pool";
-import type { ConfigPatch, InstallationState, MinecraftRuntimeDefinition, RequiredResourcePack, SyncProgress } from "./types";
+import type {
+  ConfigPatch,
+  InstallationState,
+  MinecraftRuntimeDefinition,
+  RequiredResourcePack,
+  SyncProgress,
+} from "./types";
+import {
+  isTransientMetadataFetchFailure,
+  validateChannelResponse,
+  validateClientManifest,
+  validateInstallationState,
+  validateReleaseDescriptor,
+  MetadataValidationError,
+  MetadataIntegrityError,
+  type ValidatedReleaseDescriptor,
+} from "./metadata-policy";
+import {
+  clearSyncSafetyBlock,
+  persistSyncSafetyBlock,
+  type SyncSafetyContext,
+} from "./sync-safety";
 
 export interface TransferOutcome {
   artifactId: string;
@@ -22,6 +51,94 @@ export interface TransferOutcome {
 }
 
 export const MAX_SUPPORTED_PROTOCOL = 3;
+
+function metadataUrl(
+  portalUrl: string,
+  value: string,
+  context: string,
+): string {
+  const resolved = new URL(value, `${portalUrl}/`);
+  const portal = new URL(`${portalUrl}/`);
+  if (resolved.origin !== portal.origin) {
+    throw new MetadataValidationError(
+      `${context} points outside the configured Portal.`,
+    );
+  }
+  return resolved.toString();
+}
+
+function httpStatus(error: unknown): number | undefined {
+  for (const candidate of errorChain(error)) {
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      typeof (candidate as any).status === "number"
+    ) {
+      return (candidate as any).status;
+    }
+  }
+  return undefined;
+}
+
+function errorChain(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  let current: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && current && typeof current === "object";
+    depth++
+  ) {
+    chain.push(current);
+    current = (current as any).cause;
+  }
+  return chain;
+}
+
+function isKnownSyncSafetyFailure(error: unknown): boolean {
+  const status = httpStatus(error);
+  if (status === 401 || status === 403 || status === 410) return true;
+  for (const candidate of errorChain(error)) {
+    const name = String((candidate as any).name || "");
+    if (
+      name === "MetadataValidationError" ||
+      name === "MetadataIntegrityError" ||
+      name === "PortalRedirectPolicyError" ||
+      name === "TransferIntegrityError" ||
+      name === "PathContainmentError"
+    )
+      return true;
+    if (
+      candidate instanceof Error &&
+      /Invalid (?:Lampas )?(?:release|client manifest)|Verification failed|Integrity violation|Unsafe relative path|installation state is malformed|Unsupported modpack protocol/i.test(
+        candidate.message,
+      )
+    )
+      return true;
+  }
+  return false;
+}
+
+function safetyReason(error: unknown): "DENIAL" | "SCHEMA" | "INTEGRITY" {
+  const status = httpStatus(error);
+  if (status === 401 || status === 403 || status === 410) return "DENIAL";
+  for (const candidate of errorChain(error)) {
+    const name = String((candidate as any).name || "");
+    if (
+      candidate instanceof Error &&
+      /REVOKED|denied|forbidden|unauthorized/i.test(candidate.message)
+    )
+      return "DENIAL";
+    if (
+      [
+        "PathContainmentError",
+        "TransferIntegrityError",
+        "MetadataIntegrityError",
+      ].includes(name)
+    )
+      return "INTEGRITY";
+  }
+  return "SCHEMA";
+}
 
 export function compareVersions(a: string, b: string): number {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
@@ -35,40 +152,45 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-const PROTECTED_PREFIXES = [
-  "saves/",
-  "screenshots/",
-  "logs/",
-  "crash-reports/",
-  "options.txt",
-  "servers.dat",
-];
+import {
+  isSafeRelativePath,
+  isPathProtected,
+  canonicalizeRelativePath,
+  validateDigestString,
+  sanitizeInstallationState,
+  resolveAndContainPath,
+  checkPhysicalAncestry,
+  checkPhysicalAncestrySync,
+  normalizePathKey,
+  assertSubordinateRoot,
+} from "./path-policy";
 
-export function isPathProtected(relPath: string): boolean {
-  const norm = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  return PROTECTED_PREFIXES.some((p) => norm === p || norm.startsWith(p));
-}
-
-export function isSafeRelativePath(relPath: string): boolean {
-  if (!relPath || typeof relPath !== "string") return false;
-  const normalized = path.normalize(relPath).replace(/\\/g, "/");
-  if (
-    normalized.startsWith("../") ||
-    normalized === ".." ||
-    path.isAbsolute(normalized) ||
-    /^[a-zA-Z]:/.test(normalized) ||
-    normalized.startsWith("//") ||
-    normalized.startsWith("\\\\")
-  ) {
-    return false;
-  }
-  return true;
-}
+export {
+  isSafeRelativePath,
+  isPathProtected,
+  sanitizeInstallationState,
+  normalizePathKey,
+  assertSubordinateRoot,
+};
 
 export class LauncherSync {
   static async syncClient(
     onProgress: (progress: SyncProgress) => void,
-    verificationMode: "fast" | "full" = "fast"
+    verificationMode: "fast" | "full" = "fast",
+  ): Promise<{
+    success: boolean;
+    version: string;
+    packName: string;
+    release?: any;
+    runtime: MinecraftRuntimeDefinition;
+  }> {
+    return this.runSyncWithSafety(onProgress, verificationMode, true);
+  }
+
+  private static async runSyncWithSafety(
+    onProgress: (progress: SyncProgress) => void,
+    verificationMode: "fast" | "full",
+    clearOnSuccess: boolean,
   ): Promise<{
     success: boolean;
     version: string;
@@ -77,10 +199,50 @@ export class LauncherSync {
     runtime: MinecraftRuntimeDefinition;
   }> {
     const config = ConfigManager.get();
-    if (!config.token) {
-      throw new Error("Authentication required: Please log in with your Lampas Portal account.");
+    const safetyContext: SyncSafetyContext = {
+      origin: normalizePortalUrl(config.portalUrl),
+      channel: (config.selectedChannel ||
+        "stable") as SyncSafetyContext["channel"],
+      gameDir: config.gameDir,
+    };
+    try {
+      const result = await this.syncClientInternal(
+        onProgress,
+        verificationMode,
+      );
+      // A full pack pass does not verify the bootstrap/runtime/Java surfaces
+      // covered by repairInstallation. Keep an integrity block until that
+      // complete path succeeds.
+      if (clearOnSuccess) clearSyncSafetyBlock(config.gameDir);
+      return result;
+    } catch (error) {
+      if (isKnownSyncSafetyFailure(error))
+        await persistSyncSafetyBlock(safetyContext, safetyReason(error), error);
+      throw error;
     }
+  }
+
+  private static async syncClientInternal(
+    onProgress: (progress: SyncProgress) => void,
+    verificationMode: "fast" | "full" = "fast",
+  ): Promise<{
+    success: boolean;
+    version: string;
+    packName: string;
+    release?: any;
+    runtime: MinecraftRuntimeDefinition;
+  }> {
+    const config = ConfigManager.get();
     const portalUrl = normalizePortalUrl(config.portalUrl);
+    if (
+      !config.token ||
+      !config.sessionPortalUrl ||
+      config.sessionPortalUrl !== portalUrl
+    ) {
+      throw new Error(
+        "Authentication required: Please log in with your Lampas Portal account.",
+      );
+    }
     const channel = config.selectedChannel || "stable";
     const gameDir = config.gameDir;
 
@@ -100,26 +262,66 @@ export class LauncherSync {
 
     let targetVersion = "2.0.0";
     let manifest: any;
-    let releaseData: any = { pack: "Lampas 2" };
+    let releaseData: ValidatedReleaseDescriptor;
 
     try {
       // 1. Fetch channel pointer
-      const channelHeaders: Record<string, string> = { "User-Agent": "Lampas-Launcher/1.0" };
+      const channelHeaders: Record<string, string> = {
+        "User-Agent": "Lampas-Launcher/1.0",
+      };
       if (config.token) {
         channelHeaders["Authorization"] = `Bearer ${config.token}`;
       }
 
-      const channelData: any = await fetchJsonWithRetry(`${portalUrl}/api/v1/channels/${channel}`, channelHeaders);
+      const channelData = validateChannelResponse(
+        await fetchPortalJsonWithRetry(
+          `${portalUrl}/api/v1/channels/${channel}`,
+          channelHeaders,
+        ),
+        channel,
+      );
       targetVersion = channelData.version;
+      const channelReleaseUrl = metadataUrl(
+        portalUrl,
+        channelData.release,
+        "channel release",
+      );
+      const channelReleaseMatch = new URL(channelReleaseUrl).pathname.match(
+        /^\/api\/v1\/releases\/([^/]+)$/,
+      );
+      if (
+        !channelReleaseMatch ||
+        decodeURIComponent(channelReleaseMatch[1]) !== targetVersion
+      ) {
+        throw new MetadataValidationError(
+          "channel release pointer does not match channel version.",
+        );
+      }
 
       // 2. Fetch release descriptor
       try {
-        releaseData = await fetchJsonWithRetry(`${portalUrl}/api/v1/releases/${targetVersion}`, channelHeaders);
+        releaseData = validateReleaseDescriptor(
+          await fetchPortalJsonWithRetry(channelReleaseUrl, channelHeaders),
+        );
       } catch (error) {
-        if (error instanceof HttpResponseError && error.status === 410) {
-          throw new Error(`Release v${targetVersion} has been REVOKED due to critical issues. Please select another channel.`);
+        if (httpStatus(error) === 410) {
+          throw new MetadataIntegrityError(
+            `Release v${targetVersion} has been REVOKED due to critical issues. Please select another channel.`,
+          );
         }
         throw error;
+      }
+      if (releaseData.version !== targetVersion) {
+        throw new MetadataValidationError(
+          `Release descriptor version '${releaseData.version}' does not match channel target '${targetVersion}'.`,
+        );
+      }
+      if (
+        String((releaseData as any).status || "").toUpperCase() === "REVOKED"
+      ) {
+        throw new MetadataIntegrityError(
+          `Release v${targetVersion} has been REVOKED due to critical issues. Please select another channel.`,
+        );
       }
 
       // 3. Fetch client manifest
@@ -133,29 +335,61 @@ export class LauncherSync {
         totalBytes: 0,
       });
 
-      manifest = await fetchJsonWithRetry(`${portalUrl}/api/v1/releases/${targetVersion}/client-manifest`, channelHeaders);
+      manifest = await fetchPortalJsonWithRetry(
+        metadataUrl(
+          portalUrl,
+          releaseData.clientManifest,
+          "release client manifest",
+        ),
+        channelHeaders,
+      );
+      validateClientManifest(manifest, releaseData);
     } catch (portalErr: any) {
-      // Offline / Local pipeline fallback
-      const localManifestPath = path.join(__dirname, "../../manifest/client-manifest.json");
-      if (fs.existsSync(localManifestPath)) {
+      // Only an unavailable Portal can use the explicitly supported local
+      // development fallback.  Denials, revocations, redirects, malformed
+      // metadata, and integrity failures must stop synchronization.
+      if (!isTransientMetadataFetchFailure(portalErr)) {
+        throw portalErr;
+      }
+      const localManifestPath = path.join(
+        __dirname,
+        "../../manifest/client-manifest.json",
+      );
+      const localReleasePath = path.join(
+        __dirname,
+        "../../manifest/release.json",
+      );
+      if (
+        !fs.existsSync(localManifestPath) ||
+        !fs.existsSync(localReleasePath)
+      ) {
+        throw new Error(
+          `Portal unavailable (${portalErr.message}) and no local manifest found.`,
+        );
+      }
+      try {
+        releaseData = validateReleaseDescriptor(
+          JSON.parse(fs.readFileSync(localReleasePath, "utf-8")),
+        );
+        targetVersion = releaseData.version;
         manifest = JSON.parse(fs.readFileSync(localManifestPath, "utf-8"));
-        targetVersion = manifest.version || "2.0.0";
-        const localReleasePath = path.join(__dirname, "../../manifest/release.json");
-        if (fs.existsSync(localReleasePath)) {
-          try {
-            releaseData = JSON.parse(fs.readFileSync(localReleasePath, "utf-8"));
-          } catch {}
-        }
-      } else {
-        throw new Error(`Portal unavailable (${portalErr.message}) and no local manifest found.`);
+        validateClientManifest(manifest, releaseData);
+      } catch {
+        const metadataError = new MetadataValidationError(
+          `Portal unavailable (${portalErr.message}) and local metadata is invalid.`,
+        );
+        throw metadataError;
       }
     }
 
     // Validate protocol capability
     const requiredProtocol = manifest.protocol ?? releaseData.protocol;
-    if (typeof requiredProtocol === "number" && requiredProtocol > MAX_SUPPORTED_PROTOCOL) {
+    if (
+      typeof requiredProtocol === "number" &&
+      requiredProtocol > MAX_SUPPORTED_PROTOCOL
+    ) {
       throw new Error(
-        `Unsupported modpack protocol: release requires protocol ${requiredProtocol}, but this launcher only supports up to protocol ${MAX_SUPPORTED_PROTOCOL}. Please update Lampas Launcher.`
+        `Unsupported modpack protocol: release requires protocol ${requiredProtocol}, but this launcher only supports up to protocol ${MAX_SUPPORTED_PROTOCOL}. Please update Lampas Launcher.`,
       );
     }
 
@@ -165,13 +399,19 @@ export class LauncherSync {
       try {
         currentLauncherVersion = app.getVersion();
       } catch {}
-      if (compareVersions(currentLauncherVersion, releaseData.minimumLauncherVersion) < 0) {
+      if (
+        compareVersions(
+          currentLauncherVersion,
+          releaseData.minimumLauncherVersion,
+        ) < 0
+      ) {
         throw new Error(
-          `Launcher update required: release requires launcher version ${releaseData.minimumLauncherVersion} or newer (current: ${currentLauncherVersion}). Please update Lampas Launcher.`
+          `Launcher update required: release requires launcher version ${releaseData.minimumLauncherVersion} or newer (current: ${currentLauncherVersion}). Please update Lampas Launcher.`,
         );
       }
     }
 
+    // Validate complete manifest and release metadata before any filesystem mutation
     // Validate and cross-check runtime definition (fails hard before any pack mutation or download)
     const runtime = resolveRuntimeDefinition(releaseData, manifest);
 
@@ -179,6 +419,10 @@ export class LauncherSync {
     if (!fs.existsSync(gameDir)) {
       fs.mkdirSync(gameDir, { recursive: true });
     }
+    assertSubordinateRoot(gameDir, stateDir);
+    assertSubordinateRoot(gameDir, cacheDir);
+    assertSubordinateRoot(gameDir, path.join(gameDir, "mods"));
+
     if (!fs.existsSync(cacheDir)) {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
@@ -186,11 +430,13 @@ export class LauncherSync {
     const disabledClientMods = new Set(config.disabledClientMods || []);
     const disabledFilenames = new Set(
       (manifest.mods || [])
-        .filter((mod: any) => mod.side === "client" && disabledClientMods.has(mod.id))
-        .map((mod: any) => mod.filename)
+        .filter(
+          (mod: any) => mod.side === "client" && disabledClientMods.has(mod.id),
+        )
+        .map((mod: any) => mod.filename),
     );
-    const manifestFiles: any[] = (manifest.files || []).filter((file: any) =>
-      !disabledFilenames.has(path.basename(file.path))
+    const manifestFiles: any[] = (manifest.files || []).filter(
+      (file: any) => !disabledFilenames.has(path.basename(file.path)),
     );
 
     // Validate relative paths in manifest
@@ -201,18 +447,34 @@ export class LauncherSync {
     }
 
     // 4. Reconcile with local files
-    let prevState: InstallationState = { pack: "", version: "", installedAt: "", files: {} };
+    let prevState: InstallationState = {
+      pack: "",
+      version: "",
+      installedAt: "",
+      files: {},
+    };
     if (fs.existsSync(stateFile)) {
       try {
-        prevState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-      } catch {
-        // fresh state
+        const rawPrev = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+        const sanitized = sanitizeInstallationState(rawPrev, gameDir);
+        if (sanitized.quarantinedKeys.length > 0) {
+          LauncherLogger.warn(
+            `[Sync] Quarantined ${sanitized.quarantinedKeys.length} unsafe/traversal paths from previous installation state: ${sanitized.quarantinedKeys.join(", ")}`,
+          );
+        }
+        prevState = validateInstallationState(rawPrev, gameDir);
+      } catch (stateError) {
+        throw new Error(
+          "Installation state is malformed; synchronization is blocked until it is repaired or removed.",
+          { cause: stateError },
+        );
       }
     }
 
+    // Index desired files by canonical platform-aware key (case-folding on Windows, case-sensitive on POSIX)
     const desiredFilesMap = new Map<string, any>();
     for (const f of manifestFiles) {
-      desiredFilesMap.set(f.path, f);
+      desiredFilesMap.set(normalizePathKey(f.path), f);
     }
 
     const syncGenerationId = `gen-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
@@ -222,9 +484,11 @@ export class LauncherSync {
     const verifiedAt = new Map<string, string>();
 
     // Bounded async metadata checking across manifest files (concurrency 8)
-    const checkResults = new Array<{ file: any; needDownload: boolean; verifiedTimestamp?: string }>(
-      manifestFiles.length
-    );
+    const checkResults = new Array<{
+      file: any;
+      needDownload: boolean;
+      verifiedTimestamp?: string;
+    }>(manifestFiles.length);
 
     await runBoundedPool(
       manifestFiles,
@@ -255,7 +519,10 @@ export class LauncherSync {
           }
 
           const hash = await hashFile(localPath, "sha256");
-          if (hash.toLowerCase() === file.hashes.sha256.toLowerCase() && stat.size === file.size) {
+          if (
+            hash.toLowerCase() === file.hashes.sha256.toLowerCase() &&
+            stat.size === file.size
+          ) {
             checkResults[index] = {
               file,
               needDownload: false,
@@ -264,14 +531,14 @@ export class LauncherSync {
             return;
           } else {
             LauncherLogger.info(
-              `  ⚠️ [Hash Mismatch] ${file.path} (expected: ${file.hashes.sha256.slice(0, 10)}..., actual: ${hash.slice(0, 10)}...)`
+              `  ⚠️ [Hash Mismatch] ${file.path} (expected: ${file.hashes.sha256.slice(0, 10)}..., actual: ${hash.slice(0, 10)}...)`,
             );
           }
         }
 
         checkResults[index] = { file, needDownload: true };
       },
-      { concurrency: 8 }
+      { concurrency: 8 },
     );
 
     for (const r of checkResults) {
@@ -288,25 +555,77 @@ export class LauncherSync {
 
     const stagedPathsSet = new Set(toDownload.map((f) => f.path));
 
+    // Gather all custom client mod filenames (enabled and disabled)
+    const customModFilenames = new Set(
+      (config.customClientMods || []).flatMap((mod) => [
+        mod.filename.toLowerCase(),
+        mod.filename.toLowerCase() + ".disabled",
+      ]),
+    );
+
     // Identify obsolete managed files from previous state AND unmanifested mods on disk
     const toDeleteSet = new Set<string>();
     for (const [prevPath, info] of Object.entries(prevState.files)) {
-      if (info.policy === "MANAGED" && !desiredFilesMap.has(prevPath) && !isPathProtected(prevPath)) {
-        toDeleteSet.add(prevPath);
+      const prevKey = normalizePathKey(prevPath);
+      const prevBasename = path.basename(prevPath).toLowerCase();
+      const isCustomMod =
+        customModFilenames.has(prevBasename) ||
+        customModFilenames.has(prevBasename.replace(/\.disabled$/, ""));
+
+      if (
+        info.policy === "MANAGED" &&
+        !desiredFilesMap.has(prevKey) &&
+        !isPathProtected(prevPath) &&
+        !isCustomMod
+      ) {
+        try {
+          const fullPath = resolveAndContainPath(gameDir, prevPath);
+          checkPhysicalAncestrySync(gameDir, fullPath, {
+            enforceOwnership: true,
+          });
+          toDeleteSet.add(prevPath);
+        } catch {
+          LauncherLogger.warn(
+            `[Sync] Skipping uncontained/protected obsolete candidate: ${prevPath}`,
+          );
+        }
       }
     }
 
     // Direct disk reconciliation: preserve explicitly imported local mods.
     const modsDir = path.join(gameDir, "mods");
-    const customModFilenames = new Set((config.customClientMods || []).map((mod) => mod.filename.toLowerCase()));
     if (fs.existsSync(modsDir)) {
       try {
         const diskFiles = fs.readdirSync(modsDir);
         for (const file of diskFiles) {
-          if (file.endsWith(".jar")) {
+          if (
+            file.toLowerCase().endsWith(".jar") ||
+            file.toLowerCase().endsWith(".jar.disabled")
+          ) {
             const relModPath = `mods/${file}`;
-            if (!desiredFilesMap.has(relModPath) && !isPathProtected(relModPath) && !customModFilenames.has(file.toLowerCase())) {
-              toDeleteSet.add(relModPath);
+            const modKey = normalizePathKey(relModPath);
+            const isCustom =
+              customModFilenames.has(file.toLowerCase()) ||
+              customModFilenames.has(
+                file.toLowerCase().replace(/\.disabled$/, ""),
+              );
+
+            if (
+              !desiredFilesMap.has(modKey) &&
+              !isPathProtected(relModPath) &&
+              !isCustom
+            ) {
+              try {
+                const fullPath = resolveAndContainPath(gameDir, relModPath);
+                checkPhysicalAncestrySync(gameDir, fullPath, {
+                  enforceOwnership: true,
+                });
+                toDeleteSet.add(relModPath);
+              } catch {
+                LauncherLogger.warn(
+                  `[Sync] Skipping uncontained mod candidate: ${relModPath}`,
+                );
+              }
             }
           }
         }
@@ -317,8 +636,18 @@ export class LauncherSync {
 
     const toDelete = Array.from(toDeleteSet);
 
+    // Integrity check: verify that NO desired physical file appears in obsolete deletion plan
+    for (const delPath of toDelete) {
+      const delKey = normalizePathKey(delPath);
+      if (desiredFilesMap.has(delKey)) {
+        throw new Error(
+          `Integrity violation: desired file '${delPath}' was classified as obsolete and scheduled for deletion.`,
+        );
+      }
+    }
+
     LauncherLogger.info(
-      `[Sync] Synchronizing client: ${toDownload.length} to download, ${upToDateCount} up-to-date, ${toDelete.length} obsolete to delete.`
+      `[Sync] Synchronizing client: ${toDownload.length} to download, ${upToDateCount} up-to-date, ${toDelete.length} obsolete to delete.`,
     );
 
     // 5. Download missing/modified files
@@ -330,7 +659,15 @@ export class LauncherSync {
     if (toDownload.length > 0) {
       const concurrency = 6;
 
-      async function cacheFile(fileEntry: any, cachePath: string, signal?: AbortSignal): Promise<number> {
+      async function cacheFile(
+        fileEntry: any,
+        cachePath: string,
+        signal?: AbortSignal,
+      ): Promise<number> {
+        await checkPhysicalAncestry(gameDir, cachePath, {
+          disallowSymlinks: true,
+          expectedCategory: "RESERVED_INTERNAL",
+        });
         let url = fileEntry.download.url;
         const expectedSha256 = fileEntry.hashes.sha256;
 
@@ -338,7 +675,11 @@ export class LauncherSync {
           const candidates = [
             path.join(__dirname, "../../pack/common", fileEntry.path),
             path.join(__dirname, "../../pack/client", fileEntry.path),
-            path.join(__dirname, "../../pack/custom", path.basename(fileEntry.path)),
+            path.join(
+              __dirname,
+              "../../pack/custom",
+              path.basename(fileEntry.path),
+            ),
           ];
           for (const c of candidates) {
             if (fs.existsSync(c)) {
@@ -370,11 +711,23 @@ export class LauncherSync {
           }
 
           // Check blob cache first
+          validateDigestString(file.hashes.sha256, "sha256");
           let cached = false;
-          const cachePath = path.join(cacheDir, file.hashes.sha256.substring(0, 2), file.hashes.sha256);
+          const cachePath = path.join(
+            cacheDir,
+            file.hashes.sha256.substring(0, 2),
+            file.hashes.sha256,
+          );
+          await checkPhysicalAncestry(gameDir, cachePath, {
+            disallowSymlinks: true,
+            expectedCategory: "RESERVED_INTERNAL",
+          });
           if (fs.existsSync(cachePath)) {
             const cachedHash = await hashFile(cachePath, "sha256");
-            if (cachedHash === file.hashes.sha256 && fs.statSync(cachePath).size === file.size) {
+            if (
+              cachedHash === file.hashes.sha256 &&
+              fs.statSync(cachePath).size === file.size
+            ) {
               cached = true;
             } else {
               await fs.promises.rm(cachePath, { force: true });
@@ -397,11 +750,18 @@ export class LauncherSync {
           bytesDownloaded += networkBytes;
 
           const status = cached ? "⚡ [Cache Hit]" : "✓ [Downloaded]";
-          const sizeBytes = fs.existsSync(cachePath) ? fs.statSync(cachePath).size : (file.size || 0);
+          const sizeBytes = fs.existsSync(cachePath)
+            ? fs.statSync(cachePath).size
+            : file.size || 0;
           const sizeKb = sizeBytes / 1024;
-          LauncherLogger.info(`  ${status} ${file.path} (${sizeKb.toFixed(1)} KB)`);
+          LauncherLogger.info(
+            `  ${status} ${file.path} (${sizeKb.toFixed(1)} KB)`,
+          );
 
-          const percent = Math.min(95, Math.round(15 + (completedCount / totalFiles) * 80));
+          const percent = Math.min(
+            95,
+            Math.round(15 + (completedCount / totalFiles) * 80),
+          );
           onProgress({
             status: "downloading",
             message: `Downloading ${path.basename(file.path)}...`,
@@ -413,7 +773,7 @@ export class LauncherSync {
             totalBytes,
           });
         },
-        { concurrency }
+        { concurrency },
       );
 
       // Apply only after every artifact is present and verified in the cache.
@@ -428,8 +788,22 @@ export class LauncherSync {
       });
 
       for (const file of toDownload) {
-        const cachePath = path.join(cacheDir, file.hashes.sha256.substring(0, 2), file.hashes.sha256);
-        const destPath = path.join(gameDir, file.path);
+        validateDigestString(file.hashes.sha256, "sha256");
+        const cachePath = path.join(
+          cacheDir,
+          file.hashes.sha256.substring(0, 2),
+          file.hashes.sha256,
+        );
+        await checkPhysicalAncestry(gameDir, cachePath, {
+          disallowSymlinks: true,
+          expectedCategory: "RESERVED_INTERNAL",
+        });
+        const destPath = resolveAndContainPath(gameDir, file.path);
+        await checkPhysicalAncestry(gameDir, destPath, {
+          enforceOwnership: true,
+          disallowSymlinks: true,
+        });
+
         await copyAtomic(cachePath, destPath);
         LauncherLogger.info(`  ✓ [Replaced] ${file.path}`);
         const outcome = transferOutcomes.get(file.path);
@@ -437,27 +811,45 @@ export class LauncherSync {
           outcome.stage = "installed";
         }
       }
-
     }
 
     // 6. Delete obsolete managed files
     for (const relPath of toDelete) {
-      const fullPath = path.join(gameDir, relPath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        LauncherLogger.info(`  🗑 [Deleted Obsolete] ${relPath}`);
+      try {
+        const fullPath = resolveAndContainPath(gameDir, relPath);
+        checkPhysicalAncestrySync(gameDir, fullPath, {
+          enforceOwnership: true,
+        });
+        if (fs.existsSync(fullPath)) {
+          const lstat = fs.lstatSync(fullPath);
+          if (lstat.isSymbolicLink()) {
+            LauncherLogger.warn(
+              `[Sync] Refusing to delete symlink during obsolete file cleanup: ${relPath}`,
+            );
+            continue;
+          }
+          fs.unlinkSync(fullPath);
+          LauncherLogger.info(`  🗑 [Deleted Obsolete] ${relPath}`);
+        }
+      } catch (delErr: any) {
+        LauncherLogger.warn(
+          `[Sync] Failed to safely delete obsolete file '${relPath}': ${delErr.message}`,
+        );
       }
     }
 
     // 7. Reconcile required resource packs (fail hard if reconciliation fails)
-    const currentReqPacks: RequiredResourcePack[] = releaseData?.launch?.requiredResourcePacks || [];
+    const currentReqPacks: RequiredResourcePack[] =
+      (releaseData as any)?.launch?.requiredResourcePacks || [];
     const previousManaged = prevState.managedResourcePacks || [];
     const updatedManagedPacks = await reconcileRequiredResourcePacks(gameDir, {
       required: currentReqPacks,
       previousManaged,
     });
     if (updatedManagedPacks.length > 0) {
-      LauncherLogger.info(`  [Resource Pack Enabled] ${updatedManagedPacks.join(", ")}`);
+      LauncherLogger.info(
+        `  [Resource Pack Enabled] ${updatedManagedPacks.join(", ")}`,
+      );
     }
 
     // 8. Post-mutation verification pass: verify existence, size, and SHA-256 for managed files
@@ -466,11 +858,13 @@ export class LauncherSync {
         const localPath = path.join(gameDir, file.path);
         const stat = await fs.promises.stat(localPath).catch(() => null);
         if (!stat) {
-          throw new Error(`Verification failed: managed file '${file.path}' is missing on disk.`);
+          throw new Error(
+            `Verification failed: managed file '${file.path}' is missing on disk.`,
+          );
         }
         if (typeof file.size === "number" && stat.size !== file.size) {
           throw new Error(
-            `Verification failed: size mismatch for '${file.path}' (expected ${file.size}, got ${stat.size})`
+            `Verification failed: size mismatch for '${file.path}' (expected ${file.size}, got ${stat.size})`,
           );
         }
         const wasDownloaded = stagedPathsSet.has(file.path);
@@ -478,7 +872,7 @@ export class LauncherSync {
           const actualHash = await hashFile(localPath, "sha256");
           if (actualHash.toLowerCase() !== file.hashes.sha256.toLowerCase()) {
             throw new Error(
-              `Verification failed: SHA-256 mismatch for '${file.path}' (expected ${file.hashes.sha256}, got ${actualHash})`
+              `Verification failed: SHA-256 mismatch for '${file.path}' (expected ${file.hashes.sha256}, got ${actualHash})`,
             );
           }
         }
@@ -514,6 +908,10 @@ export class LauncherSync {
 
     // 10. Write release descriptor and installation state only after successful mutations
     const releaseFilePath = path.join(stateDir, "release.json");
+    await checkPhysicalAncestry(gameDir, releaseFilePath, {
+      disallowSymlinks: true,
+      expectedCategory: "RESERVED_INTERNAL",
+    });
     const releaseWithGen = {
       ...releaseData,
       syncGeneration: syncGenerationId,
@@ -522,7 +920,7 @@ export class LauncherSync {
     await writeAtomicFile(
       releaseFilePath,
       JSON.stringify(releaseWithGen, null, 2),
-      { encoding: "utf-8" }
+      { encoding: "utf-8" },
     );
 
     const newState: InstallationState = {
@@ -550,14 +948,16 @@ export class LauncherSync {
     }
 
     // Atomic temporary publication for installation.json
-    await writeAtomicFile(
-      stateFile,
-      JSON.stringify(newState, null, 2),
-      { encoding: "utf-8" }
-    );
+    await checkPhysicalAncestry(gameDir, stateFile, {
+      disallowSymlinks: true,
+      expectedCategory: "RESERVED_INTERNAL",
+    });
+    await writeAtomicFile(stateFile, JSON.stringify(newState, null, 2), {
+      encoding: "utf-8",
+    });
 
     LauncherLogger.info(
-      `[OK] Client successfully synchronized to ${newState.pack} v${targetVersion}!`
+      `[OK] Client successfully synchronized to ${newState.pack} v${targetVersion}!`,
     );
 
     onProgress({
@@ -581,17 +981,75 @@ export class LauncherSync {
 
   static async repairInstallation(
     onProgress: (progress: SyncProgress) => void,
-    onLog?: (entry: { level: "INFO" | "WARN" | "ERROR"; message: string; timestamp: string }) => void
-  ): Promise<{ success: boolean; message: string; version: string; packName: string }> {
+    onLog?: (entry: {
+      level: "INFO" | "WARN" | "ERROR";
+      message: string;
+      timestamp: string;
+    }) => void,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    version: string;
+    packName: string;
+  }> {
+    const config = ConfigManager.get();
+    const safetyContext: SyncSafetyContext = {
+      origin: normalizePortalUrl(config.portalUrl),
+      channel: (config.selectedChannel ||
+        "stable") as SyncSafetyContext["channel"],
+      gameDir: config.gameDir,
+    };
+    // Commit the repair intent before changing any installation bytes. A
+    // process crash cannot run the catch below; restart must still require
+    // complete verification rather than trusting a partially repaired runtime.
+    await persistSyncSafetyBlock(
+      safetyContext,
+      "INTEGRITY",
+      new Error("Full repair has not completed verification."),
+    );
+    try {
+      const result = await this.repairInstallationInternal(onProgress, onLog);
+      clearSyncSafetyBlock(config.gameDir, { requireFullValidation: true });
+      return result;
+    } catch (error) {
+      // A repair that fails after pack synchronization still leaves the
+      // installation incomplete. Preserve launch blocking for every repair
+      // failure, including generic bootstrap and Java errors that may have
+      // lost their original cause while being wrapped for the UI.
+      await persistSyncSafetyBlock(safetyContext, "INTEGRITY", error);
+      throw error;
+    }
+  }
+
+  private static async repairInstallationInternal(
+    onProgress: (progress: SyncProgress) => void,
+    onLog?: (entry: {
+      level: "INFO" | "WARN" | "ERROR";
+      message: string;
+      timestamp: string;
+    }) => void,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    version: string;
+    packName: string;
+  }> {
     const config = ConfigManager.get();
     const gameDir = config.gameDir;
     const log = (level: "INFO" | "WARN" | "ERROR", msg: string) => {
       if (onLog) {
-        onLog({ level, message: msg, timestamp: new Date().toLocaleTimeString() });
+        onLog({
+          level,
+          message: msg,
+          timestamp: new Date().toLocaleTimeString(),
+        });
       }
     };
 
-    log("INFO", "[Repair] Starting full installation repair and integrity verification...");
+    log(
+      "INFO",
+      "[Repair] Starting full installation repair and integrity verification...",
+    );
 
     // 1. Force full synchronization of all modpack files with SHA-256 validation
     onProgress({
@@ -604,15 +1062,22 @@ export class LauncherSync {
       totalBytes: 0,
     });
 
-    const syncResult = await this.syncClient((p) => {
-      onProgress({
-        ...p,
-        status: "repairing",
-        percent: Math.round(p.percent * 0.4), // 0% - 40%
-      });
-    }, "full");
+    const syncResult = await this.runSyncWithSafety(
+      (p) => {
+        onProgress({
+          ...p,
+          status: "repairing",
+          percent: Math.round(p.percent * 0.4), // 0% - 40%
+        });
+      },
+      "full",
+      false,
+    );
 
-    log("INFO", `[Repair] Modpack files verified and repaired (${syncResult.packName} v${syncResult.version}).`);
+    log(
+      "INFO",
+      `[Repair] Modpack files verified and repaired (${syncResult.packName} v${syncResult.version}).`,
+    );
 
     // 2. Minecraft 26.2 client JAR, Fabric Loader, libraries, natives, and 5,000+ asset objects
     onProgress({
@@ -640,7 +1105,7 @@ export class LauncherSync {
           totalBytes: 0,
         });
       },
-      "full"
+      "full",
     );
 
     // 3. Java 25 verification
@@ -654,12 +1119,17 @@ export class LauncherSync {
       totalBytes: 0,
     });
 
-    const javaExe = await JavaRuntimeManager.ensureJava25(gameDir, (msg) => log("INFO", msg), "full");
+    const javaExe = await JavaRuntimeManager.ensureJava25(
+      gameDir,
+      (msg) => log("INFO", msg),
+      "full",
+    );
     log("INFO", `[Repair] Java runtime verified: ${javaExe}`);
 
     onProgress({
       status: "complete",
-      message: "Repair complete! All modpack files, assets, and libraries are verified.",
+      message:
+        "Repair complete! All modpack files, assets, and libraries are verified.",
       filesCompleted: 100,
       totalFiles: 100,
       percent: 100,
@@ -683,19 +1153,58 @@ export class LauncherSync {
     const channel = config.selectedChannel || "stable";
 
     try {
-      const channelData: any = await fetchJsonWithRetry(`${portalUrl}/api/v1/channels/${channel}`);
-      const manifest: any = await fetchJsonWithRetry(`${portalUrl}/api/v1/releases/${channelData.version}/client-manifest`);
-      if (manifest.mods && Array.isArray(manifest.mods)) {
-        return this.decorateModCatalog(manifest.mods);
+      const channelData = validateChannelResponse(
+        await fetchPortalJsonWithRetry(
+          `${portalUrl}/api/v1/channels/${channel}`,
+        ),
+        channel,
+      );
+      const release = validateReleaseDescriptor(
+        await fetchPortalJsonWithRetry(
+          metadataUrl(portalUrl, channelData.release, "channel release"),
+        ),
+      );
+      if (release.version !== channelData.version) {
+        throw new Error("Channel and release versions do not match.");
       }
-    } catch {}
+      const manifest = await fetchPortalJsonWithRetry(
+        metadataUrl(
+          portalUrl,
+          release.clientManifest,
+          "release client manifest",
+        ),
+      );
+      validateClientManifest(manifest, release);
+      if (Array.isArray((manifest as any).mods))
+        return this.decorateModCatalog((manifest as any).mods);
+    } catch (error) {
+      if (!isTransientMetadataFetchFailure(error)) throw error;
+    }
 
-    const localManifestPath = path.join(__dirname, "../../manifest/client-manifest.json");
+    const localManifestPath = path.join(
+      __dirname,
+      "../../manifest/client-manifest.json",
+    );
     if (fs.existsSync(localManifestPath)) {
       try {
-        const manifest = JSON.parse(fs.readFileSync(localManifestPath, "utf-8"));
+        const localReleasePath = path.join(
+          __dirname,
+          "../../manifest/release.json",
+        );
+        const release = validateReleaseDescriptor(
+          JSON.parse(fs.readFileSync(localReleasePath, "utf-8")),
+        );
+        const manifest = JSON.parse(
+          fs.readFileSync(localManifestPath, "utf-8"),
+        );
+        validateClientManifest(manifest, release);
         return this.decorateModCatalog(manifest.mods || []);
-      } catch {}
+      } catch (error) {
+        throw new Error(
+          "Local metadata is invalid; refusing to return an unvalidated mod catalog.",
+          { cause: error },
+        );
+      }
     }
 
     return [];
@@ -714,7 +1223,8 @@ export class LauncherSync {
       id: `local:${mod.filename}`,
       name: mod.filename.replace(/\.jar$/i, ""),
       filename: mod.filename,
-      description: "Local client mod. Preserved when the Lampas pack synchronizes.",
+      description:
+        "Local client mod. Preserved when the Lampas pack synchronizes.",
       side: "client",
       categories: ["custom"],
       source: "custom",

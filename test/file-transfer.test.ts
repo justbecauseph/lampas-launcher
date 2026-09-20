@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -13,11 +13,20 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
-const { downloadVerified, fetchJsonWithRetry } = await import("../src/file-transfer");
+const { downloadVerified, fetchJsonWithRetry } =
+  await import("../src/file-transfer");
+const { PortalPolicy } = await import("../src/portal-policy");
+
+beforeAll(() =>
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true }),
+);
+afterAll(() => PortalPolicy.resetForTesting());
 
 describe("Launcher file-transfer: 302 redirect regression tests", () => {
   test("downloadVerified() follows 302 redirect from blob URL to object storage and verifies hash & size", async () => {
-    const payload = Buffer.from("lampas-blob-payload-redirected-from-portal-to-s3-bucket");
+    const payload = Buffer.from(
+      "lampas-blob-payload-redirected-from-portal-to-s3-bucket",
+    );
     const sha256 = crypto.createHash("sha256").update(payload).digest("hex");
     const size = payload.length;
 
@@ -40,7 +49,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
           });
         }
 
-        if (url.pathname === `/storage/blobs/${sha256.substring(0, 2)}/${sha256}`) {
+        if (
+          url.pathname === `/storage/blobs/${sha256.substring(0, 2)}/${sha256}`
+        ) {
           s3StorageHit = true;
           return new Response(payload, {
             status: 200,
@@ -55,7 +66,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
       },
     });
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "launcher-download-302-"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-302-"),
+    );
     const destination = path.join(tempDir, "custom-mod.jar");
 
     try {
@@ -74,7 +87,10 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
 
       const fileContent = fs.readFileSync(destination);
       expect(fileContent.equals(payload)).toBe(true);
-      const computedHash = crypto.createHash("sha256").update(fileContent).digest("hex");
+      const computedHash = crypto
+        .createHash("sha256")
+        .update(fileContent)
+        .digest("hex");
       expect(computedHash).toBe(sha256);
     } finally {
       server.stop(true);
@@ -84,7 +100,10 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
 
   test("downloadVerified() rejects when redirected 302 payload has hash mismatch and does not promote partial file", async () => {
     const validPayload = Buffer.from("correct-payload");
-    const validSha256 = crypto.createHash("sha256").update(validPayload).digest("hex");
+    const validSha256 = crypto
+      .createHash("sha256")
+      .update(validPayload)
+      .digest("hex");
 
     const corruptedPayload = Buffer.from("corrupted-payload-from-bucket");
 
@@ -113,7 +132,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
       },
     });
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "launcher-download-mismatch-"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-mismatch-"),
+    );
     const destination = path.join(tempDir, "corrupted-mod.jar");
 
     try {
@@ -149,7 +170,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
     const controller = new AbortController();
     controller.abort(new Error("Pre-aborted download"));
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "launcher-download-abort-"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-abort-"),
+    );
     const destination = path.join(tempDir, "file.jar");
 
     try {
@@ -157,7 +180,7 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
         downloadVerified("http://127.0.0.1:9999/non-existent", destination, {
           signal: controller.signal,
           attempts: 3,
-        })
+        }),
       ).rejects.toThrow("Pre-aborted download");
 
       expect(fs.existsSync(destination)).toBe(false);
@@ -179,7 +202,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
       },
     });
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "launcher-download-retry-abort-"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-retry-abort-"),
+    );
     const destination = path.join(tempDir, "file.jar");
 
     try {
@@ -188,8 +213,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
         destination,
         {
           attempts: 3,
+          expectedHash: "0".repeat(64),
           signal: controller.signal,
-        }
+        },
       );
 
       // Wait 50ms (first request fails immediately, entering retry backoff of 250ms)
@@ -199,7 +225,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
       // Abort during backoff
       controller.abort(new Error("Operation cancelled during retry"));
 
-      await expect(downloadPromise).rejects.toThrow("Operation cancelled during retry");
+      await expect(downloadPromise).rejects.toThrow(
+        "Operation cancelled during retry",
+      );
 
       // Give extra time to ensure no second attempt was made
       await new Promise((r) => setTimeout(r, 300));
@@ -228,7 +256,7 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
         undefined,
         3,
         60_000,
-        controller.signal
+        controller.signal,
       );
 
       await new Promise((r) => setTimeout(r, 50));
@@ -236,7 +264,9 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
 
       controller.abort(new Error("Fetch cancelled in retry delay"));
 
-      await expect(fetchPromise).rejects.toThrow("Fetch cancelled in retry delay");
+      await expect(fetchPromise).rejects.toThrow(
+        "Fetch cancelled in retry delay",
+      );
 
       await new Promise((r) => setTimeout(r, 300));
       expect(requestsReceived).toBe(1);

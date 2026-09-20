@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { hashFile } from "./file-transfer";
+import { hashFile, writeAtomicFileSync } from "./file-transfer";
+import {
+  checkPhysicalAncestrySync,
+  resolveAndContainPath,
+} from "./path-policy";
 import type { RequiredResourcePack } from "./types";
 
 /**
@@ -65,7 +69,8 @@ export function isValidServerAddress(server: string): boolean {
   }
 
   // Hostname check (RFC 1123 / standard domains / localhost)
-  const hostnameRegex = /^([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])(\.([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9]))*$/;
+  const hostnameRegex =
+    /^([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])(\.([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9]))*$/;
   if (hostnameRegex.test(host)) {
     return true;
   }
@@ -88,14 +93,16 @@ export function isValidServerAddress(server: string): boolean {
 export function reconcileResourcePacks(
   existingPacks: string[],
   currentRequired: string[],
-  oldManaged: string[]
+  oldManaged: string[],
 ): string[] {
   const currentSet = new Set(currentRequired);
   const oldSet = new Set(oldManaged);
   const dedupedRequired = Array.from(new Set(currentRequired));
 
   // 1. Preserve existing user-selected packs that were never managed and aren't in the new required list
-  const userPacks = existingPacks.filter((item) => !oldSet.has(item) && !currentSet.has(item));
+  const userPacks = existingPacks.filter(
+    (item) => !oldSet.has(item) && !currentSet.has(item),
+  );
 
   // 2. Build reconciled list: user packs + deterministic required packs
   const reconciled = [...userPacks];
@@ -118,7 +125,7 @@ export function reconcileResourcePacks(
  */
 export async function verifyRequiredResourcePacks(
   gameDir: string,
-  requiredPacks: RequiredResourcePack[]
+  requiredPacks: RequiredResourcePack[],
 ): Promise<void> {
   if (!requiredPacks || requiredPacks.length === 0) return;
 
@@ -130,7 +137,7 @@ export async function verifyRequiredResourcePacks(
     const resolvedPath = candidatePaths.find((p) => fs.existsSync(p));
     if (!resolvedPath) {
       throw new Error(
-        `Unable to prepare required Lampas resource pack (${pack.id}): File missing at ${pack.path || pack.filename}. Run Repair and try again.`
+        `Unable to prepare required Lampas resource pack (${pack.id}): File missing at ${pack.path || pack.filename}. Run Repair and try again.`,
       );
     }
 
@@ -138,7 +145,7 @@ export async function verifyRequiredResourcePacks(
       const actualHash = await hashFile(resolvedPath, "sha256");
       if (actualHash.toLowerCase() !== pack.sha256.toLowerCase()) {
         throw new Error(
-          `Required resource pack '${pack.id}' failed integrity verification.\nExpected: ${pack.sha256}\nActual:   ${actualHash}\nRun Repair.`
+          `Required resource pack '${pack.id}' failed integrity verification.\nExpected: ${pack.sha256}\nActual:   ${actualHash}\nRun Repair.`,
         );
       }
     }
@@ -156,7 +163,7 @@ export interface ReconcileRequiredOptions {
  */
 export async function reconcileRequiredResourcePacks(
   gameDir: string,
-  options: ReconcileRequiredOptions
+  options: ReconcileRequiredOptions,
 ): Promise<string[]> {
   const { required = [], previousManaged = [] } = options;
 
@@ -166,10 +173,10 @@ export async function reconcileRequiredResourcePacks(
   }
 
   const oldManagedIdentifiers = previousManaged.map((f) =>
-    f.startsWith("file/") ? f : `file/${f}`
+    f.startsWith("file/") ? f : `file/${f}`,
   );
   const currentRequiredIdentifiers = required.map((p) =>
-    p.filename.startsWith("file/") ? p.filename : `file/${p.filename}`
+    p.filename.startsWith("file/") ? p.filename : `file/${p.filename}`,
   );
   const currentFilenames = required.map((p) => p.filename);
 
@@ -179,14 +186,51 @@ export async function reconcileRequiredResourcePacks(
   }
 
   // 2. Locate and safely update <gameDir>/options.txt
-  const optionsPath = path.join(gameDir, "options.txt");
+  const optionsPath = resolveAndContainPath(gameDir, "options.txt");
+  checkPhysicalAncestrySync(gameDir, optionsPath, { disallowSymlinks: true });
+
+  if (fs.existsSync(optionsPath)) {
+    const stat = fs.lstatSync(optionsPath);
+    if (
+      stat.isSymbolicLink() ||
+      stat.isFIFO() ||
+      stat.isSocket() ||
+      stat.isCharacterDevice() ||
+      stat.isBlockDevice()
+    ) {
+      throw new Error(
+        "Safety violation: options.txt is a symbolic link or special file.",
+      );
+    }
+  }
+
+  const writeSafeBackup = (backupContent: string) => {
+    const backupPath = resolveAndContainPath(
+      gameDir,
+      "options.txt.lampas-backup",
+    );
+    checkPhysicalAncestrySync(gameDir, backupPath, { disallowSymlinks: true });
+    if (fs.existsSync(backupPath)) {
+      const bStat = fs.lstatSync(backupPath);
+      if (
+        bStat.isSymbolicLink() ||
+        bStat.isFIFO() ||
+        bStat.isSocket() ||
+        bStat.isCharacterDevice() ||
+        bStat.isBlockDevice()
+      ) {
+        fs.unlinkSync(backupPath);
+      }
+    }
+    writeAtomicFileSync(backupPath, backupContent);
+  };
 
   if (!fs.existsSync(optionsPath)) {
     if (required.length > 0) {
       const defaultPacks = ["vanilla", ...currentRequiredIdentifiers];
       const uniquePacks = Array.from(new Set(defaultPacks));
       const content = `resourcePacks:${JSON.stringify(uniquePacks)}\n`;
-      fs.writeFileSync(optionsPath, content, "utf-8");
+      writeAtomicFileSync(optionsPath, content);
     }
   } else {
     const content = fs.readFileSync(optionsPath, "utf-8");
@@ -203,7 +247,7 @@ export async function reconcileRequiredResourcePacks(
           content.endsWith("\n") || content.endsWith("\r")
             ? `${content}${newLine}${eol}`
             : `${content}${eol}${newLine}${eol}`;
-        fs.writeFileSync(optionsPath, newContent, "utf-8");
+        writeAtomicFileSync(optionsPath, newContent);
       }
     } else {
       const rawLine = lines[lineIndex];
@@ -221,23 +265,23 @@ export async function reconcileRequiredResourcePacks(
 
       if (!parsedList) {
         // Malformed resourcePacks line: backup options.txt and safely reconstruct only this setting
-        const backupPath = path.join(gameDir, "options.txt.lampas-backup");
-        fs.writeFileSync(backupPath, content, "utf-8");
+        writeSafeBackup(content);
 
         const reconstructed = ["vanilla", ...currentRequiredIdentifiers];
-        lines[lineIndex] = `resourcePacks:${JSON.stringify(Array.from(new Set(reconstructed)))}`;
-        fs.writeFileSync(optionsPath, lines.join(eol), "utf-8");
+        lines[lineIndex] =
+          `resourcePacks:${JSON.stringify(Array.from(new Set(reconstructed)))}`;
+        writeAtomicFileSync(optionsPath, lines.join(eol));
       } else {
         const reconciled = reconcileResourcePacks(
           parsedList,
           currentRequiredIdentifiers,
-          oldManagedIdentifiers
+          oldManagedIdentifiers,
         );
         const newRawVal = JSON.stringify(reconciled);
 
         if (newRawVal !== rawVal) {
           lines[lineIndex] = `resourcePacks:${newRawVal}`;
-          fs.writeFileSync(optionsPath, lines.join(eol), "utf-8");
+          writeAtomicFileSync(optionsPath, lines.join(eol));
         }
       }
     }
@@ -252,7 +296,7 @@ export async function reconcileRequiredResourcePacks(
  */
 export async function ensureRequiredResourcePacks(
   gameDir: string,
-  requiredPacks: RequiredResourcePack[]
+  requiredPacks: RequiredResourcePack[],
 ): Promise<string[]> {
   const stateFile = path.join(gameDir, ".lampas", "installation.json");
   let previousManaged: string[] = [];

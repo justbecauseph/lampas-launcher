@@ -1,4 +1,13 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,22 +61,25 @@ let mockSessionUser: any = {
   allowedChannels: ["stable"],
 };
 
-mock.module("../src/auth", () => ({
-  LauncherAuth: {
-    refreshSession: async () => ({
-      valid: !!mockSessionUser,
-      user: mockSessionUser,
-    }),
-  },
-}));
-
 const { JavaRuntimeManager } = await import("../src/java-runtime");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { ConfigManager } = await import("../src/config");
 const { GameRunner } = await import("../src/game-runner");
+const { LauncherAuth } = await import("../src/auth");
 
-const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(async () => "C:\\Java25\\bin\\java.exe");
-const bootstrapSpy = spyOn(MinecraftBootstrap, "prepareGameEnvironment").mockImplementation(async (targetDir: string, runtime: any) => {
+const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(
+  async () => "C:\\Java25\\bin\\java.exe",
+);
+const authSpy = spyOn(LauncherAuth, "refreshSession").mockImplementation(
+  async () => ({
+    valid: !!mockSessionUser,
+    user: mockSessionUser,
+  }),
+);
+const bootstrapSpy = spyOn(
+  MinecraftBootstrap,
+  "prepareGameEnvironment",
+).mockImplementation(async (targetDir: string, runtime: any) => {
   bootstrapCalls.push({ gameDir: targetDir, runtime });
   return {
     classpath: ["C:\\Game\\libraries\\fabric.jar"],
@@ -81,8 +93,10 @@ beforeAll(() => {
   fs.mkdirSync(path.join(gameDir, ".lampas"), { recursive: true });
   ConfigManager.set({
     gameDir,
-    token: "mock-token",
     allocatedRamGb: 4,
+  });
+  ConfigManager.establishSession("https://lampas.town", {
+    token: "mock-token",
   });
 });
 
@@ -102,14 +116,17 @@ beforeEach(() => {
   bootstrapCalls = [];
   ConfigManager.set({
     gameDir,
-    token: "mock-token",
     allocatedRamGb: 4,
+  });
+  ConfigManager.establishSession("https://lampas.town", {
+    token: "mock-token",
   });
 });
 
 afterAll(() => {
   javaSpy.mockRestore();
   bootstrapSpy.mockRestore();
+  authSpy.mockRestore();
   GameRunner.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
@@ -150,7 +167,7 @@ describe("GameRunner launch flow & Quick Play", () => {
       dummyUser,
       () => {},
       () => {},
-      release
+      release,
     );
 
     expect(launched).toBe(true);
@@ -184,7 +201,7 @@ describe("GameRunner launch flow & Quick Play", () => {
       dummyUser,
       () => {},
       () => {},
-      release
+      release,
     );
 
     expect(launched).toBe(true);
@@ -217,8 +234,8 @@ describe("GameRunner launch flow & Quick Play", () => {
         dummyUser,
         () => {},
         () => {},
-        release
-      )
+        release,
+      ),
     ).rejects.toThrow("Malformed auto-connect server address");
   });
 
@@ -254,9 +271,11 @@ describe("GameRunner launch flow & Quick Play", () => {
         dummyUser,
         () => {},
         () => {},
-        release
-      )
-    ).rejects.toThrow("Unable to prepare required Lampas resource pack. Run Repair and try again.");
+        release,
+      ),
+    ).rejects.toThrow(
+      "Unable to prepare required Lampas resource pack. Run Repair and try again.",
+    );
   });
 
   test("verifies required resource pack and launches when pack file is present without mutating state", async () => {
@@ -299,7 +318,7 @@ describe("GameRunner launch flow & Quick Play", () => {
       dummyUser,
       () => {},
       () => {},
-      release
+      release,
     );
 
     expect(launched).toBe(true);
@@ -323,8 +342,8 @@ describe("GameRunner launch flow & Quick Play", () => {
       GameRunner.launchGame(
         dummyUser,
         () => {},
-        () => {}
-      )
+        () => {},
+      ),
     ).rejects.toThrow("No bound Minecraft account found in your profile");
   });
 
@@ -344,8 +363,8 @@ describe("GameRunner launch flow & Quick Play", () => {
       GameRunner.launchGame(
         dummyUser,
         () => {},
-        () => {}
-      )
+        () => {},
+      ),
     ).rejects.toThrow("No bound Minecraft account found in your profile");
   });
 
@@ -370,7 +389,7 @@ describe("GameRunner launch flow & Quick Play", () => {
       dummyUser,
       () => {},
       () => {},
-      release
+      release,
     );
 
     expect(launched).toBe(true);
@@ -411,8 +430,8 @@ describe("GameRunner launch flow & Quick Play", () => {
         dummyUser,
         () => {},
         () => {},
-        invalidRelease
-      )
+        invalidRelease,
+      ),
     ).rejects.toThrow("unsupported loader type 'neoforge'");
   });
 
@@ -439,12 +458,16 @@ describe("GameRunner launch flow & Quick Play", () => {
       dummyUser,
       (entry) => loggedMessages.push(entry.message),
       () => {},
-      release
+      release,
     );
 
-    const startLog = loggedMessages.find((m) => m.startsWith("Starting Minecraft client via"));
+    const startLog = loggedMessages.find((m) =>
+      m.startsWith("Starting Minecraft client via"),
+    );
     expect(startLog).toBeDefined();
-    expect(startLog).toBe("Starting Minecraft client via net.fabricmc.loader.impl.launch.knot.KnotClient...");
+    expect(startLog).toBe(
+      "Starting Minecraft client via net.fabricmc.loader.impl.launch.knot.KnotClient...",
+    );
     expect(startLog?.includes("via KnotClient (")).toBe(false);
   });
 
@@ -477,8 +500,8 @@ describe("GameRunner launch flow & Quick Play", () => {
           dummyUser,
           () => {},
           () => {},
-          release
-        )
+          release,
+        ),
       ).rejects.toThrow("spawn java.exe ENOENT");
 
       expect(GameRunner.isGameRunning()).toBe(false);
@@ -519,7 +542,7 @@ describe("GameRunner launch flow & Quick Play", () => {
         (code) => {
           exitReportedCode = code;
         },
-        release
+        release,
       );
 
       expect(GameRunner.isGameRunning()).toBe(true);
@@ -531,7 +554,9 @@ describe("GameRunner launch flow & Quick Play", () => {
       // The OS process has not exited; clearing it would allow conflicting mutations!
       expect(GameRunner.isGameRunning()).toBe(true);
       expect(exitReportedCode).toBeNull();
-      expect(errorLogs.some((msg) => msg.includes("EPIPE: write to closed pipe"))).toBe(true);
+      expect(
+        errorLogs.some((msg) => msg.includes("EPIPE: write to closed pipe")),
+      ).toBe(true);
 
       // Now emit true exit event
       childProc.emit("exit", 0);
@@ -577,7 +602,7 @@ describe("GameRunner launch flow & Quick Play", () => {
         dummyUser,
         () => {},
         () => {},
-        release
+        release,
       );
 
       expect(GameRunner.isGameRunning()).toBe(true);

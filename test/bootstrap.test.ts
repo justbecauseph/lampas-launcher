@@ -13,10 +13,70 @@ const {
   MinecraftBootstrap,
   parseMavenCoordinate,
   mavenToPath,
+  isLibraryAllowed,
 } = await import("../src/minecraft-bootstrap");
+import versionMetadata from "../src/version-meta-26.2.json";
+import type { MavenCoordinate } from "../src/minecraft-bootstrap";
+const { PortalPolicy } = await import("../src/config");
 import type { MinecraftRuntimeDefinition } from "../src/types";
 
 describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)", () => {
+  test("selects one FreeType native for each architecture from the actual pinned metadata", () => {
+    const libraries = versionMetadata.libraries as MavenCoordinate[];
+    for (const [platform, arch, artifact] of [
+      ["win32", "x64", "lwjgl-freetype-natives-windows"],
+      ["win32", "ia32", "lwjgl-freetype-natives-windows-x86"],
+      ["win32", "arm64", "lwjgl-freetype-natives-windows-arm64"],
+      ["linux", "x64", "lwjgl-freetype-natives-linux"],
+      ["linux", "arm64", "lwjgl-freetype-natives-linux-arm64"],
+      ["darwin", "x64", "lwjgl-freetype-natives-macos"],
+      ["darwin", "arm64", "lwjgl-freetype-natives-macos-arm64"],
+    ] as const) {
+      const selected = libraries.filter((lib) =>
+        isLibraryAllowed(lib, platform, arch),
+      );
+      expect(
+        selected
+          .filter((lib) => lib.name.includes("lwjgl-freetype-natives-"))
+          .map((lib) => parseMavenCoordinate(lib.name).artifact),
+      ).toEqual([artifact]);
+      expect(
+        selected.some((lib) => lib.name === "org.lwjgl:lwjgl-freetype:3.4.1"),
+      ).toBe(true);
+    }
+  });
+
+  test("filters native classifiers even when OS rules are generic or absent", () => {
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-windows-arm64" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(false);
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-windows" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(true);
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-linux" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(false);
+    expect(
+      isLibraryAllowed(
+        { name: "org.lwjgl:lwjgl:3.4.1:natives-windows-unknown" },
+        "win32",
+        "x64",
+      ),
+    ).toBe(false);
+  });
+
   test("parseMavenCoordinate correctly parses 3-part and 4-part coordinates", () => {
     const standard = parseMavenCoordinate("net.fabricmc:fabric-loader:0.19.3");
     expect(standard).toEqual({
@@ -26,7 +86,9 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
       classifier: undefined,
     });
 
-    const withClassifier = parseMavenCoordinate("org.lwjgl:lwjgl:3.4.1:natives-windows");
+    const withClassifier = parseMavenCoordinate(
+      "org.lwjgl:lwjgl:3.4.1:natives-windows",
+    );
     expect(withClassifier).toEqual({
       group: "org.lwjgl",
       artifact: "lwjgl",
@@ -38,12 +100,14 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
   test("mavenToPath generates standard Maven relative repository paths", () => {
     const coord1 = parseMavenCoordinate("net.fabricmc:fabric-loader:0.19.3");
     expect(mavenToPath(coord1)).toBe(
-      "net/fabricmc/fabric-loader/0.19.3/fabric-loader-0.19.3.jar"
+      "net/fabricmc/fabric-loader/0.19.3/fabric-loader-0.19.3.jar",
     );
 
-    const coord2 = parseMavenCoordinate("org.lwjgl:lwjgl:3.4.1:natives-windows");
+    const coord2 = parseMavenCoordinate(
+      "org.lwjgl:lwjgl:3.4.1:natives-windows",
+    );
     expect(mavenToPath(coord2)).toBe(
-      "org/lwjgl/lwjgl/3.4.1/lwjgl-3.4.1-natives-windows.jar"
+      "org/lwjgl/lwjgl/3.4.1/lwjgl-3.4.1-natives-windows.jar",
     );
   });
 
@@ -57,9 +121,13 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
     };
 
     await expect(
-      MinecraftBootstrap.prepareGameEnvironment("C:\\DummyGameDir", non262Runtime, () => {})
+      MinecraftBootstrap.prepareGameEnvironment(
+        "C:\\DummyGameDir",
+        non262Runtime,
+        () => {},
+      ),
     ).rejects.toThrow(
-      "Unsupported Minecraft version '26.3'. Lampas Launcher currently only supports Minecraft 26.2."
+      "Unsupported Minecraft version '26.3'. Lampas Launcher currently only supports Minecraft 26.2.",
     );
   });
 
@@ -73,12 +141,18 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
     };
 
     await expect(
-      MinecraftBootstrap.prepareGameEnvironment("C:\\DummyGameDir", invalidRuntime, () => {})
+      MinecraftBootstrap.prepareGameEnvironment(
+        "C:\\DummyGameDir",
+        invalidRuntime,
+        () => {},
+      ),
     ).rejects.toThrow("unsupported loader type 'neoforge'");
   });
 
-  test("ensureFile in full mode redownloads corrupt file when hash mismatches, verifies clean file, and redownloads when no hash is present", async () => {
-    const testFileDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-ensure-test-"));
+  test("ensureFile in full mode redownloads corrupt files and rejects missing hashes", async () => {
+    const testFileDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "lampas-ensure-test-"),
+    );
     const destPath = path.join(testFileDir, "test-lib.jar");
 
     const server = Bun.serve({
@@ -87,13 +161,17 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
         return new Response("healthy-content");
       },
     });
+    PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
 
     try {
       // 1. Write corrupt content to destPath
       fs.writeFileSync(destPath, "corrupted-content");
 
       // Compute healthy sha256
-      const healthyHash = crypto.createHash("sha256").update("healthy-content").digest("hex");
+      const healthyHash = crypto
+        .createHash("sha256")
+        .update("healthy-content")
+        .digest("hex");
 
       // In full mode, corrupt file should be detected and re-downloaded
       const changed = await (MinecraftBootstrap as any).ensureFile(
@@ -102,7 +180,8 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
         healthyHash,
         undefined,
         "full",
-        "sha256"
+        "sha256",
+        testFileDir,
       );
 
       expect(changed).toBe(true);
@@ -115,22 +194,26 @@ describe("MinecraftBootstrap Coordinate Parsing & Scope Guard (PLAN.md Part D)",
         healthyHash,
         undefined,
         "full",
-        "sha256"
+        "sha256",
+        testFileDir,
       );
       expect(unchanged).toBe(false);
 
       // 3. In full mode with NO expected hash, must re-download rather than assume verified
-      const redownloadedWithoutHash = await (MinecraftBootstrap as any).ensureFile(
-        `http://127.0.0.1:${server.port}/test-lib.jar`,
-        destPath,
-        undefined,
-        undefined,
-        "full",
-        "sha256"
-      );
-      expect(redownloadedWithoutHash).toBe(true);
+      await expect(
+        (MinecraftBootstrap as any).ensureFile(
+          `http://127.0.0.1:${server.port}/test-lib.jar`,
+          destPath,
+          undefined,
+          undefined,
+          "full",
+          "sha256",
+          testFileDir,
+        ),
+      ).rejects.toThrow(/missing an expected SHA256 digest/i);
     } finally {
       server.stop(true);
+      PortalPolicy.resetForTesting();
       fs.rmSync(testFileDir, { recursive: true, force: true });
     }
   });

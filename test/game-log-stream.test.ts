@@ -11,7 +11,8 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
-const { BoundedLogBatchTransport, ProcessLogFramer } = await import("../src/game-log-stream");
+const { BoundedLogBatchTransport, ProcessLogFramer } =
+  await import("../src/game-log-stream");
 
 describe("Phase 2 — ProcessLogFramer (Streaming UTF-8 Decoding & Line Framing)", () => {
   test("UTF-8 split across chunks: reassembles multi-byte characters accurately", async () => {
@@ -53,11 +54,15 @@ describe("Phase 2 — ProcessLogFramer (Streaming UTF-8 Decoding & Line Framing)
     expect(emitted[1].message).toBe("Unterminated final line");
   });
 
-  test("huge line: truncates lines exceeding maxLineLength to prevent memory exhaustion", async () => {
+  test("huge line: discards the entire raw record exceeding maxLineLength", async () => {
     const emitted: GameLogEntry[] = [];
-    const framer = new ProcessLogFramer("INFO", (entry) => emitted.push(entry), {
-      maxLineLength: 100, // Small limit for test
-    });
+    const framer = new ProcessLogFramer(
+      "INFO",
+      (entry) => emitted.push(entry),
+      {
+        maxLineLength: 100, // Small limit for test
+      },
+    );
 
     const stream = new PassThrough();
     framer.attach(stream);
@@ -70,8 +75,7 @@ describe("Phase 2 — ProcessLogFramer (Streaming UTF-8 Decoding & Line Framing)
     });
 
     expect(emitted.length).toBeGreaterThanOrEqual(1);
-    expect(emitted[0].message).toContain("...[TRUNCATED]");
-    expect(emitted[0].message.startsWith("A".repeat(100))).toBe(true);
+    expect(emitted[0].message).toBe("[Oversized log record discarded]");
   });
 
   test("stderr stream classifies error and exception keywords as ERROR, otherwise WARN", () => {
@@ -99,13 +103,19 @@ describe("Phase 2 — ProcessLogFramer (Streaming UTF-8 Decoding & Line Framing)
     const stream = new PassThrough();
     framer.attach(stream);
 
-    stream.write("Connecting to auth with Bearer my_secret_token_12345678901234567890\n");
-    stream.write('Client config: {"token": "secret_key_abc", "password": "SuperSecret123"}\n');
+    stream.write(
+      "Connecting to auth with Bearer my_secret_token_12345678901234567890\n",
+    );
+    stream.write(
+      'Client config: {"token": "secret_key_abc", "password": "SuperSecret123"}\n',
+    );
     stream.end();
 
     expect(emitted.length).toBe(2);
     expect(emitted[0].message).toContain("Bearer [REDACTED]");
-    expect(emitted[0].message).not.toContain("my_secret_token_12345678901234567890");
+    expect(emitted[0].message).not.toContain(
+      "my_secret_token_12345678901234567890",
+    );
     expect(emitted[1].message).toContain('"token": "[REDACTED]"');
     expect(emitted[1].message).toContain('"password": "[REDACTED]"');
     expect(emitted[1].message).not.toContain("SuperSecret123");
@@ -131,7 +141,12 @@ describe("Phase 2 — ProcessLogFramer (Streaming UTF-8 Decoding & Line Framing)
 
 describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", () => {
   test("batches log entries and enforces identified receiver-bound ACK accounting", async () => {
-    const dispatchedBatches: Array<{ batchId: number; entries: GameLogEntry[]; dropped: number; bytes: number }> = [];
+    const dispatchedBatches: Array<{
+      batchId: number;
+      entries: GameLogEntry[];
+      dropped: number;
+      bytes: number;
+    }> = [];
 
     const mockWin: any = {
       isDestroyed: () => false,
@@ -191,7 +206,11 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
   });
 
   test("hidden/unresponsive renderer: bounds queue capacity without timeout credit, then delivers on recovery", () => {
-    const dispatchedBatches: Array<{ batchId: number; entries: GameLogEntry[]; dropped: number }> = [];
+    const dispatchedBatches: Array<{
+      batchId: number;
+      entries: GameLogEntry[];
+      dropped: number;
+    }> = [];
 
     const mockWin: any = {
       isDestroyed: () => false,
@@ -213,14 +232,22 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
 
     // First 5 items trigger immediate dispatch, setting inFlightBatch = { batchId: 1 }
     for (let i = 0; i < 5; i++) {
-      transport.push({ level: "INFO", message: `Initial ${i}`, timestamp: "12:00" });
+      transport.push({
+        level: "INFO",
+        message: `Initial ${i}`,
+        timestamp: "12:00",
+      });
     }
     expect(dispatchedBatches.length).toBe(1);
     expect(dispatchedBatches[0].batchId).toBe(1);
 
     // Feed 30 items into transport while renderer is unacked
     for (let i = 0; i < 30; i++) {
-      transport.push({ level: "INFO", message: `Storm ${i}`, timestamp: "12:00" });
+      transport.push({
+        level: "INFO",
+        message: `Storm ${i}`,
+        timestamp: "12:00",
+      });
     }
 
     // Queue size capped at maxQueueCapacity (10)
@@ -243,7 +270,11 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
   });
 
   test("closing obeys batch and outstanding-delivery limits", () => {
-    const dispatchedBatches: Array<{ batchId: number; entries: GameLogEntry[]; dropped: number }> = [];
+    const dispatchedBatches: Array<{
+      batchId: number;
+      entries: GameLogEntry[];
+      dropped: number;
+    }> = [];
 
     const mockWin: any = {
       isDestroyed: () => false,
@@ -264,7 +295,11 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
 
     // Push 5 items: first 2 dispatched immediately in batch 1
     for (let i = 0; i < 5; i++) {
-      transport.push({ level: "INFO", message: `Item ${i}`, timestamp: "12:00" });
+      transport.push({
+        level: "INFO",
+        message: `Item ${i}`,
+        timestamp: "12:00",
+      });
     }
     expect(dispatchedBatches.length).toBe(1);
     expect(transport.getPendingCount()).toBe(3);
@@ -280,7 +315,11 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
   });
 
   test("multi-session transport: survives across Launch 1, Launch 2, and Repair without closure", () => {
-    const dispatchedBatches: Array<{ batchId: number; entries: GameLogEntry[]; dropped: number }> = [];
+    const dispatchedBatches: Array<{
+      batchId: number;
+      entries: GameLogEntry[];
+      dropped: number;
+    }> = [];
 
     const mockWin: any = {
       isDestroyed: () => false,
@@ -300,8 +339,16 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
     });
 
     // Session 1: Launch 1
-    transport.push({ level: "INFO", message: "Launch 1 start", timestamp: "12:00" });
-    transport.push({ level: "INFO", message: "Launch 1 game running", timestamp: "12:01" });
+    transport.push({
+      level: "INFO",
+      message: "Launch 1 start",
+      timestamp: "12:00",
+    });
+    transport.push({
+      level: "INFO",
+      message: "Launch 1 game running",
+      timestamp: "12:01",
+    });
     transport.flushSession(); // Game 1 exits
     expect(dispatchedBatches.length).toBe(1);
     expect(dispatchedBatches[0].entries[0].message).toBe("Launch 1 start");
@@ -309,8 +356,16 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
     transport.onRendererAck(dispatchedBatches[0].batchId);
 
     // Session 2: Launch 2
-    transport.push({ level: "INFO", message: "Launch 2 start", timestamp: "12:05" });
-    transport.push({ level: "INFO", message: "Launch 2 game running", timestamp: "12:06" });
+    transport.push({
+      level: "INFO",
+      message: "Launch 2 start",
+      timestamp: "12:05",
+    });
+    transport.push({
+      level: "INFO",
+      message: "Launch 2 game running",
+      timestamp: "12:06",
+    });
     transport.flushSession(); // Game 2 exits
     expect(dispatchedBatches.length).toBe(2);
     expect(dispatchedBatches[1].entries[0].message).toBe("Launch 2 start");
@@ -318,11 +373,21 @@ describe("Phase 2 — BoundedLogBatchTransport (Flow Control & Backpressure)", (
     transport.onRendererAck(dispatchedBatches[1].batchId);
 
     // Session 3: Repair
-    transport.push({ level: "INFO", message: "Repair checking hashes", timestamp: "12:10" });
-    transport.push({ level: "INFO", message: "Repair complete", timestamp: "12:11" });
+    transport.push({
+      level: "INFO",
+      message: "Repair checking hashes",
+      timestamp: "12:10",
+    });
+    transport.push({
+      level: "INFO",
+      message: "Repair complete",
+      timestamp: "12:11",
+    });
     transport.flushSession(); // Repair exits
     expect(dispatchedBatches.length).toBe(3);
-    expect(dispatchedBatches[2].entries[0].message).toBe("Repair checking hashes");
+    expect(dispatchedBatches[2].entries[0].message).toBe(
+      "Repair checking hashes",
+    );
 
     transport.close();
   });
@@ -417,7 +482,8 @@ describe("Phase 2 — UI Renderer DOM & Queue Invariants", () => {
 
       // Exact production pruning logic from ui/renderer.js
       while (
-        (consoleOutput.childElementCount > MAX_DISPLAY_LINES || retainedDisplayBytes > MAX_DISPLAY_BYTES) &&
+        (consoleOutput.childElementCount > MAX_DISPLAY_LINES ||
+          retainedDisplayBytes > MAX_DISPLAY_BYTES) &&
         consoleOutput.firstElementChild
       ) {
         const first = consoleOutput.firstElementChild;
@@ -435,12 +501,16 @@ describe("Phase 2 — UI Renderer DOM & Queue Invariants", () => {
     expect(retainedDisplayBytes).toBeLessThanOrEqual(MAX_DISPLAY_BYTES);
 
     // 2. Byte budget bound test: append 100 large 10 KB lines (total ~1 MB, exceeding 512 KB limit)
-    const largeLogs = Array.from({ length: 100 }, (_, i) => "X".repeat(10 * 1024));
+    const largeLogs = Array.from({ length: 100 }, (_, i) =>
+      "X".repeat(10 * 1024),
+    );
     renderLines(largeLogs);
 
     // Byte budget constraint (512 KB) must prune older lines even if child count < 1000!
     expect(retainedDisplayBytes).toBeLessThanOrEqual(MAX_DISPLAY_BYTES);
-    expect(consoleOutput.childElementCount).toBeLessThanOrEqual(MAX_DISPLAY_LINES);
+    expect(consoleOutput.childElementCount).toBeLessThanOrEqual(
+      MAX_DISPLAY_LINES,
+    );
     expect(consoleOutput.childElementCount).toBeLessThan(100); // 100 * 10KB = 1MB, so < 52 lines retained
   });
 });
@@ -452,12 +522,16 @@ describe("Phase 2 — Minecraft Log & IPC Disposal", () => {
 
     const checkAndOpen = () => {
       if (!fs.existsSync(latestLog)) {
-        throw new Error("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
+        throw new Error(
+          "Minecraft log (latest.log) not found. Launch Minecraft first to create it.",
+        );
       }
       return latestLog;
     };
 
-    expect(checkAndOpen).toThrow("Minecraft log (latest.log) not found. Launch Minecraft first to create it.");
+    expect(checkAndOpen).toThrow(
+      "Minecraft log (latest.log) not found. Launch Minecraft first to create it.",
+    );
   });
 
   test("preload onLogBatch invokes callback with batchId and returns disposal function", () => {
@@ -497,7 +571,9 @@ describe("Phase 2 — Minecraft Log & IPC Disposal", () => {
     // Emit batch from main process
     const mockBatch = {
       batchId: 42,
-      entries: [{ level: "INFO", message: "Hello Minecraft", timestamp: "12:00" }],
+      entries: [
+        { level: "INFO", message: "Hello Minecraft", timestamp: "12:00" },
+      ],
       dropped: 0,
       bytes: 120,
     };

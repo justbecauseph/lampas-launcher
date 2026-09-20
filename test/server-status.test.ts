@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-server-status-test-"));
+const testRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "lampas-server-status-test-"),
+);
 const userDataDir = path.join(testRoot, "user-data");
 
 mock.module("electron", () => ({
@@ -12,10 +14,13 @@ mock.module("electron", () => ({
     getName: () => "Lampas Launcher",
     getVersion: () => "2.0.0",
   },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
+  dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
 const { ConfigManager } = await import("../src/config");
-const { ServerStatusClient, parseServerStatus } = await import("../src/server-status");
+const { ServerStatusClient, parseServerStatus } =
+  await import("../src/server-status");
 
 const validStatus = {
   server: { state: "online", managementConnected: true },
@@ -26,25 +31,27 @@ const validStatus = {
   presence: { freshness: "live", updatedAt: "2026-08-25T23:40:15.000Z" },
 };
 
-function response(body: unknown, init: { status?: number; statusText?: string } = {}): Response {
+function response(
+  body: unknown,
+  init: { status?: number; statusText?: string } = {},
+): Response {
   const status = init.status ?? 200;
-  return {
-    ok: status >= 200 && status < 300,
+  return Response.json(body, {
     status,
     statusText: init.statusText ?? (status === 200 ? "OK" : "Unauthorized"),
-    json: async () => body,
-  } as Response;
+  });
 }
 
 beforeEach(() => {
+  process.env.LAMPAS_ALLOWED_PORTAL_HOSTS = "portal.example.test";
   ConfigManager.resetForTesting();
-  ConfigManager.set({
-    portalUrl: "https://portal.example.test/",
+  ConfigManager.establishSession("https://portal.example.test", {
     token: "launcher-token",
   });
 });
 
 afterAll(() => {
+  delete process.env.LAMPAS_ALLOWED_PORTAL_HOSTS;
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
@@ -62,7 +69,9 @@ describe("ServerStatusClient", () => {
       },
     });
 
-    expect(requestedUrl).toBe("https://portal.example.test/api/v1/server/status");
+    expect(requestedUrl).toBe(
+      "https://portal.example.test/api/v1/server/status",
+    );
     expect(requestedInit?.headers).toEqual({
       Accept: "application/json",
       Authorization: "Bearer launcher-token",
@@ -71,36 +80,46 @@ describe("ServerStatusClient", () => {
   });
 
   test("surfaces HTTP errors without exposing response details", async () => {
-    await expect(ServerStatusClient.getStatus({
-      fetchImpl: async () => response({ error: "management secret" }, { status: 401 }),
-    })).rejects.toThrow("Server status request failed (401)");
+    await expect(
+      ServerStatusClient.getStatus({
+        fetchImpl: async () =>
+          response({ error: "management secret" }, { status: 401 }),
+      }),
+    ).rejects.toThrow("Server status request failed (401)");
   });
 
   test("rejects malformed JSON and malformed payloads", async () => {
-    await expect(ServerStatusClient.getStatus({
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        json: async () => { throw new SyntaxError("Unexpected token"); },
-      } as Response),
-    })).rejects.toThrow("not valid JSON");
+    await expect(
+      ServerStatusClient.getStatus({
+        fetchImpl: async () => new Response("{invalid-json"),
+      }),
+    ).rejects.toThrow("not valid JSON");
 
-    expect(() => parseServerStatus({ ...validStatus, players: { online: "1", list: [] } }))
-      .toThrow("players.online");
+    expect(() =>
+      parseServerStatus({ ...validStatus, players: { online: "1", list: [] } }),
+    ).toThrow("players.online");
   });
 
   test("aborts a hung Portal request at the bounded timeout", async () => {
-    await expect(ServerStatusClient.getStatus({
-      timeoutMs: 15,
-      fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    await expect(
+      ServerStatusClient.getStatus({
+        timeoutMs: 15,
+        fetchImpl: (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(
+                Object.assign(new Error("aborted"), { name: "AbortError" }),
+              ),
+            );
+          }),
       }),
-    })).rejects.toThrow("timed out after 15ms");
+    ).rejects.toThrow("timed out after 15ms");
   });
 
   test("requires a stored launcher token", async () => {
-    ConfigManager.set({ token: undefined });
-    await expect(ServerStatusClient.getStatus()).rejects.toThrow("Portal session is not available");
+    ConfigManager.clearSession();
+    await expect(ServerStatusClient.getStatus()).rejects.toThrow(
+      "Portal session is not available",
+    );
   });
 });

@@ -57,7 +57,9 @@ const serverPresenceDot = document.getElementById("server-presence-dot");
 const serverPresenceState = document.getElementById("server-presence-state");
 const serverPresenceCount = document.getElementById("server-presence-count");
 const serverPresenceDetail = document.getElementById("server-presence-detail");
-const serverPresencePlayers = document.getElementById("server-presence-players");
+const serverPresencePlayers = document.getElementById(
+  "server-presence-players",
+);
 let latestServerStatus = null;
 let serverStatusRequest = null;
 let serverStatusInterval = null;
@@ -67,7 +69,8 @@ function renderServerStatus(status) {
   const state = view.state;
 
   if (serverPresence) serverPresence.dataset.state = state;
-  if (serverPresenceDot) serverPresenceDot.className = `presence-dot presence-dot-${state}`;
+  if (serverPresenceDot)
+    serverPresenceDot.className = `presence-dot presence-dot-${state}`;
   if (serverPresenceState) serverPresenceState.innerText = view.label;
   if (serverPresenceCount) serverPresenceCount.innerText = view.count;
   if (serverPresenceDetail) serverPresenceDetail.innerText = view.detail;
@@ -106,7 +109,8 @@ async function refreshServerStatus() {
   }
   if (serverStatusRequest) return serverStatusRequest;
 
-  serverStatusRequest = window.lampas.server.getStatus()
+  serverStatusRequest = window.lampas.server
+    .getStatus()
     .then((status) => {
       latestServerStatus = status;
       renderServerStatus(status);
@@ -150,7 +154,9 @@ function updateLaunchTargetUI(release) {
 
 const runtimeLoaderType = document.getElementById("runtime-loader-type");
 const runtimeLoaderVersion = document.getElementById("runtime-loader-version");
-const runtimeMinecraftVersion = document.getElementById("runtime-minecraft-version");
+const runtimeMinecraftVersion = document.getElementById(
+  "runtime-minecraft-version",
+);
 
 function updateRuntimeSpecsUI(runtime) {
   if (!runtime) return;
@@ -194,17 +200,30 @@ function setConsoleStatus(status, textOverride) {
     if (status === "running") {
       consoleStatusDot.className = "status-dot status-dot-running";
       consoleStatusText.innerText = textOverride || "GAME RUNNING";
-      consoleGameStatus.className = "badge flex items-center gap-1.5 text-emerald-400 border-emerald-500/40 bg-emerald-950/50";
+      consoleGameStatus.className =
+        "badge flex items-center gap-1.5 text-emerald-400 border-emerald-500/40 bg-emerald-950/50";
       if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
-    } else if (status === "syncing" || status === "launching" || status === "repairing") {
+    } else if (
+      status === "syncing" ||
+      status === "launching" ||
+      status === "repairing"
+    ) {
       consoleStatusDot.className = "status-dot status-dot-launching";
-      consoleStatusText.innerText = textOverride || (status === "syncing" ? "SYNCING..." : status === "repairing" ? "REPAIRING..." : "LAUNCHING...");
-      consoleGameStatus.className = "badge flex items-center gap-1.5 text-amber-400 border-amber-500/40 bg-amber-950/50";
+      consoleStatusText.innerText =
+        textOverride ||
+        (status === "syncing"
+          ? "SYNCING..."
+          : status === "repairing"
+            ? "REPAIRING..."
+            : "LAUNCHING...");
+      consoleGameStatus.className =
+        "badge flex items-center gap-1.5 text-amber-400 border-amber-500/40 bg-amber-950/50";
       if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
     } else {
       consoleStatusDot.className = "status-dot status-dot-idle";
       consoleStatusText.innerText = textOverride || "IDLE";
-      consoleGameStatus.className = "badge flex items-center gap-1.5 text-slate-400";
+      consoleGameStatus.className =
+        "badge flex items-center gap-1.5 text-slate-400";
       if (btnConsoleStop) btnConsoleStop.classList.add("hidden");
     }
   }
@@ -214,15 +233,28 @@ function setConsoleStatus(status, textOverride) {
     if (status === "running") {
       titlebarStatusDot.className = "status-dot status-dot-running";
       titlebarStatusText.innerText = textOverride || "RUNNING";
-      titlebarGameStatus.className = "badge flex items-center gap-1.5 text-emerald-400 border-emerald-500/40 bg-emerald-950/50";
-    } else if (status === "syncing" || status === "launching" || status === "repairing") {
+      titlebarGameStatus.className =
+        "badge flex items-center gap-1.5 text-emerald-400 border-emerald-500/40 bg-emerald-950/50";
+    } else if (
+      status === "syncing" ||
+      status === "launching" ||
+      status === "repairing"
+    ) {
       titlebarStatusDot.className = "status-dot status-dot-launching";
-      titlebarStatusText.innerText = textOverride || (status === "syncing" ? "SYNCING" : status === "repairing" ? "REPAIRING" : "LAUNCHING");
-      titlebarGameStatus.className = "badge flex items-center gap-1.5 text-amber-400 border-amber-500/40 bg-amber-950/50";
+      titlebarStatusText.innerText =
+        textOverride ||
+        (status === "syncing"
+          ? "SYNCING"
+          : status === "repairing"
+            ? "REPAIRING"
+            : "LAUNCHING");
+      titlebarGameStatus.className =
+        "badge flex items-center gap-1.5 text-amber-400 border-amber-500/40 bg-amber-950/50";
     } else {
       titlebarStatusDot.className = "status-dot status-dot-idle";
       titlebarStatusText.innerText = textOverride || "IDLE";
-      titlebarGameStatus.className = "badge flex items-center gap-1.5 text-slate-400";
+      titlebarGameStatus.className =
+        "badge flex items-center gap-1.5 text-slate-400";
     }
   }
 }
@@ -242,7 +274,8 @@ const btnSaveSettings = document.getElementById("btn-save-settings");
 function updateNoSyncUI(noSync) {
   const isNoSync = Boolean(noSync);
   if (settingNoSync) settingNoSync.checked = isNoSync;
-  if (titlebarNoSyncBadge) titlebarNoSyncBadge.classList.toggle("hidden", !isNoSync);
+  if (titlebarNoSyncBadge)
+    titlebarNoSyncBadge.classList.toggle("hidden", !isNoSync);
 }
 
 // DOM Elements: Initial Directory Setup Modal
@@ -255,7 +288,9 @@ const initialDirError = document.getElementById("initial-dir-error");
 // DOM Elements: Move Installation Modal
 const modalMoveDir = document.getElementById("modal-move-dir");
 const moveModalConfirmView = document.getElementById("move-modal-confirm-view");
-const moveModalProgressView = document.getElementById("move-modal-progress-view");
+const moveModalProgressView = document.getElementById(
+  "move-modal-progress-view",
+);
 const moveSourcePath = document.getElementById("move-source-path");
 const moveTargetPath = document.getElementById("move-target-path");
 const btnCancelMove = document.getElementById("btn-cancel-move");
@@ -323,8 +358,12 @@ if (btnClose) {
 // ========================================================
 function switchTab(activeNav, activeTab) {
   window.scrollTo(0, 0);
-  [navPlay, navMods, navConsole, navSettings].forEach((n) => n?.classList.remove("active"));
-  [tabPlay, tabMods, tabConsole, tabSettings].forEach((t) => t?.classList.add("hidden"));
+  [navPlay, navMods, navConsole, navSettings].forEach((n) =>
+    n?.classList.remove("active"),
+  );
+  [tabPlay, tabMods, tabConsole, tabSettings].forEach((t) =>
+    t?.classList.add("hidden"),
+  );
 
   activeNav?.classList.add("active");
   activeTab?.classList.remove("hidden");
@@ -333,7 +372,8 @@ function switchTab(activeNav, activeTab) {
 if (navPlay) navPlay.onclick = () => switchTab(navPlay, tabPlay);
 if (navMods) navMods.onclick = () => switchTab(navMods, tabMods);
 if (navConsole) navConsole.onclick = () => switchTab(navConsole, tabConsole);
-if (navSettings) navSettings.onclick = () => switchTab(navSettings, tabSettings);
+if (navSettings)
+  navSettings.onclick = () => switchTab(navSettings, tabSettings);
 
 // ========================================================
 // RAM Slider & Real-Time Sync
@@ -370,7 +410,10 @@ function flushLogQueueToDOM() {
     const lvl = (entry.level || "INFO").toUpperCase();
     const time = entry.timestamp || new Date().toLocaleTimeString();
     const text = `[${time}] [${lvl}] ${entry.message}`;
-    const byteLen = typeof TextEncoder !== "undefined" ? new TextEncoder().encode(text).length : text.length;
+    const byteLen =
+      typeof TextEncoder !== "undefined"
+        ? new TextEncoder().encode(text).length
+        : text.length;
 
     line.className = `console-line console-line-${lvl.toLowerCase()}`;
     line.innerText = text;
@@ -384,7 +427,8 @@ function flushLogQueueToDOM() {
 
   // Strictly bound DOM node count to MAX_DISPLAY_LINES and byte size to MAX_DISPLAY_BYTES
   while (
-    (consoleOutput.childElementCount > MAX_DISPLAY_LINES || retainedDisplayBytes > MAX_DISPLAY_BYTES) &&
+    (consoleOutput.childElementCount > MAX_DISPLAY_LINES ||
+      retainedDisplayBytes > MAX_DISPLAY_BYTES) &&
     consoleOutput.firstElementChild
   ) {
     const first = consoleOutput.firstElementChild;
@@ -394,7 +438,8 @@ function flushLogQueueToDOM() {
   }
 
   if (consoleCount) {
-    const droppedText = clientDroppedLines > 0 ? ` (${clientDroppedLines} dropped)` : "";
+    const droppedText =
+      clientDroppedLines > 0 ? ` (${clientDroppedLines} dropped)` : "";
     consoleCount.innerText = `${logLineCount} line${logLineCount === 1 ? "" : "s"}${droppedText}`;
   }
 
@@ -540,15 +585,23 @@ window.lampas.game.onExit((code) => {
   if (btnPlay) {
     btnPlay.disabled = false;
   }
-  if (btnPlayText) btnPlayText.innerText = currentUser ? "PLAY" : "LOG IN TO PLAY";
+  if (btnPlayText)
+    btnPlayText.innerText = currentUser ? "PLAY" : "LOG IN TO PLAY";
   if (btnPlaySpinner) btnPlaySpinner.classList.add("hidden");
   if (btnStop) btnStop.classList.add("hidden");
   if (progressContainer) progressContainer.classList.add("hidden");
 
-  appendLog(code === 0 ? "INFO" : "ERROR", `Game process terminated (exit code: ${code})`);
+  appendLog(
+    code === 0 ? "INFO" : "ERROR",
+    `Game process terminated (exit code: ${code})`,
+  );
 
   if (code !== 0 && code !== null) {
-    showToast(`Minecraft exited with code ${code}. Check Console tab for logs.`, "error", 5000);
+    showToast(
+      `Minecraft exited with code ${code}. Check Console tab for logs.`,
+      "error",
+      5000,
+    );
   } else {
     showToast("Minecraft session ended.", "info", 2500);
   }
@@ -559,9 +612,17 @@ window.lampas.game.onExit((code) => {
 // Auth & Profile Management
 // ========================================================
 function updateUserUI(user) {
-  if (user && (!user.minecraftUuid || user.minecraftUuid === "00000000-0000-0000-0000-000000000000")) {
+  if (
+    user &&
+    (!user.minecraftUuid ||
+      user.minecraftUuid === "00000000-0000-0000-0000-000000000000")
+  ) {
     currentUser = null;
-    showToast("Minecraft account not bound. Please link your Minecraft account on the portal dashboard.", "error", 5000);
+    showToast(
+      "Minecraft account not bound. Please link your Minecraft account on the portal dashboard.",
+      "error",
+      5000,
+    );
     user = null;
   }
 
@@ -571,16 +632,23 @@ function updateUserUI(user) {
     if (btnLogin) btnLogin.classList.add("hidden");
     if (userCard) userCard.classList.remove("hidden");
 
-    const displayName = user.minecraftUsername || user.name || user.discordTag || "Player";
+    const displayName =
+      user.minecraftUsername || user.name || user.discordTag || "Player";
     if (userName) userName.innerText = displayName;
     if (userRole) {
-      userRole.innerText = user.isTech ? "Tech Staff" : user.isAdmin ? "Admin" : "Verified";
+      userRole.innerText = user.isTech
+        ? "Tech Staff"
+        : user.isAdmin
+          ? "Admin"
+          : "Verified";
     }
     if (userAvatar) {
       const fallbackInitial = displayName[0]?.toUpperCase() || "P";
-      const identifier = user.minecraftUuid && user.minecraftUuid !== "00000000-0000-0000-0000-000000000000"
-        ? user.minecraftUuid.replace(/-/g, "")
-        : (user.minecraftUsername || displayName);
+      const identifier =
+        user.minecraftUuid &&
+        user.minecraftUuid !== "00000000-0000-0000-0000-000000000000"
+          ? user.minecraftUuid.replace(/-/g, "")
+          : user.minecraftUsername || displayName;
 
       if (identifier) {
         userAvatar.replaceChildren();
@@ -638,12 +706,33 @@ if (btnLogin) {
         <span class="spinner mr-2"></span>
         <span>Authorizing in browser...</span>
       `;
-      showToast("Opening browser for Lampas Portal authentication...", "info", 4000);
+      showToast(
+        "Opening browser for Lampas Portal authentication...",
+        "info",
+        4000,
+      );
 
-      const res = await window.lampas.auth.login(currentConfig?.portalUrl);
+      const res = await window.lampas.auth.login();
       updateUserUI(res.user);
       void refreshServerStatus();
-      showToast(`Welcome back, ${res.user.minecraftUsername || res.user.name || "Player"}!`, "success");
+      showToast(
+        `Welcome back, ${res.user.minecraftUsername || res.user.name || "Player"}!`,
+        "success",
+      );
+      try {
+        const storageStatus = await window.lampas.auth.getStorageStatus();
+        if (storageStatus.sessionOnly) {
+          showToast(
+            "Session-only mode active: credentials are held in memory only.",
+            "info",
+          );
+        } else if (storageStatus.lastPersistenceError) {
+          showToast(
+            `Storage warning: ${storageStatus.lastPersistenceError}`,
+            "warning",
+          );
+        }
+      } catch {}
     } catch (err) {
       showToast(`Login failed: ${err.message}`, "error", 5000);
     } finally {
@@ -663,12 +752,24 @@ if (btnLogin) {
 if (btnLogout) {
   btnLogout.onclick = async () => {
     try {
-      await window.lampas.auth.logout();
+      const logoutResult = await window.lampas.auth.logout();
       currentConfig = await window.lampas.config.get();
       updateUserUI(null);
       latestServerStatus = null;
       renderServerStatus(null);
-      showToast("Logged out successfully.", "info");
+      if (logoutResult && !logoutResult.success) {
+        showToast(
+          `Logout warning: Persistent cleanup incomplete (${logoutResult.error || "cleanup error"})`,
+          "warning",
+        );
+      } else if (logoutResult && logoutResult.success) {
+        showToast("Logged out successfully.", "info");
+      } else {
+        showToast(
+          "Logged out (session cleared). Persistent cleanup unverified.",
+          "warning",
+        );
+      }
     } catch (err) {
       showToast(`Logout failed: ${err.message}`, "error");
     }
@@ -698,9 +799,14 @@ channelBtns.forEach((btn) => {
     const channel = btn.dataset.channel;
     const prevChannel = currentConfig?.selectedChannel;
     applyChannel(channel);
-    currentConfig = await window.lampas.config.set({ selectedChannel: channel });
+    currentConfig = await window.lampas.config.set({
+      selectedChannel: channel,
+    });
     if (prevChannel !== channel) {
-      appendLog("INFO", `[Settings] Selected channel changed to ${channel.toUpperCase()}`);
+      appendLog(
+        "INFO",
+        `[Settings] Selected channel changed to ${channel.toUpperCase()}`,
+      );
     }
     showToast(`Switched channel to ${channel.toUpperCase()}`, "info", 2000);
   };
@@ -720,7 +826,9 @@ function updateGameDirUI(newGameDir) {
 }
 
 async function openGameDir() {
-  if (currentConfig?.gameDir && window.lampas.utils?.openPath) {
+  if (window.lampas.utils?.openKnownLocation) {
+    await window.lampas.utils.openKnownLocation("gameDir");
+  } else if (currentConfig?.gameDir && window.lampas.utils?.openPath) {
     await window.lampas.utils.openPath(currentConfig.gameDir);
   }
 }
@@ -744,7 +852,9 @@ function checkInitialGameDir(dirStatus) {
       if (btnInitialBrowse) {
         btnInitialBrowse.onclick = async () => {
           try {
-            const res = await window.lampas.gameDirectory.browse(initialGamedirInput.value);
+            const res = await window.lampas.gameDirectory.browse(
+              initialGamedirInput.value,
+            );
             if (!res.canceled && res.filePaths.length > 0) {
               initialGamedirInput.value = res.filePaths[0];
               if (initialDirError) initialDirError.classList.add("hidden");
@@ -762,14 +872,16 @@ function checkInitialGameDir(dirStatus) {
             const val = await window.lampas.gameDirectory.validate(selected);
             if (!val.valid) {
               if (initialDirError) {
-                initialDirError.innerText = val.reason || "Invalid directory path";
+                initialDirError.innerText =
+                  val.reason || "Invalid directory path";
                 initialDirError.classList.remove("hidden");
               }
               return;
             }
 
             btnInitialConfirm.disabled = true;
-            currentConfig = await window.lampas.gameDirectory.configure(selected);
+            currentConfig =
+              await window.lampas.gameDirectory.configure(selected);
             updateGameDirUI(currentConfig.gameDir);
             modalInitialDir.classList.add("hidden");
             showToast("Installation directory configured!", "success", 3000);
@@ -794,25 +906,35 @@ function checkInitialGameDir(dirStatus) {
 if (btnSettingsMoveDir) {
   btnSettingsMoveDir.onclick = async () => {
     if (isLaunching) {
-      showToast("Cannot move installation while game or sync is in progress.", "warning", 4000);
+      showToast(
+        "Cannot move installation while game or sync is in progress.",
+        "warning",
+        4000,
+      );
       return;
     }
 
     try {
-      const browseRes = await window.lampas.gameDirectory.browse(currentConfig?.gameDir);
+      const browseRes = await window.lampas.gameDirectory.browse(
+        currentConfig?.gameDir,
+      );
       if (browseRes.canceled || !browseRes.filePaths?.length) {
         return;
       }
 
       const targetPath = browseRes.filePaths[0];
-      const val = await window.lampas.gameDirectory.validate(targetPath, currentConfig?.gameDir);
+      const val = await window.lampas.gameDirectory.validate(
+        targetPath,
+        currentConfig?.gameDir,
+      );
       if (!val.valid) {
         showToast(val.reason || "Cannot use this location.", "error", 5000);
         return;
       }
 
       pendingMoveTargetPath = targetPath;
-      if (moveSourcePath) moveSourcePath.innerText = currentConfig?.gameDir || "";
+      if (moveSourcePath)
+        moveSourcePath.innerText = currentConfig?.gameDir || "";
       if (moveTargetPath) moveTargetPath.innerText = targetPath;
 
       if (moveModalConfirmView) moveModalConfirmView.classList.remove("hidden");
@@ -842,46 +964,73 @@ if (btnConfirmMove) {
       if (btnRepairSettings) btnRepairSettings.disabled = true;
 
       if (moveModalConfirmView) moveModalConfirmView.classList.add("hidden");
-      if (moveModalProgressView) moveModalProgressView.classList.remove("hidden");
+      if (moveModalProgressView)
+        moveModalProgressView.classList.remove("hidden");
 
       if (moveProgressFill) moveProgressFill.style.width = "0%";
       if (moveProgressPercent) moveProgressPercent.innerText = "0%";
-      if (moveProgressPhase) moveProgressPhase.innerText = "Preparing relocation...";
-      if (moveProgressDetails) moveProgressDetails.innerText = "Scanning files...";
+      if (moveProgressPhase)
+        moveProgressPhase.innerText = "Preparing relocation...";
+      if (moveProgressDetails)
+        moveProgressDetails.innerText = "Scanning files...";
       if (moveProgressFile) moveProgressFile.innerText = "";
 
-      const removeProgress = window.lampas.gameDirectory.onMoveProgress((progress) => {
-        if (moveProgressFill) moveProgressFill.style.width = `${progress.percent}%`;
-        if (moveProgressPercent) moveProgressPercent.innerText = `${progress.percent}%`;
+      const removeProgress = window.lampas.gameDirectory.onMoveProgress(
+        (progress) => {
+          if (moveProgressFill)
+            moveProgressFill.style.width = `${progress.percent}%`;
+          if (moveProgressPercent)
+            moveProgressPercent.innerText = `${progress.percent}%`;
 
-        if (progress.phase === "preparing") {
-          if (moveProgressPhase) moveProgressPhase.innerText = "Preparing relocation...";
-          if (moveProgressDetails) moveProgressDetails.innerText = "Scanning files...";
-        } else if (progress.phase === "moving") {
-          if (moveProgressPhase) moveProgressPhase.innerText = "Copying files...";
-          if (moveProgressDetails) {
-            moveProgressDetails.innerText = `${progress.filesCompleted} / ${progress.totalFiles} files (${formatBytes(progress.bytesCompleted)} / ${formatBytes(progress.totalBytes)})`;
+          if (progress.phase === "preparing") {
+            if (moveProgressPhase)
+              moveProgressPhase.innerText = "Preparing relocation...";
+            if (moveProgressDetails)
+              moveProgressDetails.innerText = "Scanning files...";
+          } else if (progress.phase === "moving") {
+            if (moveProgressPhase)
+              moveProgressPhase.innerText = "Copying files...";
+            if (moveProgressDetails) {
+              moveProgressDetails.innerText = `${progress.filesCompleted} / ${progress.totalFiles} files (${formatBytes(progress.bytesCompleted)} / ${formatBytes(progress.totalBytes)})`;
+            }
+            if (moveProgressFile)
+              moveProgressFile.innerText = progress.currentFile || "";
+          } else if (progress.phase === "verifying") {
+            if (moveProgressPhase)
+              moveProgressPhase.innerText = "Verifying file integrity...";
+            if (moveProgressDetails)
+              moveProgressDetails.innerText = `Verifying ${progress.totalFiles} files...`;
+            if (moveProgressFile) moveProgressFile.innerText = "";
+          } else if (progress.phase === "cleaning") {
+            if (moveProgressPhase)
+              moveProgressPhase.innerText = "Cleaning previous location...";
+            if (moveProgressDetails)
+              moveProgressDetails.innerText = "Finalizing directory...";
+            if (moveProgressFile) moveProgressFile.innerText = "";
           }
-          if (moveProgressFile) moveProgressFile.innerText = progress.currentFile || "";
-        } else if (progress.phase === "verifying") {
-          if (moveProgressPhase) moveProgressPhase.innerText = "Verifying file integrity...";
-          if (moveProgressDetails) moveProgressDetails.innerText = `Verifying ${progress.totalFiles} files...`;
-          if (moveProgressFile) moveProgressFile.innerText = "";
-        } else if (progress.phase === "cleaning") {
-          if (moveProgressPhase) moveProgressPhase.innerText = "Cleaning previous location...";
-          if (moveProgressDetails) moveProgressDetails.innerText = "Finalizing directory...";
-          if (moveProgressFile) moveProgressFile.innerText = "";
-        }
-      });
+        },
+      );
 
-      appendLog("INFO", `[Game Directory] Moving installation to ${pendingMoveTargetPath}...`);
-      const result = await window.lampas.gameDirectory.move(pendingMoveTargetPath);
+      appendLog(
+        "INFO",
+        `[Game Directory] Moving installation to ${pendingMoveTargetPath}...`,
+      );
+      const result = await window.lampas.gameDirectory.move(
+        pendingMoveTargetPath,
+      );
       removeProgress();
 
       updateGameDirUI(result.gameDir);
       if (modalMoveDir) modalMoveDir.classList.add("hidden");
-      showToast(`Minecraft installation successfully moved to ${result.gameDir}!`, "success", 5000);
-      appendLog("INFO", `[Game Directory] Installation moved from ${result.previousGameDir} to ${result.gameDir}`);
+      showToast(
+        `Minecraft installation successfully moved to ${result.gameDir}!`,
+        "success",
+        5000,
+      );
+      appendLog(
+        "INFO",
+        `[Game Directory] Installation moved from ${result.previousGameDir} to ${result.gameDir}`,
+      );
 
       // Reload mod catalog with new directory
       await loadModCatalog();
@@ -908,8 +1057,15 @@ if (settingNoSync) {
       const noSyncVal = Boolean(settingNoSync.checked);
       currentConfig = await window.lampas.config.set({ noSync: noSyncVal });
       updateNoSyncUI(currentConfig?.noSync);
-      appendLog("INFO", `[Settings] No-sync mode ${noSyncVal ? "enabled" : "disabled"}`);
-      showToast(`No-sync mode ${noSyncVal ? "enabled (sync skipped on launch)" : "disabled"}`, "info", 2500);
+      appendLog(
+        "INFO",
+        `[Settings] No-sync mode ${noSyncVal ? "enabled" : "disabled"}`,
+      );
+      showToast(
+        `No-sync mode ${noSyncVal ? "enabled (sync skipped on launch)" : "disabled"}`,
+        "info",
+        2500,
+      );
     } catch (err) {
       showToast(`Failed to update setting: ${err.message}`, "error");
       if (settingNoSync) settingNoSync.checked = Boolean(currentConfig?.noSync);
@@ -921,7 +1077,8 @@ if (btnSaveSettings) {
   btnSaveSettings.onclick = async () => {
     try {
       const ram = parseInt(ramSlider?.value || "4", 10);
-      const portalUrl = settingPortal?.value?.trim() || "https://dev.lampas.town";
+      const portalUrl =
+        settingPortal?.value?.trim() || "https://dev.lampas.town";
       const javaArgs = settingJavaArgs?.value?.trim() || "";
       const noSync = Boolean(settingNoSync?.checked);
       const prev = currentConfig || {};
@@ -942,10 +1099,16 @@ if (btnSaveSettings) {
         appendLog("INFO", `[Settings] Portal URL updated to ${portalUrl}`);
       }
       if ((prev.javaArgs || "") !== javaArgs) {
-        appendLog("INFO", `[Settings] Java arguments updated: ${javaArgs || "<none>"}`);
+        appendLog(
+          "INFO",
+          `[Settings] Java arguments updated: ${javaArgs || "<none>"}`,
+        );
       }
       if (Boolean(prev.noSync) !== noSync) {
-        appendLog("INFO", `[Settings] No-sync mode ${noSync ? "enabled" : "disabled"}`);
+        appendLog(
+          "INFO",
+          `[Settings] No-sync mode ${noSync ? "enabled" : "disabled"}`,
+        );
       }
 
       showToast("Settings saved successfully!", "success");
@@ -967,7 +1130,11 @@ async function handleRepair() {
   }
 
   if (!currentUser) {
-    showToast("Authentication required: Please log in with Lampas Portal before repairing files.", "warning", 4000);
+    showToast(
+      "Authentication required: Please log in with Lampas Portal before repairing files.",
+      "warning",
+      4000,
+    );
     if (btnLogin) btnLogin.click();
     return;
   }
@@ -980,10 +1147,14 @@ async function handleRepair() {
     if (btnPlay) btnPlay.disabled = true;
 
     // Refresh token with portal
-    const session = await window.lampas.auth.refresh(currentConfig?.portalUrl);
+    const session = await window.lampas.auth.refresh();
     if (!session?.valid || !session?.user) {
       updateUserUI(null);
-      showToast("Portal session expired. Please log in again.", "warning", 4000);
+      showToast(
+        "Portal session expired. Please log in again.",
+        "warning",
+        4000,
+      );
       if (btnLogin) btnLogin.click();
       return;
     }
@@ -992,10 +1163,18 @@ async function handleRepair() {
     if (progressContainer) progressContainer.classList.remove("hidden");
     if (progressFill) progressFill.style.width = "0%";
     if (progressPercent) progressPercent.innerText = "0%";
-    if (progressMsg) progressMsg.innerText = "Initiating full file & asset repair...";
+    if (progressMsg)
+      progressMsg.innerText = "Initiating full file & asset repair...";
 
-    appendLog("INFO", "[Repair] Starting full installation repair and asset verification...");
-    showToast("Repairing installation: validating assets, libraries, and mod files...", "info", 4000);
+    appendLog(
+      "INFO",
+      "[Repair] Starting full installation repair and asset verification...",
+    );
+    showToast(
+      "Repairing installation: validating assets, libraries, and mod files...",
+      "info",
+      4000,
+    );
 
     const removeListener = window.lampas.sync.onProgress((progress) => {
       if (progressFill) progressFill.style.width = `${progress.percent}%`;
@@ -1010,8 +1189,15 @@ async function handleRepair() {
     if (progressPercent) progressPercent.innerText = "100%";
     if (progressMsg) progressMsg.innerText = "Repair complete!";
 
-    appendLog("INFO", `[Repair] ${repairRes.message || "All components verified and repaired."}`);
-    showToast("Repair complete! All assets, libraries, and mods verified.", "success", 4500);
+    appendLog(
+      "INFO",
+      `[Repair] ${repairRes.message || "All components verified and repaired."}`,
+    );
+    showToast(
+      "Repair complete! All assets, libraries, and mods verified.",
+      "success",
+      4500,
+    );
   } catch (err) {
     appendLog("ERROR", `[Repair Error] ${err.message}`);
     showToast(`Repair Error: ${err.message}`, "error", 6000);
@@ -1078,7 +1264,11 @@ if (btnPlay) {
 
     // Require authentication before playing
     if (!currentUser) {
-      showToast("Authentication required: Please log in with Lampas Portal to play.", "warning", 4000);
+      showToast(
+        "Authentication required: Please log in with Lampas Portal to play.",
+        "warning",
+        4000,
+      );
       if (btnLogin) {
         btnLogin.click();
       }
@@ -1088,9 +1278,17 @@ if (btnPlay) {
     // Presence is advisory. Warn on a known degraded state, but never make
     // the status request part of the launch critical path.
     if (latestServerStatus?.server.state === "starting") {
-      showToast("The server is still starting. Launch will continue.", "warning", 4500);
+      showToast(
+        "The server is still starting. Launch will continue.",
+        "warning",
+        4500,
+      );
     } else if (latestServerStatus?.server.state === "offline") {
-      showToast("The server appears offline. Launch will continue anyway.", "warning", 4500);
+      showToast(
+        "The server appears offline. Launch will continue anyway.",
+        "warning",
+        4500,
+      );
     }
     void refreshServerStatus();
 
@@ -1106,22 +1304,30 @@ if (btnPlay) {
       if (btnStop) btnStop.classList.remove("hidden");
 
       // 1. Refresh & ensure fresh token from Portal
-      const session = await window.lampas.auth.refresh(currentConfig?.portalUrl);
+      const session = await window.lampas.auth.refresh();
       if (!session?.valid || !session?.user) {
         isLaunching = false;
         updateUserUI(null);
-        showToast("Portal session expired. Please log in again.", "warning", 5000);
+        showToast(
+          "Portal session expired. Please log in again.",
+          "warning",
+          5000,
+        );
         if (btnLogin) btnLogin.click();
         return;
       }
       updateUserUI(session.user);
 
       if (currentConfig?.noSync) {
-        appendLog("INFO", "No-sync mode enabled: Skipping modpack synchronization.");
+        appendLog(
+          "INFO",
+          "No-sync mode enabled: Skipping modpack synchronization.",
+        );
         if (progressContainer) progressContainer.classList.add("hidden");
 
         try {
-          const installedRuntime = await window.lampas.sync.getInstalledRuntime();
+          const installedRuntime =
+            await window.lampas.sync.getInstalledRuntime();
           if (installedRuntime) {
             updateRuntimeSpecsUI(installedRuntime);
             if (installedRuntime.launch) {
@@ -1135,7 +1341,7 @@ if (btnPlay) {
         appendLog("INFO", "Bootstrapping runtime and launching game...");
         showToast("No-sync mode active. Launching game...", "info", 2500);
 
-        await window.lampas.game.launch(currentUser);
+        await window.lampas.game.launch();
       } else {
         if (progressContainer) {
           progressContainer.classList.remove("hidden");
@@ -1147,7 +1353,8 @@ if (btnPlay) {
         // Progress listener
         const removeListener = window.lampas.sync.onProgress((progress) => {
           if (progressFill) progressFill.style.width = `${progress.percent}%`;
-          if (progressPercent) progressPercent.innerText = `${progress.percent}%`;
+          if (progressPercent)
+            progressPercent.innerText = `${progress.percent}%`;
           if (progressMsg) progressMsg.innerText = progress.message;
 
           if (progress.status === "downloading") {
@@ -1172,12 +1379,22 @@ if (btnPlay) {
         if (progressFill) progressFill.style.width = "100%";
         if (progressPercent) progressPercent.innerText = "100%";
 
-        const loaderType = syncResult.runtime?.loader?.type || syncResult.release?.loader?.type || "Fabric";
+        const loaderType =
+          syncResult.runtime?.loader?.type ||
+          syncResult.release?.loader?.type ||
+          "Fabric";
         const loaderName = loaderType === "fabric" ? "Fabric" : loaderType;
-        appendLog("INFO", `Pack v${syncResult.version} synchronized. Bootstrapping ${loaderName} runtime...`);
-        showToast(`Pack v${syncResult.version} verified. Launching game...`, "info", 2500);
+        appendLog(
+          "INFO",
+          `Pack v${syncResult.version} synchronized. Bootstrapping ${loaderName} runtime...`,
+        );
+        showToast(
+          `Pack v${syncResult.version} verified. Launching game...`,
+          "info",
+          2500,
+        );
 
-        await window.lampas.game.launch(currentUser, syncResult.release);
+        await window.lampas.game.launch();
       }
 
       if (btnPlayText) btnPlayText.innerText = "RUNNING";
@@ -1188,7 +1405,8 @@ if (btnPlay) {
       isLaunching = false;
       setConsoleStatus("idle", "ERROR");
       if (btnPlay) btnPlay.disabled = false;
-      if (btnPlayText) btnPlayText.innerText = currentUser ? "PLAY" : "LOG IN TO PLAY";
+      if (btnPlayText)
+        btnPlayText.innerText = currentUser ? "PLAY" : "LOG IN TO PLAY";
       if (btnPlaySpinner) btnPlaySpinner.classList.add("hidden");
       if (btnStop) btnStop.classList.add("hidden");
       if (progressContainer) progressContainer.classList.add("hidden");
@@ -1221,7 +1439,8 @@ async function init() {
 
     // Portal Endpoint
     if (settingPortal) {
-      settingPortal.value = currentConfig.portalUrl || "https://dev.lampas.town";
+      settingPortal.value =
+        currentConfig.portalUrl || "https://dev.lampas.town";
     }
     if (settingJavaArgs) settingJavaArgs.value = currentConfig.javaArgs || "";
 
@@ -1244,7 +1463,7 @@ async function init() {
 
     // Verify & refresh session
     try {
-      const authCheck = await window.lampas.auth.refresh(currentConfig.portalUrl);
+      const authCheck = await window.lampas.auth.refresh();
       if (authCheck?.valid && authCheck?.user) {
         updateUserUI(authCheck.user);
       } else {
@@ -1298,9 +1517,17 @@ function formatBytes(bytes) {
 }
 
 function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
-  })[char]);
+  return String(value ?? "").replace(
+    /[&<>'"]/g,
+    (char) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "'": "&#39;",
+        '"': "&quot;",
+      })[char],
+  );
 }
 
 function renderMods() {
@@ -1316,7 +1543,11 @@ function renderMods() {
     if (filter === "custom" && mod.source !== "custom") return false;
     if (filter === "server" && mod.side !== "server") return false;
     if (filter === "both" && mod.side !== "both") return false;
-    if (!["all", "client", "disabled", "custom", "server", "both"].includes(filter)) {
+    if (
+      !["all", "client", "disabled", "custom", "server", "both"].includes(
+        filter,
+      )
+    ) {
       const cats = (mod.categories || []).map((c) => c.toLowerCase());
       if (!cats.includes(filter)) return false;
     }
@@ -1326,7 +1557,9 @@ function renderMods() {
       const matchName = (mod.name || "").toLowerCase().includes(query);
       const matchId = (mod.id || "").toLowerCase().includes(query);
       const matchDesc = (mod.description || "").toLowerCase().includes(query);
-      const matchCats = (mod.categories || []).some((c) => c.toLowerCase().includes(query));
+      const matchCats = (mod.categories || []).some((c) =>
+        c.toLowerCase().includes(query),
+      );
       if (!matchName && !matchId && !matchDesc && !matchCats) return false;
     }
 
@@ -1352,10 +1585,12 @@ function renderMods() {
         mod.side === "client"
           ? '<span class="text-[9px] font-bold text-cyan-400 bg-cyan-950/80 border border-cyan-800/60 px-1.5 py-0.5 rounded-md">CLIENT ONLY</span>'
           : mod.side === "server"
-          ? '<span class="text-[9px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 rounded-md">SERVER ONLY</span>'
-          : '<span class="text-[9px] font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded-md">REQUIRED</span>';
+            ? '<span class="text-[9px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 rounded-md">SERVER ONLY</span>'
+            : '<span class="text-[9px] font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded-md">REQUIRED</span>';
 
-      const fallbackText = escapeHtml((mod.name || mod.id || "M")[0].toUpperCase());
+      const fallbackText = escapeHtml(
+        (mod.name || mod.id || "M")[0].toUpperCase(),
+      );
       const modName = escapeHtml(mod.name || mod.filename || "Unknown mod");
       const modId = escapeHtml(mod.id);
       const iconHtml = mod.iconUrl
@@ -1369,7 +1604,10 @@ function renderMods() {
 
       const catsHtml = (mod.categories || [])
         .slice(0, 3)
-        .map((c) => `<span class="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded">#${escapeHtml(c)}</span>`)
+        .map(
+          (c) =>
+            `<span class="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded">#${escapeHtml(c)}</span>`,
+        )
         .join(" ");
 
       const linkBtn = mod.sourceUrl
@@ -1382,10 +1620,14 @@ function renderMods() {
             <span></span>
           </label>`
         : "";
-      const localBadge = mod.source === "custom" ? '<span class="local-mod-badge">LOCAL</span>' : "";
-      const remove = mod.source === "custom"
-        ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename)}" title="Remove this local mod">Remove</button>`
-        : "";
+      const localBadge =
+        mod.source === "custom"
+          ? '<span class="local-mod-badge">LOCAL</span>'
+          : "";
+      const remove =
+        mod.source === "custom"
+          ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename)}" title="Remove this local mod">Remove</button>`
+          : "";
 
       return `
         <div class="mod-card">
@@ -1415,7 +1657,13 @@ function renderMods() {
     .join("");
 
   modsGrid.querySelectorAll(".js-source-link").forEach((button) => {
-    button.onclick = () => window.lampas.utils.openPath(button.dataset.sourceUrl);
+    button.onclick = () => {
+      if (window.lampas.utils?.openSourcePage && button.dataset.sourceUrl) {
+        window.lampas.utils.openSourcePage(button.dataset.sourceUrl);
+      } else if (button.dataset.sourceUrl) {
+        window.lampas.utils.openPath(button.dataset.sourceUrl);
+      }
+    };
   });
   modsGrid.querySelectorAll(".js-mod-toggle").forEach((toggle) => {
     toggle.onchange = async () => {
@@ -1433,7 +1681,10 @@ function renderMods() {
         const entry = allMods.find((mod) => mod.id === modId);
         if (entry) entry.enabled = enabled;
         toggle.disabled = false;
-        showToast(`${enabled ? "Enabled" : "Disabled"} ${filename}. Changes apply on the next sync.`, "success");
+        showToast(
+          `${enabled ? "Enabled" : "Disabled"} ${filename}. Changes apply on the next sync.`,
+          "success",
+        );
       } catch (err) {
         toggle.checked = !enabled;
         toggle.disabled = false;
@@ -1462,7 +1713,10 @@ async function addLocalMods(files) {
     if (files) await window.lampas.mods.addDropped(Array.from(files));
     else await window.lampas.mods.browseAndAdd();
     await loadModCatalog();
-    showToast("Local client mods added. They will be preserved during sync.", "success");
+    showToast(
+      "Local client mods added. They will be preserved during sync.",
+      "success",
+    );
   } catch (err) {
     showToast(`Could not add mod: ${err.message}`, "error", 5000);
   }
@@ -1482,7 +1736,9 @@ if (modDropZone) {
       modDropZone.classList.remove("drag-active");
     });
   }
-  modDropZone.addEventListener("drop", (event) => addLocalMods(event.dataTransfer?.files));
+  modDropZone.addEventListener("drop", (event) =>
+    addLocalMods(event.dataTransfer?.files),
+  );
   modDropZone.onclick = () => addLocalMods();
 }
 
@@ -1490,9 +1746,18 @@ async function loadModCatalog() {
   try {
     if (window.lampas.sync?.getModCatalog) {
       allMods = await window.lampas.sync.getModCatalog();
-      if (managedModCount) managedModCount.innerText = allMods.filter((mod) => mod.source === "official").length;
-      if (optionalModCount) optionalModCount.innerText = allMods.filter((mod) => mod.source === "official" && mod.canDisable).length;
-      if (localModCount) localModCount.innerText = allMods.filter((mod) => mod.source === "custom").length;
+      if (managedModCount)
+        managedModCount.innerText = allMods.filter(
+          (mod) => mod.source === "official",
+        ).length;
+      if (optionalModCount)
+        optionalModCount.innerText = allMods.filter(
+          (mod) => mod.source === "official" && mod.canDisable,
+        ).length;
+      if (localModCount)
+        localModCount.innerText = allMods.filter(
+          (mod) => mod.source === "custom",
+        ).length;
       renderMods();
       window.scrollTo(0, 0);
     }

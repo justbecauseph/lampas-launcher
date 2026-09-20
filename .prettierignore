@@ -1,0 +1,17 @@
+# Dependencies and Git internals
+node_modules/
+.git/
+
+# Generated build, packaging, and coverage output
+dist/
+release/
+build/
+coverage/
+*.tsbuildinfo
+
+# Generated dependency and hook files
+bun.lock
+.husky/_/
+
+# Local runtime output
+*.log

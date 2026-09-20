@@ -1,9 +1,19 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-sync-contract-test-"));
+const testRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "lampas-sync-contract-test-"),
+);
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
 
@@ -17,7 +27,7 @@ mock.module("electron", () => ({
 }));
 
 const { LauncherLogger } = await import("../src/logger");
-const { ConfigManager } = await import("../src/config");
+const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 
 beforeAll(() => {
@@ -26,14 +36,17 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
   ConfigManager.resetForTesting();
   ConfigManager.set({
-    token: "mock-token",
     portalUrl: "http://localhost:3000",
     selectedChannel: "stable",
     gameDir,
     customClientMods: [],
     disabledClientMods: [],
+  });
+  ConfigManager.establishSession("http://localhost:3000", {
+    token: "mock-token",
   });
   // Clear gameDir
   if (fs.existsSync(gameDir)) {
@@ -43,6 +56,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  PortalPolicy.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });
   }
@@ -55,22 +69,35 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -79,7 +106,9 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       const result = await LauncherSync.syncClient(() => {});
@@ -107,22 +136,35 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.99.123-test" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.99.123-test" },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -131,7 +173,9 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       const result = await LauncherSync.syncClient(() => {});
@@ -148,22 +192,35 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.4" },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -172,11 +229,13 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-        "Invalid Lampas release: release descriptor requires Fabric 0.19.3, client manifest requires Fabric 0.19.4."
+        "client manifest.loader.version does not match release descriptor.",
       );
 
       // Verify no installation state was written
@@ -193,22 +252,35 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.3",
             loader: { type: "fabric", version: "0.19.3" },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -217,11 +289,13 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-        "Invalid Lampas release: release descriptor requires Minecraft 26.2, client manifest requires Minecraft 26.3."
+        "client manifest.minecraft does not match release descriptor.",
       );
 
       const stateFile = path.join(gameDir, ".lampas", "installation.json");
@@ -237,22 +311,35 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "neoforge", version: "20.4.0" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "neoforge", version: "20.4.0" },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -261,11 +348,13 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-        /unsupported loader type 'neoforge'. Only 'fabric' is supported/
+        /release descriptor.loader.type must be 'fabric'/,
       );
 
       const stateFile = path.join(gameDir, ".lampas", "installation.json");
@@ -281,22 +370,35 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             minecraft: "26.2",
             loader: { type: "fabric" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             minecraft: "26.2",
             loader: { type: "fabric" },
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -305,11 +407,13 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-        /missing or empty loader 'version'/
+        /release descriptor.loader.version must be a non-empty string/,
       );
 
       const stateFile = path.join(gameDir, ".lampas", "installation.json");
@@ -325,20 +429,34 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({ channel: "stable", version: "2.0.0" });
+          return Response.json({
+            channel: "stable",
+            version: "2.0.0",
+            release: "/api/v1/releases/2.0.0",
+          });
         }
         if (url.pathname === "/api/v1/releases/2.0.0") {
           return Response.json({
+            schemaVersion: 1,
             pack: "Lampas 2",
             version: "2.0.0",
             loader: { type: "fabric", version: "0.19.3" },
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
           });
         }
         if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
           return Response.json({
+            schemaVersion: 2,
             pack: "Lampas 2",
             version: "2.0.0",
+            target: "client",
             loader: { type: "fabric", version: "0.19.3" },
+            minecraft: "26.2",
+            protocol: 3,
             files: [],
             mods: [],
           });
@@ -347,11 +465,13 @@ describe("LauncherSync contract & runtime cross-validation (PLAN.md Part C & L)"
       },
     });
 
-    ConfigManager.set({ portalUrl: `http://127.0.0.1:${server.port}` });
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
 
     try {
       await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
-        /missing or empty 'minecraft' version/
+        /release descriptor.minecraft must be a non-empty string/,
       );
 
       const stateFile = path.join(gameDir, ".lampas", "installation.json");
