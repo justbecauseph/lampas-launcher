@@ -1,7 +1,10 @@
 import { expect, mock, test } from "bun:test";
 import * as os from "node:os";
 
-mock.module("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
+mock.module("electron", () => ({
+  app: { getPath: () => os.tmpdir() },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
+}));
 const { portalFetch } = await import("../src/portal-policy");
 
 test("authenticated Portal bodies reject streamed overflow even without Content-Length", async () => {

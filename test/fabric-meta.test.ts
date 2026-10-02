@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 mock.module("electron", () => ({
   app: { getPath: () => os.tmpdir(), getVersion: () => "1.4.0" },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
 }));
 const {
   FabricMetaResolver,

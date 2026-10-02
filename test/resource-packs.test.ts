@@ -10,6 +10,7 @@ mock.module("electron", () => ({
     getName: () => "Lampas Launcher",
     getVersion: () => "1.4.0",
   },
+  shell: { openPath: async () => "", openExternal: async () => undefined },
 }));
 
 const {
