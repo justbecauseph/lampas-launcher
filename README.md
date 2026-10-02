@@ -134,6 +134,14 @@ bun run package:linux  # Linux AppImage & tar.gz
 bun run package:all    # Multi-platform distribution build
 ```
 
+### GitHub Actions Builds and Windows Signing
+
+Windows packages built by GitHub Actions are unsigned when signing certificate credentials are not configured. If credentials are configured, the build can still sign the packages. Windows may show a publisher warning for unsigned downloads.
+
+Running the release workflow manually on a branch builds and uploads artifacts for that workflow run without publishing a GitHub Release. Pushing a version tag builds and publishes a release after validation. Signature verification should be restored when signing certificate custody is ready.
+
+GitHub artifact attestations are generated for public repositories. This private repository does not generate an attestation on GitHub Free; an eligible Enterprise Cloud repository can enable it with the `ENABLE_ARTIFACT_ATTESTATIONS` repository variable set to `true`. Releases still include a CycloneDX SBOM with the dependency inventory and a `SHA256SUMS` file with artifact hashes. The hashes do not verify publisher identity.
+
 ---
 
 ## 🏗️ Architecture & Operational Invariants

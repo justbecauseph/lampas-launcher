@@ -46,6 +46,11 @@ jobs:
         run: bun run ${{ matrix.script }}
       - name: Verify packaged fuses
         run: node scripts/verify-fuses.cjs
+      - name: Configure Linux sandbox helpers
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox release/linux-unpacked/chrome-sandbox
       - name: Windows packaged smoke
         if: runner.os == 'Windows'
         run: bun test/smoke/electron-smoke.ts --strict
@@ -60,22 +65,7 @@ jobs:
       - name: Linux packaged module workflow and repair restart
         if: runner.os == 'Linux'
         run: xvfb-run -a node node_modules/electron/cli.js test/smoke/packaged-workflow.cjs --asar=release/linux-unpacked/resources/app.asar --user-data-dir="$RUNNER_TEMP/lampas-packaged-workflow-ci" --password-store=basic
-      # - name: Require valid Windows signatures for publication
-      #   if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
-      #   shell: pwsh
-      #   env:
-      #     APPROVED_SIGNING_THUMBPRINT: ${{ vars.APPROVED_SIGNING_THUMBPRINT }}
-      #   run: |
-      #     if (-not $env:APPROVED_SIGNING_THUMBPRINT) { throw 'Publication blocked: approved signing certificate identity is not configured' }
-      #     $artifacts = Get-ChildItem -LiteralPath release -Filter '*.exe'
-      #     if ($artifacts.Count -eq 0) { throw 'No Windows artifacts found' }
-      #     foreach ($artifact in $artifacts) {
-      #       $signature = Get-AuthenticodeSignature -LiteralPath $artifact.FullName
-      #       if ($signature.Status -ne 'Valid') {
-      #         throw "Publication blocked: $($artifact.Name) lacks a valid approved signature. Configure approved signing custody before release."
-      #       }
-      #       if ($signature.SignerCertificate.Thumbprint -ne $env:APPROVED_SIGNING_THUMBPRINT) { throw 'Publication blocked: unexpected signing certificate identity' }
-      #     }
+      # Windows signing is optional; restore signature verification when certificate custody is ready.
       - name: Upload verified build artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -87,9 +77,10 @@ jobs:
             release/*.cdx.json
             release/SHA256SUMS-*.txt
           if-no-files-found: error
+          retention-days: 7
 
   release:
-    name: Attest and publish verified artifacts
+    name: Verify and publish release artifacts
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
@@ -107,6 +98,7 @@ jobs:
         working-directory: release-artifacts
         run: sha256sum --check SHA256SUMS-*.txt
       - name: Attest build provenance
+        if: github.event.repository.private == false || vars.ENABLE_ARTIFACT_ATTESTATIONS == 'true'
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
           subject-path: |
@@ -115,6 +107,9 @@ jobs:
             release-artifacts/*.tar.gz
             release-artifacts/*.cdx.json
             release-artifacts/SHA256SUMS-*.txt
+      - name: Report unavailable GitHub artifact attestation
+        if: github.event.repository.private == true && vars.ENABLE_ARTIFACT_ATTESTATIONS != 'true'
+        run: echo "No GitHub artifact attestation is generated for this private repository. The release includes the commit and dependency inventory in its SBOM and artifact hashes in SHA256SUMS."
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

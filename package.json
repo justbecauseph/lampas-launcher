@@ -1,6 +1,6 @@
 {
   "name": "lampas-launcher",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Deterministic, Standalone Modpack Launcher for Lampas SMP",
   "private": true,
   "main": "dist/main.js",
@@ -56,6 +56,7 @@
     "appId": "town.lampas.launcher",
     "productName": "Lampas Launcher",
     "publish": null,
+    "forceCodeSigning": false,
     "beforePack": "scripts/pack-security.cjs",
     "electronFuses": {
       "runAsNode": false,

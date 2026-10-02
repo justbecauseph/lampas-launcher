@@ -1150,46 +1150,145 @@ describe("Phase 6 Regression Gate — Log Minimization & Redaction (SEC-09, SEC-
   });
 });
 
-// describe("Phase 7 Regression Gate — Release Pipeline, Artifact Signing & CI Controls (SEC-12)", () => {
-//   test("[Phase 7 Gate] Release publication requires validated builds, signatures, checksums and provenance", async () => {
-//     const { parse } = await import("yaml");
-//     const workflow = parse(
-//       fs.readFileSync(
-//         path.resolve(__dirname, "../.github/workflows/release-pack.yml"),
-//         "utf8",
-//       ),
-//     );
-//     expect(workflow.permissions).toEqual({ contents: "read" });
-//     expect(workflow.jobs.release.needs).toBe("build");
-//     const steps = workflow.jobs.build.steps;
-//     expect(
-//       steps.find((step: any) => step.uses?.startsWith("actions/checkout@"))
-//         .with,
-//     ).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
-//     expect(steps.some((step: any) => step.run === "bun test")).toBe(true);
-//     expect(
-//       steps.some(
-//         (step: any) =>
-//           step.run?.includes("Get-AuthenticodeSignature") &&
-//           step.run.includes("throw"),
-//       ),
-//     ).toBe(true);
-//     const release = workflow.jobs.release.steps;
-//     expect(
-//       release.findIndex((step: any) => step.run?.includes("sha256sum --check")),
-//     ).toBeLessThan(
-//       release.findIndex((step: any) =>
-//         step.uses?.startsWith("softprops/action-gh-release@"),
-//       ),
-//     );
-//     expect(
-//       release.some((step: any) =>
-//         step.uses?.startsWith("actions/attest-build-provenance@"),
-//       ),
-//     ).toBe(true);
-//     for (const job of Object.values(workflow.jobs) as any[])
-//       for (const step of job.steps) {
-//         if (step.uses) expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
-//       }
-//   });
-// });
+describe("Phase 7 Regression Gate — Release Pipeline & CI Controls (SEC-12)", () => {
+  async function readReleaseContracts() {
+    const { parse } = await import("yaml");
+    const workflow = parse(
+      fs.readFileSync(
+        path.resolve(__dirname, "../.github/workflows/release-pack.yml"),
+        "utf8",
+      ),
+    );
+    const packageConfig = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8"),
+    );
+    return { workflow, packageConfig };
+  }
+
+  test("[Phase 7 Gate] Windows signing is optional while icon resources remain configured", async () => {
+    const { workflow, packageConfig } = await readReleaseContracts();
+    expect(packageConfig.build.forceCodeSigning).toBe(false);
+    expect(packageConfig.build.win.icon).toBe("assets/lampas.png");
+    expect(packageConfig.build.win.target).toEqual(["nsis", "portable"]);
+    expect(packageConfig.build.win.signAndEditExecutable).not.toBe(false);
+
+    const buildSteps = workflow.jobs.build.steps;
+    expect(
+      buildSteps.some((step: any) =>
+        step.run?.includes("Get-AuthenticodeSignature"),
+      ),
+    ).toBe(false);
+    expect(
+      buildSteps.some((step: any) =>
+        JSON.stringify(step.env ?? {}).includes("APPROVED_SIGNING_THUMBPRINT"),
+      ),
+    ).toBe(false);
+  });
+
+  test("[Phase 7 Gate] Exact-commit builds retain validation and protected publication controls", async () => {
+    const { workflow } = await readReleaseContracts();
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.on.workflow_dispatch).toBeDefined();
+
+    const buildSteps = workflow.jobs.build.steps;
+    const checkout = buildSteps.find((step: any) =>
+      step.uses?.startsWith("actions/checkout@"),
+    );
+    expect(checkout.with).toEqual({
+      ref: "${{ github.sha }}",
+      "persist-credentials": false,
+    });
+    for (const command of [
+      "bun run typecheck",
+      "bun run build",
+      "bun test",
+      "bun audit",
+    ]) {
+      expect(buildSteps.some((step: any) => step.run === command)).toBe(true);
+    }
+
+    const artifactGenerationIndex = buildSteps.findIndex(
+      (step: any) => step.run === "bun run security:artifacts",
+    );
+    const uploadIndex = buildSteps.findIndex((step: any) =>
+      step.uses?.startsWith("actions/upload-artifact@"),
+    );
+    const upload = buildSteps[uploadIndex];
+    expect(artifactGenerationIndex).toBeGreaterThanOrEqual(0);
+    expect(artifactGenerationIndex).toBeLessThan(uploadIndex);
+    expect(upload.with["if-no-files-found"]).toBe("error");
+    expect(upload.with["retention-days"]).toBe(7);
+    expect(upload.with.path).toContain("release/*.cdx.json");
+    expect(upload.with.path).toContain("release/SHA256SUMS-*.txt");
+
+    const releaseJob = workflow.jobs.release;
+    expect(releaseJob.needs).toBe("build");
+    expect(releaseJob.if).toContain("startsWith(github.ref, 'refs/tags/')");
+    expect(releaseJob.permissions).toEqual({
+      contents: "write",
+      "id-token": "write",
+      attestations: "write",
+    });
+
+    const releaseSteps = releaseJob.steps;
+    const checksumIndex = releaseSteps.findIndex((step: any) =>
+      step.run?.includes("sha256sum --check"),
+    );
+    const provenanceIndex = releaseSteps.findIndex((step: any) =>
+      step.uses?.startsWith("actions/attest-build-provenance@"),
+    );
+    const provenanceStep = releaseSteps[provenanceIndex];
+    expect(provenanceStep.if).toBe(
+      "github.event.repository.private == false || vars.ENABLE_ARTIFACT_ATTESTATIONS == 'true'",
+    );
+    const skippedProvenanceIndex = releaseSteps.findIndex(
+      (step: any) =>
+        step.if ===
+          "github.event.repository.private == true && vars.ENABLE_ARTIFACT_ATTESTATIONS != 'true'" &&
+        step.run?.includes("No GitHub artifact attestation is generated") &&
+        step.run?.includes("SBOM") &&
+        step.run?.includes("SHA256SUMS"),
+    );
+    const publishIndex = releaseSteps.findIndex((step: any) =>
+      step.uses?.startsWith("softprops/action-gh-release@"),
+    );
+    expect(checksumIndex).toBeGreaterThanOrEqual(0);
+    expect(provenanceIndex).toBeGreaterThan(checksumIndex);
+    expect(skippedProvenanceIndex).toBeGreaterThan(checksumIndex);
+    expect(publishIndex).toBeGreaterThan(
+      Math.max(provenanceIndex, skippedProvenanceIndex),
+    );
+
+    for (const job of Object.values(workflow.jobs) as any[])
+      for (const step of job.steps) {
+        if (step.uses) expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
+      }
+  });
+
+  test("[Phase 7 Gate] Linux sandbox helpers run before packaged Electron smoke", async () => {
+    const { workflow } = await readReleaseContracts();
+    const buildSteps = workflow.jobs.build.steps;
+    const sandboxIndex = buildSteps.findIndex(
+      (step: any) =>
+        step.if === "runner.os == 'Linux'" &&
+        step.run?.includes("sudo chown root:root") &&
+        step.run?.includes("sudo chmod 4755") &&
+        step.run?.includes("node_modules/electron/dist/chrome-sandbox") &&
+        step.run?.includes("release/linux-unpacked/chrome-sandbox"),
+    );
+    expect(sandboxIndex).toBeGreaterThanOrEqual(0);
+
+    const linuxElectronSmokeIndices = buildSteps.flatMap(
+      (step: any, index: number) =>
+        step.if === "runner.os == 'Linux'" &&
+        (step.run?.includes("electron-smoke.ts") ||
+          step.run?.includes("packaged-workflow.cjs"))
+          ? [index]
+          : [],
+    );
+    expect(linuxElectronSmokeIndices).toHaveLength(2);
+    for (const smokeIndex of linuxElectronSmokeIndices) {
+      expect(smokeIndex).toBeGreaterThan(sandboxIndex);
+    }
+  });
+});
