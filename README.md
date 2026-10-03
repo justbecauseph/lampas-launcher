@@ -95,11 +95,13 @@ If you want to build or tinker with the launcher code locally:
   - **Windows (x64):** Windows 10, Windows 11 (NSIS installer & portable `.exe`).
   - **Linux (x64):** Modern glibc distributions (AppImage & `.tar.gz`).
 - **Tooling Requirements:**
-  - **Bun:** `v1.4.2` (pinned in CI) / `1.0+`
-  - **Node.js:** `v20+` (Node 24 LTS recommended)
+  - **Bun:** `v1.4.2` (pinned in CI)
+  - **Node.js:** `>=22.12.0` (Node 24 LTS recommended)
   - **Electron:** `44.0.0`
   - **Vite:** `^6.2.0` (renderer bundler)
   - **TypeScript:** `^5.8.2`
+
+A Bun override scopes electron-builder's `app-builder-lib` to `@electron/get` `5.1.0`, removing the vulnerable `got`/`cacheable-request`/`http-cache-semantics` chain. Direct networking with default checksums is the intended configuration; custom Got proxy, TLS, or `downloadOptions` settings are unverified. Validate fresh packages for every release platform; CI packaging steps stop after 20 minutes.
 
 ### Developer Commands
 

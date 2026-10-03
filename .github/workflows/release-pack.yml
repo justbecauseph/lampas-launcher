@@ -43,6 +43,7 @@ jobs:
       - name: Audit dependencies
         run: bun audit
       - name: Package without publishing
+        timeout-minutes: 20
         run: bun run ${{ matrix.script }}
       - name: Verify packaged fuses
         run: node scripts/verify-fuses.cjs

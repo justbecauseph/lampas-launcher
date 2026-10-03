@@ -1,6 +1,6 @@
 {
   "name": "lampas-launcher",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Deterministic, Standalone Modpack Launcher for Lampas SMP",
   "private": true,
   "main": "dist/main.js",
@@ -48,6 +48,11 @@
     "prettier": "3.9.8",
     "typescript": "^5.8.2",
     "vite": "^6.2.0"
+  },
+  "overrides": {
+    "app-builder-lib": {
+      "@electron/get": "5.1.0"
+    }
   },
   "trustedDependencies": [
     "electron"
