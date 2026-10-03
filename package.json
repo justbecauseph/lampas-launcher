@@ -1,6 +1,6 @@
 {
   "name": "lampas-launcher",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Deterministic, Standalone Modpack Launcher for Lampas SMP",
   "private": true,
   "main": "dist/main.js",

@@ -55,8 +55,9 @@ const PUBLIC_METADATA_HOSTS = new Set([
 ]);
 
 const ARTIFACT_HOSTS = new Set([
-  // Portal's documented public blob redirect target.
+  // Portal's verified public blob redirect targets.
   "storage.railway.app",
+  "t3.storageapi.dev",
   "cdn.modrinth.com",
   "api.modrinth.com",
   "edge.forgecdn.net",

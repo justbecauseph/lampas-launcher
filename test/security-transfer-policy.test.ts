@@ -114,60 +114,81 @@ describe("Phase 5 transport and transfer limits", () => {
     expect(requestCount).toBe(1);
   });
 
-  test("Portal blob redirects to Railway storage without forwarding credentials", async () => {
+  test("Portal blob redirects to verified Railway storage origins without forwarding credentials", async () => {
     const payload = Buffer.from("verified-railway-artifact");
     const digest = crypto.createHash("sha256").update(payload).digest("hex");
-    const requests: Array<{
-      url: string;
-      authorization?: string;
-      cookie?: string;
-    }> = [];
-    globalThis.fetch = (async (input, init) => {
-      const url = String(input);
-      const headers = new Headers(init?.headers);
-      requests.push({
-        url,
-        authorization: headers.get("authorization") || undefined,
-        cookie: headers.get("cookie") || undefined,
-      });
-      if (url.startsWith("https://dev.lampas.town/")) {
-        return new Response(null, {
-          status: 302,
-          headers: {
-            Location:
-              "https://storage.railway.app/blobs/" +
-              digest +
-              "?X-Amz-Signature=test",
-          },
+    for (const host of ["storage.railway.app", "t3.storageapi.dev"]) {
+      const requests: Array<{
+        url: string;
+        authorization?: string;
+        cookie?: string;
+      }> = [];
+      globalThis.fetch = (async (input, init) => {
+        const url = String(input);
+        const headers = new Headers(init?.headers);
+        requests.push({
+          url,
+          authorization: headers.get("authorization") || undefined,
+          cookie: headers.get("cookie") || undefined,
         });
-      }
-      return new Response(payload, {
-        status: 200,
-        headers: { "Content-Length": String(payload.length) },
-      });
+        if (url.startsWith("https://dev.lampas.town/")) {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location:
+                `https://${host}/blobs/` + digest + "?X-Amz-Signature=test",
+            },
+          });
+        }
+        return new Response(payload, {
+          status: 200,
+          headers: { "Content-Length": String(payload.length) },
+        });
+      }) as typeof fetch;
+
+      const destination = path.join(root(), `${host}.jar`);
+      await downloadVerified(
+        "https://dev.lampas.town/api/v1/blobs/" + digest,
+        destination,
+        {
+          expectedHash: digest,
+          expectedSize: payload.length,
+          headers: {
+            Authorization: "Bearer must-not-leave",
+            Cookie: "session=must-not-leave",
+          },
+          attempts: 1,
+        },
+      );
+
+      expect(requests).toHaveLength(2);
+      expect(requests[0].authorization).toBeUndefined();
+      expect(requests[0].cookie).toBeUndefined();
+      expect(requests[1].url).toStartWith(`https://${host}/`);
+      expect(requests[1].authorization).toBeUndefined();
+      expect(requests[1].cookie).toBeUndefined();
+      expect(fs.readFileSync(destination)).toEqual(payload);
+    }
+  });
+
+  test("storageapi sibling, subdomain, lookalike, and HTTP hosts are rejected before fetch", async () => {
+    let requestCount = 0;
+    globalThis.fetch = (async () => {
+      requestCount++;
+      return new Response("unexpected");
     }) as typeof fetch;
 
-    const destination = path.join(root(), "artifact.jar");
-    await downloadVerified(
-      "https://dev.lampas.town/api/v1/blobs/" + digest,
-      destination,
-      {
-        expectedHash: digest,
-        expectedSize: payload.length,
-        headers: {
-          Authorization: "Bearer must-not-leave",
-          Cookie: "session=must-not-leave",
-        },
-        attempts: 1,
-      },
-    );
-
-    expect(requests).toHaveLength(2);
-    expect(requests[0].authorization).toBeUndefined();
-    expect(requests[0].cookie).toBeUndefined();
-    expect(requests[1].authorization).toBeUndefined();
-    expect(requests[1].cookie).toBeUndefined();
-    expect(fs.readFileSync(destination)).toEqual(payload);
+    for (const url of [
+      "https://t4.storageapi.dev/artifact",
+      "https://nested.t3.storageapi.dev/artifact",
+      "https://t3.storageapi.dev.attacker.invalid/artifact",
+      "http://t3.storageapi.dev/artifact",
+    ]) {
+      await expect(
+        fetchWithRedirectPolicy(url, {}, { kind: "artifact" }),
+      ).rejects.toBeInstanceOf(TransportPolicyError);
+    }
+    expect(requestCount).toBe(0);
   });
 
   test("remote HTTP and private destinations are rejected before fetch", async () => {
