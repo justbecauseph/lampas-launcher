@@ -97,7 +97,7 @@ If you want to build or tinker with the launcher code locally:
 - **Tooling Requirements:**
   - **Bun:** `v1.4.2` (pinned in CI)
   - **Node.js:** `>=22.12.0` (Node 24 LTS recommended)
-  - **Electron:** `44.0.0`
+  - **Electron:** `44.7.0`
   - **Vite:** `^6.2.0` (renderer bundler)
   - **TypeScript:** `^5.8.2`
 

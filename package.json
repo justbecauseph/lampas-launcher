@@ -40,8 +40,8 @@
   "devDependencies": {
     "@types/bun": "^1.4.2",
     "@types/node": "^24.9.0",
-    "concurrently": "^9.1.2",
-    "electron": "44.0.0",
+    "concurrently": "^9.2.5",
+    "electron": "44.7.0",
     "electron-builder": "^26.15.3",
     "husky": "^9.1.7",
     "lint-staged": "^17.5.1",

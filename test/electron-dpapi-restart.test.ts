@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hardening (SEC-03, SEC-08)", () => {
+describe("Phase 3 Native Evidence — Electron 44.7.0 Windows DPAPI Restart Hardening (SEC-03, SEC-08)", () => {
   const isWindows = process.platform === "win32";
   const electronBin = isWindows
     ? path.resolve(__dirname, "../node_modules/electron/dist/electron.exe")
@@ -157,7 +157,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
   }
 
   test.skipIf(!isWindows)(
-    "Native evidence: Real Electron 44.0.0 exercises built launcher store and session modules across distinct process lifecycles via Windows DPAPI",
+    "Native evidence: Real Electron 44.7.0 exercises built launcher store and session modules across distinct process lifecycles via Windows DPAPI",
     async () => {
       if (!fs.existsSync(electronBin)) {
         throw new Error(`Electron binary not found at ${electronBin}`);
@@ -191,7 +191,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
       const testMcUuid = "44444444-4444-4444-4444-444444444444";
 
       try {
-        // Step 1: Process 1 — Launch real Electron 44.0.0 and exercise built CredentialStore and SessionManager to persist credentials
+        // Step 1: Process 1 — Launch real Electron 44.7.0 and exercise built CredentialStore and SessionManager to persist credentials
         const proc1Script = path.join(testDir, "proc1_save.js");
         fs.writeFileSync(
           proc1Script,
@@ -200,7 +200,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
           const path = require("path");
           const fs = require("fs");
 
-          if (process.versions.electron !== "44.0.0") {
+          if (process.versions.electron !== "44.7.0") {
             console.error("ELECTRON_VERSION_MISMATCH:" + process.versions.electron);
             process.exit(10);
           }
@@ -271,7 +271,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         if (p1.code !== 0)
           console.error("P1 FAILED:", p1.code, p1.stdout, p1.stderr);
         expect(p1.code).toBe(0);
-        expect(p1.stdout).toContain("ELECTRON_VERSION:44.0.0");
+        expect(p1.stdout).toContain("ELECTRON_VERSION:44.7.0");
         expect(p1.stdout).toContain("SAVE_SUCCESS");
         expect(fs.existsSync(credFile)).toBe(true);
 
@@ -286,7 +286,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         verifyAclSecurity(userDataDir);
         verifyAclSecurity(credFile);
 
-        // Step 2: Process 2 — Launch completely SEPARATE real Electron 44.0.0 process to decrypt credentials via built modules
+        // Step 2: Process 2 — Launch completely SEPARATE real Electron 44.7.0 process to decrypt credentials via built modules
         const proc2Script = path.join(testDir, "proc2_restore.js");
         const outputFile = path.join(testDir, "decrypted.json");
         fs.writeFileSync(
@@ -296,7 +296,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
           const path = require("path");
           const fs = require("fs");
 
-          if (process.versions.electron !== "44.0.0") {
+          if (process.versions.electron !== "44.7.0") {
             console.error("ELECTRON_VERSION_MISMATCH:" + process.versions.electron);
             process.exit(10);
           }
@@ -346,7 +346,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         if (p2.code !== 0)
           console.error("P2 FAILED:", p2.code, p2.stdout, p2.stderr);
         expect(p2.code).toBe(0);
-        expect(p2.stdout).toContain("ELECTRON_VERSION:44.0.0");
+        expect(p2.stdout).toContain("ELECTRON_VERSION:44.7.0");
         expect(p2.stdout).toContain("DECRYPT_SUCCESS");
         expect(fs.existsSync(outputFile)).toBe(true);
 
@@ -367,7 +367,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         expect(restoredData.storageStatus.sessionPersisted).toBe(true);
         expect(restoredData.storageStatus.sessionOnly).toBe(false);
 
-        // Step 3: Process 3 — Launch separate Electron 44.0.0 process to verify clean credential clearing
+        // Step 3: Process 3 — Launch separate Electron 44.7.0 process to verify clean credential clearing
         const proc3Script = path.join(testDir, "proc3_clear.js");
         fs.writeFileSync(
           proc3Script,
@@ -376,7 +376,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
           const path = require("path");
           const fs = require("fs");
 
-          if (process.versions.electron !== "44.0.0") {
+          if (process.versions.electron !== "44.7.0") {
             console.error("ELECTRON_VERSION_MISMATCH:" + process.versions.electron);
             process.exit(10);
           }
@@ -421,7 +421,7 @@ describe("Phase 3 Native Evidence — Electron 44.0.0 Windows DPAPI Restart Hard
         if (p3.code !== 0)
           console.error("P3 FAILED:", p3.code, p3.stdout, p3.stderr);
         expect(p3.code).toBe(0);
-        expect(p3.stdout).toContain("ELECTRON_VERSION:44.0.0");
+        expect(p3.stdout).toContain("ELECTRON_VERSION:44.7.0");
         expect(p3.stdout).toContain("CLEAR_SUCCESS");
         expect(fs.existsSync(credFile)).toBe(false);
       } finally {
