@@ -171,6 +171,31 @@ describe("Phase 5 transport and transfer limits", () => {
     }
   });
 
+  test("piston-meta.mojang.com is approved for verified artifact downloads", async () => {
+    const payload = Buffer.from(JSON.stringify({ objects: {} }));
+    const digest = crypto.createHash("sha1").update(payload).digest("hex");
+    globalThis.fetch = (async () => {
+      return new Response(payload, {
+        status: 200,
+        headers: { "Content-Length": String(payload.length) },
+      });
+    }) as typeof fetch;
+
+    const destination = path.join(root(), "32.json");
+    await downloadVerified(
+      "https://piston-meta.mojang.com/v1/packages/test/32.json",
+      destination,
+      {
+        expectedHash: digest,
+        expectedSize: payload.length,
+        algorithm: "sha1",
+        attempts: 1,
+      },
+    );
+
+    expect(fs.readFileSync(destination)).toEqual(payload);
+  });
+
   test("storageapi sibling, subdomain, lookalike, and HTTP hosts are rejected before fetch", async () => {
     let requestCount = 0;
     globalThis.fetch = (async () => {

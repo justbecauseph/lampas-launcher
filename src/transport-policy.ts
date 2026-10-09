@@ -63,6 +63,7 @@ const ARTIFACT_HOSTS = new Set([
   "edge.forgecdn.net",
   "mediafilez.forgecdn.net",
   "libraries.minecraft.net",
+  "piston-meta.mojang.com",
   "piston-data.mojang.com",
   "resources.download.minecraft.net",
   "maven.fabricmc.net",
