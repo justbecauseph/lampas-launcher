@@ -118,7 +118,11 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
     );
     const proc = Bun.spawn([process.execPath, "run", boundaryScript], {
       cwd: path.resolve(__dirname, ".."),
-      env: { ...process.env, NODE_ENV: "test" },
+      env: {
+        ...process.env,
+        NODE_ENV: "test",
+        LAMPAS_TRANSFER_RETRY_BASE_MS: "1",
+      },
       stdout: "pipe",
       stderr: "pipe",
     });

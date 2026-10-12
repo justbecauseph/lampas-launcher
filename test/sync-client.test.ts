@@ -31,7 +31,10 @@ const { LauncherLogger } = await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 
+const previousRetryBaseMs = process.env.LAMPAS_TRANSFER_RETRY_BASE_MS;
+
 beforeAll(() => {
+  process.env.LAMPAS_TRANSFER_RETRY_BASE_MS = "1";
   fs.mkdirSync(userDataDir, { recursive: true });
   fs.mkdirSync(gameDir, { recursive: true });
 });
@@ -52,6 +55,9 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  if (previousRetryBaseMs === undefined)
+    delete process.env.LAMPAS_TRANSFER_RETRY_BASE_MS;
+  else process.env.LAMPAS_TRANSFER_RETRY_BASE_MS = previousRetryBaseMs;
   PortalPolicy.resetForTesting();
   if (path.resolve(testRoot).startsWith(path.resolve(os.tmpdir()))) {
     fs.rmSync(testRoot, { recursive: true, force: true });

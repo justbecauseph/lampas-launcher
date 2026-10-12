@@ -2597,9 +2597,11 @@ try {
             `Expected saved installation version '2.0.0-offline', got: ${saved.version}`,
           );
         }
-        if (capturedRequestsA.length !== 3) {
+        if (
+          capturedRequestsA.length !== fileTransferMod.DEFAULT_TRANSFER_ATTEMPTS
+        ) {
           throw new Error(
-            `Expected 3 retry channel requests to origin A, got ${capturedRequestsA.length}`,
+            `Expected ${fileTransferMod.DEFAULT_TRANSFER_ATTEMPTS} retry channel requests to origin A, got ${capturedRequestsA.length}`,
           );
         }
         if (capturedRequests.length !== 0) {

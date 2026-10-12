@@ -43,6 +43,39 @@ export class HttpResponseError extends Error {
   }
 }
 
+export const DEFAULT_TRANSFER_ATTEMPTS = 5;
+const RETRY_BASE_DELAY_MS = 1_000;
+const RETRY_MAX_DELAY_MS = 10_000;
+
+// Tests shorten the backoff so exhausted-retry paths stay fast. The override
+// can only lower the delay, never lengthen it.
+function retryBaseDelayMs(): number {
+  const override = Number(process.env.LAMPAS_TRANSFER_RETRY_BASE_MS);
+  return Number.isFinite(override) && override >= 0
+    ? Math.min(override, RETRY_BASE_DELAY_MS)
+    : RETRY_BASE_DELAY_MS;
+}
+
+/**
+ * Exponential backoff with equal jitter: 1s, 2s, 4s, 8s (capped at 10s), each
+ * randomized into [delay/2, delay] so parallel asset downloads that fail
+ * together do not retry against the CDN in lockstep.
+ */
+export function retryDelayMs(attempt: number): number {
+  const delay = Math.min(
+    retryBaseDelayMs() * 2 ** (attempt - 1),
+    RETRY_MAX_DELAY_MS,
+  );
+  return Math.round(delay / 2 + Math.random() * (delay / 2));
+}
+
+function describeLastError(error: unknown): string {
+  const message = (error as any)?.message;
+  return typeof message === "string" && message
+    ? ` (last error: ${message})`
+    : "";
+}
+
 function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) {
     return Promise.reject(signal.reason || new Error("Operation aborted"));
@@ -98,7 +131,7 @@ function safeTransferLogUrl(rawUrl: string): string {
 export async function fetchJsonWithRetry<T>(
   url: string,
   headers?: Record<string, string>,
-  attempts = 3,
+  attempts = DEFAULT_TRANSFER_ATTEMPTS,
   timeoutMs = 60_000,
   signal?: AbortSignal,
   redirect: RequestRedirect = "follow",
@@ -192,21 +225,24 @@ export async function fetchJsonWithRetry<T>(
       )
         throw error;
       if (attempt < attempts)
-        await sleepWithSignal(250 * 2 ** (attempt - 1), signal);
+        await sleepWithSignal(retryDelayMs(attempt), signal);
     } finally {
       clearTimeout(timer);
       if (signal) signal.removeEventListener("abort", onAbort);
     }
   }
-  throw new Error(`Failed to fetch ${url} after ${attempts} attempts`, {
-    cause: lastError,
-  });
+  throw new Error(
+    `Failed to fetch ${url} after ${attempts} attempts${describeLastError(lastError)}`,
+    {
+      cause: lastError,
+    },
+  );
 }
 
 export async function fetchPortalJsonWithRetry<T>(
   url: string,
   headers?: Record<string, string>,
-  attempts = 3,
+  attempts = DEFAULT_TRANSFER_ATTEMPTS,
   timeoutMs = 60_000,
   signal?: AbortSignal,
 ): Promise<T> {
@@ -487,7 +523,7 @@ export async function downloadVerified(
   destination: string,
   options: VerifiedTransferOptions = {},
 ): Promise<number> {
-  const attempts = options.attempts || 3;
+  const attempts = options.attempts || DEFAULT_TRANSFER_ATTEMPTS;
   let lastError: unknown;
   const signal = options.signal;
 
@@ -581,16 +617,19 @@ export async function downloadVerified(
         `[Download Retry] Failed ${destName} from ${safeUrl}: ${error?.message || error} (${durationMs}ms)`,
       );
       if (attempt < attempts)
-        await sleepWithSignal(250 * 2 ** (attempt - 1), signal);
+        await sleepWithSignal(retryDelayMs(attempt), signal);
     } finally {
       clearTimeout(timer);
       merged.dispose();
     }
   }
 
-  throw new Error(`Failed to download ${url} after ${attempts} attempts`, {
-    cause: lastError,
-  });
+  throw new Error(
+    `Failed to download ${url} after ${attempts} attempts${describeLastError(lastError)}`,
+    {
+      cause: lastError,
+    },
+  );
 }
 
 export async function copyAtomic(
