@@ -27,6 +27,7 @@ import {
 } from "./metadata-policy";
 import { checkPhysicalAncestrySync } from "./path-policy";
 import { TRANSFER_LIMITS } from "./transfer-limits";
+import { maximizeGameWindow, MAXIMIZE_EXIT } from "./window-maximizer";
 
 function readInstalledMetadata(gameDir: string, filePath: string): unknown {
   checkPhysicalAncestrySync(gameDir, filePath, {
@@ -432,9 +433,26 @@ export class GameRunner {
       stderrFramer.attach(proc.stderr);
 
       let exitReported = false;
+      const maximizer = maximizeGameWindow(proc.pid, (code) => {
+        if (exitReported) return;
+        if (code === MAXIMIZE_EXIT.maximized) {
+          log("INFO", "Maximized Minecraft window.");
+        } else if (
+          code !== MAXIMIZE_EXIT.processGone &&
+          code !== MAXIMIZE_EXIT.notMaximizable
+        ) {
+          log("WARN", `Could not maximize Minecraft window (code ${code}).`);
+        }
+      });
+
       const handleExit = (code: number | null) => {
         if (exitReported) return;
         exitReported = true;
+        if (maximizer && maximizer.exitCode === null) {
+          try {
+            maximizer.kill();
+          } catch {}
+        }
         stdoutFramer.flush();
         stderrFramer.flush();
         this.runningProcess = null;

@@ -4681,8 +4681,48 @@ try {
           );
         }
 
-        const launchCall =
-          interceptedProcesses[interceptedProcesses.length - 1];
+        // On Windows the window-maximizer helper spawns right after the game.
+        const isMaximizerHelper = (call: { command: string }) =>
+          /[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i.test(
+            call.command,
+          );
+        const helperCalls = interceptedProcesses.filter(isMaximizerHelper);
+        if (process.platform === "win32") {
+          if (helperCalls.length !== 1) {
+            throw new Error(
+              `Expected exactly one window-maximizer helper spawn, got ${helperCalls.length}`,
+            );
+          }
+          const helperArgs = helperCalls[0].args;
+          const encodedIdx = helperArgs.indexOf("-EncodedCommand");
+          if (
+            helperArgs.length !== encodedIdx + 2 ||
+            !helperArgs.includes("-NoProfile") ||
+            !helperArgs.includes("-NonInteractive")
+          ) {
+            throw new Error(
+              `Unexpected window-maximizer helper arguments: ${helperArgs.slice(0, encodedIdx + 1).join(" ")}`,
+            );
+          }
+          const helperScript = Buffer.from(
+            helperArgs[encodedIdx + 1],
+            "base64",
+          ).toString("utf16le");
+          if (!helperScript.includes("[LampasWindow]::Find(99999)")) {
+            throw new Error(
+              "Expected window-maximizer helper to target the launched game process",
+            );
+          }
+        } else if (helperCalls.length !== 0) {
+          throw new Error(
+            "Window-maximizer helper must not spawn outside Windows",
+          );
+        }
+
+        const launchCalls = interceptedProcesses.filter(
+          (call) => !isMaximizerHelper(call),
+        );
+        const launchCall = launchCalls[launchCalls.length - 1];
         const args = launchCall.args;
         const getFlagVal = (flag: string, argList: string[] = args) => {
           const idx = argList.indexOf(flag);
@@ -4737,11 +4777,13 @@ try {
             release: { version: "99.9.9", pack: "ForgedPack" },
           },
         );
-        if (interceptedProcesses.length === 0) {
+        const forgedLaunchCalls = interceptedProcesses.filter(
+          (call) => !isMaximizerHelper(call),
+        );
+        if (forgedLaunchCalls.length === 0) {
           throw new Error("Expected launch to execute process execution sink");
         }
-        const forgedCall =
-          interceptedProcesses[interceptedProcesses.length - 1];
+        const forgedCall = forgedLaunchCalls[forgedLaunchCalls.length - 1];
         if (
           forgedCall.args.includes("AttackerPlayer") ||
           forgedCall.args.includes("forged-uuid-999") ||
