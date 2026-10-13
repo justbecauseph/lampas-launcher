@@ -45,6 +45,8 @@ const UPLOAD_COPY: Record<
   },
 };
 
+const ICON_FETCH_CONCURRENCY = 4;
+
 function formatBytes(bytes?: number): string {
   if (!bytes || isNaN(bytes)) return "N/A";
   if (bytes < 1024) return `${bytes} B`;
@@ -115,6 +117,8 @@ export function initModsView(options: ModsViewOptions): () => void {
   let isComposing = false;
   let isMutating = false;
   let iconRenderGeneration = 0;
+  /** mod id → icon data URL, or null when the mod has no usable icon. */
+  const iconCache = new Map<string, string | null>();
 
   function uploadMode(): UploadMode {
     return activeModFilter === "shader" ? "shader" : "mod";
@@ -163,26 +167,54 @@ export function initModsView(options: ModsViewOptions): () => void {
       !modsGrid
     )
       return;
-    await Promise.all(
-      mods.map(async (mod) => {
-        if (!mod.iconUrl) return;
+    const grid = modsGrid;
+    const showIcon = (mod: NormalizedMod, dataUrl: string) => {
+      const holder = grid.querySelector<HTMLElement>(
+        `[data-mod-icon-id="${CSS.escape(mod.id)}"]`,
+      );
+      if (!holder || holder.querySelector(".mod-icon-img")) return;
+      const img = document.createElement("img");
+      img.src = dataUrl;
+      img.alt = mod.name || mod.id;
+      img.className = "mod-icon-img";
+      const fallback = holder.querySelector<HTMLElement>(".mod-icon-fallback");
+      if (fallback) fallback.style.display = "none";
+      holder.prepend(img);
+    };
+
+    // Icons already fetched this session render immediately; the rest are
+    // fetched a few at a time so a full pack never floods the main process.
+    const pending: NormalizedMod[] = [];
+    for (const mod of mods) {
+      if (!mod.iconUrl) continue;
+      if (iconCache.has(mod.id)) {
+        const dataUrl = iconCache.get(mod.id);
+        if (dataUrl) showIcon(mod, dataUrl);
+      } else {
+        pending.push(mod);
+      }
+    }
+
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length && generation === iconRenderGeneration) {
+        const mod = pending[next++];
+        if (iconCache.has(mod.id)) continue;
+        let dataUrl: string | null = null;
         try {
-          const image = await window.lampas.cosmetics.getModIcon(mod.id);
-          if (!image || generation !== iconRenderGeneration) return;
-          const holder = modsGrid.querySelector<HTMLElement>(
-            `[data-mod-icon-id="${CSS.escape(mod.id)}"]`,
-          );
-          if (!holder) return;
-          const img = document.createElement("img");
-          img.src = image.dataUrl;
-          img.alt = mod.name || mod.id;
-          img.className = "mod-icon-img";
-          const fallback =
-            holder.querySelector<HTMLElement>(".mod-icon-fallback");
-          if (fallback) fallback.style.display = "none";
-          holder.prepend(img);
+          dataUrl =
+            (await window.lampas.cosmetics.getModIcon(mod.id))?.dataUrl ?? null;
         } catch {}
-      }),
+        iconCache.set(mod.id, dataUrl);
+        if (dataUrl && generation === iconRenderGeneration)
+          showIcon(mod, dataUrl);
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(ICON_FETCH_CONCURRENCY, pending.length) },
+        worker,
+      ),
     );
   }
 
@@ -308,6 +340,8 @@ export function initModsView(options: ModsViewOptions): () => void {
     void loadExternalIcons(filtered, generation);
   }
 
+  let catalogLoaded = false;
+
   async function loadCatalog(): Promise<void> {
     if (!window.lampas.sync?.getModCatalog) return;
     try {
@@ -316,11 +350,17 @@ export function initModsView(options: ModsViewOptions): () => void {
         ...mod,
         _searchKey: precomputeSearchKey(mod),
       }));
+      catalogLoaded = true;
       updateCounts();
       renderMods();
     } catch (err: any) {
       console.warn("Failed to load mod catalog:", err?.message || err);
     }
+  }
+
+  /** The catalog costs portal requests, so load it only once the tab is opened. */
+  function loadCatalogOnFirstView(): void {
+    if (!catalogLoaded) void loadCatalog();
   }
 
   // Delegated Event Listeners on modsGrid
@@ -636,9 +676,14 @@ export function initModsView(options: ModsViewOptions): () => void {
     });
   }
 
-  void loadCatalog();
+  const navMods = document.getElementById("nav-mods");
+  navMods?.addEventListener("click", loadCatalogOnFirstView);
+  const tabMods = document.getElementById("tab-mods");
+  if (tabMods && !tabMods.classList.contains("hidden"))
+    loadCatalogOnFirstView();
 
   return () => {
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    navMods?.removeEventListener("click", loadCatalogOnFirstView);
   };
 }

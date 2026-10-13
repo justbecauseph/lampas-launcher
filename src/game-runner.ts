@@ -555,10 +555,9 @@ export function buildLaunchArguments(options: {
   const jvmArgs = [
     `-Xmx${options.ramGb}G`,
     `-Xms${Math.min(2, options.ramGb)}G`,
+    // Generational ZGC (the only ZGC mode on Java 25). G1-only tuning such as
+    // MaxGCPauseMillis or ParallelRefProcEnabled has no effect here.
     "-XX:+UseZGC",
-    "-XX:+ParallelRefProcEnabled",
-    "-XX:MaxGCPauseMillis=200",
-    "-XX:+UnlockExperimentalVMOptions",
     "-XX:+DisableExplicitGC",
     "-XX:+AlwaysPreTouch",
     "-Dfabric.disableTelemetry=true",

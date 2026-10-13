@@ -28,6 +28,9 @@ import { validateRuntimeDefinition } from "./runtime-definition";
 import type { MinecraftRuntimeDefinition } from "./types";
 import versionMeta262 from "./version-meta-26.2.json";
 
+/** Parallel stat/hash workers when checking installed asset objects. */
+const ASSET_VERIFY_CONCURRENCY = 8;
+
 export { parseMavenCoordinate, mavenToPath, type ParsedMavenCoordinate };
 
 export interface MavenCoordinate {
@@ -1139,32 +1142,53 @@ export class MinecraftBootstrap {
       disallowSymlinks: true,
     });
 
-    const missing: Array<{ hash: string; size: number; destFile: string }> = [];
-    for (const item of uniqueEntries) {
+    // Ancestry is checked once per two-character prefix directory (at most
+    // 256) instead of once per object. Each object is then lstat'ed itself, so
+    // a symlinked object is still rejected exactly as the per-file check did,
+    // without ~5,000 synchronous ancestor walks blocking the main process.
+    const checkedPrefixDirs = new Set<string>();
+    const candidates = uniqueEntries.map((item) => {
       const prefix = item.hash.substring(0, 2);
       const destFile = resolveAndContainPath(
         assetObjectsDir,
         path.join(prefix, item.hash),
       );
-      checkPhysicalAncestrySync(assetsDir, destFile, {
-        disallowSymlinks: true,
-      });
-
-      if (fs.existsSync(destFile)) {
-        try {
-          const stat = await fs.promises.stat(destFile);
-          if (
-            (item.size === undefined || stat.size === item.size) &&
-            (verificationMode === "fast" ||
-              (await hashFile(destFile, "sha1")) === item.hash)
-          ) {
-            continue;
-          }
-        } catch {}
+      const prefixDir = path.dirname(destFile);
+      if (!checkedPrefixDirs.has(prefixDir)) {
+        checkPhysicalAncestrySync(assetsDir, prefixDir, {
+          disallowSymlinks: true,
+        });
+        checkedPrefixDirs.add(prefixDir);
       }
+      return { hash: item.hash, size: item.size, destFile };
+    });
 
-      missing.push({ hash: item.hash, size: item.size, destFile });
-    }
+    const verified = await runBoundedPool(
+      candidates,
+      async (item) => {
+        let stat: fs.Stats;
+        try {
+          stat = await fs.promises.lstat(item.destFile);
+        } catch {
+          return false;
+        }
+        if (stat.isSymbolicLink()) {
+          throw new PathContainmentError(
+            `Prohibited symbolic link along path: '${item.destFile}'`,
+          );
+        }
+        if (!stat.isFile()) return false;
+        if (item.size !== undefined && stat.size !== item.size) return false;
+        if (verificationMode === "fast") return true;
+        try {
+          return (await hashFile(item.destFile, "sha1")) === item.hash;
+        } catch {
+          return false;
+        }
+      },
+      { concurrency: ASSET_VERIFY_CONCURRENCY },
+    );
+    const missing = candidates.filter((_, index) => !verified[index]);
 
     if (missing.length > 0) {
       onLog(

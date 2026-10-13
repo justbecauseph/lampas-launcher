@@ -183,6 +183,146 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
     }
   });
 
+  function serveAssetIndex(objects: Record<string, Buffer>) {
+    const index: Record<string, { hash: string; size: number }> = {};
+    for (const [name, content] of Object.entries(objects)) {
+      const hash = crypto.createHash("sha1").update(content).digest("hex");
+      index[name] = { hash, size: content.length };
+    }
+    const indexBody = JSON.stringify({ objects: index });
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(indexBody);
+      },
+    });
+    const meta = {
+      id: "26.2",
+      sha1: crypto.createHash("sha1").update(indexBody).digest("hex"),
+      url: `http://127.0.0.1:${server.port}/index.json`,
+      size: Buffer.byteLength(indexBody),
+    };
+    return { server, meta, index };
+  }
+
+  test("ensureAssets rejects an asset prefix directory that links outside", async () => {
+    const assetsDir = path.join(gameDir, "assets-prefix-link");
+    const outside = fs.mkdtempSync(path.join(testRoot, "outside-"));
+    const content = Buffer.from("texture");
+    const hash = crypto.createHash("sha1").update(content).digest("hex");
+    fs.mkdirSync(path.join(assetsDir, "objects"), { recursive: true });
+    fs.writeFileSync(path.join(outside, hash), content);
+    fs.symlinkSync(
+      outside,
+      path.join(assetsDir, "objects", hash.substring(0, 2)),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const { server, meta } = serveAssetIndex({ "a.png": content });
+    try {
+      await expect(
+        (MinecraftBootstrap as any).ensureAssets(
+          assetsDir,
+          meta,
+          () => {},
+          "full",
+        ),
+      ).rejects.toThrow(/symbolic link/i);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("ensureAssets rejects a symlinked asset object", async () => {
+    const assetsDir = path.join(gameDir, "assets-object-link");
+    const content = Buffer.from("sound");
+    const hash = crypto.createHash("sha1").update(content).digest("hex");
+    const target = path.join(testRoot, `real-${hash}`);
+    fs.writeFileSync(target, content);
+    const objPath = path.join(assetsDir, "objects", hash.substring(0, 2), hash);
+    fs.mkdirSync(path.dirname(objPath), { recursive: true });
+    try {
+      fs.symlinkSync(target, objPath, "file");
+    } catch {
+      return; // File symlinks need Developer Mode or admin on Windows.
+    }
+
+    const { server, meta } = serveAssetIndex({ "b.ogg": content });
+    try {
+      await expect(
+        (MinecraftBootstrap as any).ensureAssets(
+          assetsDir,
+          meta,
+          () => {},
+          "fast",
+        ),
+      ).rejects.toThrow(/symbolic link/i);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("ensureAssets full mode re-downloads only corrupted objects", async () => {
+    const assetsDir = path.join(gameDir, "assets-parallel-verify");
+    const objects: Record<string, Buffer> = {};
+    for (let i = 0; i < 40; i++)
+      objects[`textures/${i}.png`] = Buffer.from(`asset-${i}`);
+
+    const { server, meta, index } = serveAssetIndex(objects);
+    const contentByHash = new Map<string, Buffer>();
+    for (const [name, { hash }] of Object.entries(index)) {
+      contentByHash.set(hash, objects[name]);
+      const objPath = path.join(
+        assetsDir,
+        "objects",
+        hash.substring(0, 2),
+        hash,
+      );
+      fs.mkdirSync(path.dirname(objPath), { recursive: true });
+      fs.writeFileSync(objPath, objects[name]);
+    }
+    // Same size, wrong bytes: only a full-mode hash check catches this.
+    const corrupted = index["textures/7.png"].hash;
+    fs.writeFileSync(
+      path.join(assetsDir, "objects", corrupted.substring(0, 2), corrupted),
+      "asset-X",
+    );
+
+    // Asset objects always come from Mojang's CDN; answer those locally.
+    const requested: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: any) => {
+      const url = new URL(
+        typeof input === "string" || input instanceof URL ? input : input.url,
+      );
+      if (url.hostname === "resources.download.minecraft.net") {
+        const hash = url.pathname.split("/").pop()!;
+        requested.push(hash);
+        return new Response(new Uint8Array(contentByHash.get(hash)!));
+      }
+      return originalFetch(input as any, init);
+    }) as typeof fetch;
+
+    try {
+      await (MinecraftBootstrap as any).ensureAssets(
+        assetsDir,
+        meta,
+        () => {},
+        "full",
+      );
+      expect(requested).toEqual([corrupted]);
+      expect(
+        fs.readFileSync(
+          path.join(assetsDir, "objects", corrupted.substring(0, 2), corrupted),
+          "utf-8",
+        ),
+      ).toBe("asset-7");
+    } finally {
+      globalThis.fetch = originalFetch;
+      server.stop(true);
+    }
+  });
+
   test("ensureAssets rejects inconsistent metadata for identical hash with differing sizes", async () => {
     const assetsDir = path.join(gameDir, "assets-inconsistent");
     const hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4";

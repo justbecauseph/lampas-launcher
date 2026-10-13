@@ -173,7 +173,28 @@ export {
   assertSubordinateRoot,
 };
 
+/** How long a fetched official mod list is reused before re-checking the portal. */
+const MOD_CATALOG_TTL_MS = 5 * 60 * 1000;
+
+interface CachedOfficialMods {
+  key: string;
+  fetchedAt: number;
+  mods: any[];
+}
+
 export class LauncherSync {
+  private static officialModsCache: CachedOfficialMods | null = null;
+  private static officialModsInFlight: {
+    key: string;
+    promise: Promise<any[] | null>;
+  } | null = null;
+
+  /** Drops the cached official mod list, e.g. after a sync installs a new release. */
+  static invalidateModCatalog(): void {
+    this.officialModsCache = null;
+    this.officialModsInFlight = null;
+  }
+
   static async syncClient(
     onProgress: (progress: SyncProgress) => void,
     verificationMode: "fast" | "full" = "fast",
@@ -214,6 +235,7 @@ export class LauncherSync {
       // covered by repairInstallation. Keep an integrity block until that
       // complete path succeeds.
       if (clearOnSuccess) clearSyncSafetyBlock(config.gameDir);
+      this.invalidateModCatalog();
       return result;
     } catch (error) {
       if (isKnownSyncSafetyFailure(error))
@@ -1160,6 +1182,52 @@ export class LauncherSync {
     const portalUrl = normalizePortalUrl(config.portalUrl);
     const channel = config.selectedChannel || "stable";
 
+    // The official list only changes with the channel's release, so callers
+    // (the Mods tab, every mod icon lookup) share one fetch per portal and
+    // channel. Local mods and toggles are applied fresh on every call.
+    const key = `${portalUrl}|${channel}`;
+    const cached = this.officialModsCache;
+    if (
+      cached &&
+      cached.key === key &&
+      Date.now() - cached.fetchedAt < MOD_CATALOG_TTL_MS
+    ) {
+      return this.decorateModCatalog(cached.mods);
+    }
+
+    let inFlight = this.officialModsInFlight;
+    if (!inFlight || inFlight.key !== key) {
+      const promise = this.fetchOfficialMods(portalUrl, channel).then(
+        (mods) => {
+          if (mods && this.officialModsInFlight?.promise === promise) {
+            this.officialModsCache = { key, fetchedAt: Date.now(), mods };
+          }
+          return mods;
+        },
+      );
+      const entry = { key, promise };
+      inFlight = entry;
+      this.officialModsInFlight = entry;
+      const clear = () => {
+        if (this.officialModsInFlight === entry)
+          this.officialModsInFlight = null;
+      };
+      promise.then(clear, clear);
+    }
+
+    const remoteMods = await inFlight.promise;
+    if (remoteMods) return this.decorateModCatalog(remoteMods);
+    return this.loadLocalModCatalog();
+  }
+
+  /**
+   * Fetches and validates the channel's official mod list. Resolves to null
+   * on a transient network failure so callers can fall back to local metadata.
+   */
+  private static async fetchOfficialMods(
+    portalUrl: string,
+    channel: string,
+  ): Promise<any[] | null> {
     try {
       const channelData = validateChannelResponse(
         await fetchPortalJsonWithRetry(
@@ -1183,12 +1251,16 @@ export class LauncherSync {
         ),
       );
       validateClientManifest(manifest, release);
-      if (Array.isArray((manifest as any).mods))
-        return this.decorateModCatalog((manifest as any).mods);
+      return Array.isArray((manifest as any).mods)
+        ? (manifest as any).mods
+        : null;
     } catch (error) {
       if (!isTransientMetadataFetchFailure(error)) throw error;
+      return null;
     }
+  }
 
+  private static loadLocalModCatalog(): any[] {
     const localManifestPath = path.join(
       __dirname,
       "../../manifest/client-manifest.json",

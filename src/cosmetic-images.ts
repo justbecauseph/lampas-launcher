@@ -10,9 +10,11 @@ export const COSMETIC_IMAGE_LIMITS = Object.freeze({
   maxPixels: 4 * 1024 * 1024,
   requestTimeoutMs: 15_000,
   maxConcurrentRequests: 4,
-  maxCacheEntries: 32,
+  // Sized to hold a full modpack's icons so re-rendering the Mods tab
+  // never re-downloads them; maxCacheBytes still bounds total memory.
+  maxCacheEntries: 256,
   maxPendingRequests: 64,
-  maxCacheBytes: 4 * 1024 * 1024,
+  maxCacheBytes: 16 * 1024 * 1024,
   ttlMs: 10 * 60 * 1000,
 } as const);
 
