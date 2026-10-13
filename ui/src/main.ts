@@ -5,6 +5,7 @@ import { initServerStatusView } from "./views/server-status-view";
 import { initAuthView } from "./views/auth-view";
 import { initSettingsView } from "./views/settings-view";
 import { initPlayView } from "./views/play-view";
+import { initUpdateView } from "./views/update-view";
 
 // Toast notification helper
 function showToast(
@@ -172,6 +173,8 @@ async function startApp(): Promise<void> {
     externalImages: () => Boolean(activeConfig.externalImages),
   });
 
+  const disposeUpdates = initUpdateView();
+
   // Initialize Server Status View
   const disposeServerStatus = initServerStatusView(
     () => !!authView.getCurrentUser(),
@@ -231,6 +234,7 @@ async function startApp(): Promise<void> {
     consoleView.dispose();
     disposeMods();
     disposeServerStatus();
+    disposeUpdates();
     settingsView.dispose();
     playView.dispose();
     authView.dispose();

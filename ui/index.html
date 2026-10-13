@@ -148,6 +148,26 @@
 
         <!-- User Profile Card -->
         <div id="user-section" class="border-t border-slate-900 pt-4">
+          <!-- Launcher update notice (hidden until a newer release exists) -->
+          <div id="update-card" class="update-card hidden" role="status">
+            <div class="update-card-text">
+              <span class="update-card-title">Update available</span>
+              <button
+                id="btn-update-notes"
+                class="update-card-version"
+                type="button"
+                title="See what's new on GitHub"
+              ></button>
+            </div>
+            <button
+              id="btn-update-download"
+              class="update-card-btn"
+              type="button"
+            >
+              Download
+            </button>
+          </div>
+
           <!-- Logged in state -->
           <div
             id="user-card"

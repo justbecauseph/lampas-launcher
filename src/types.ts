@@ -93,6 +93,15 @@ export interface CustomClientMod {
   size: number;
 }
 
+export interface LauncherUpdateInfo {
+  /** Newer launcher version, e.g. "1.5.3". */
+  version: string;
+  /** GitHub release page for this version. */
+  releaseUrl: string;
+  /** Installer for this platform, or the release page when none matches. */
+  downloadUrl: string;
+}
+
 export interface CustomShaderPack {
   filename: string;
   addedAt: string;
@@ -395,6 +404,9 @@ export interface LampasApi {
     maximize: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
     close: () => Promise<void>;
+  };
+  updates: {
+    check: () => Promise<LauncherUpdateInfo | null>;
   };
   utils: {
     getAppVersion: () => Promise<string>;

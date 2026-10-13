@@ -19,6 +19,7 @@ import { LauncherAuth } from "./auth";
 import { LauncherSync } from "./sync";
 import { GameRunner, parseJavaArgs } from "./game-runner";
 import { ClientModManager, ShaderPackManager } from "./client-mods";
+import { LauncherUpdateChecker } from "./update-check";
 import { LauncherLogger } from "./logger";
 import { GameDirectoryManager } from "./game-directory";
 import { ServerStatusClient } from "./server-status";
@@ -53,6 +54,7 @@ import type {
 } from "./types";
 
 let mainWindow: BrowserWindow | null = null;
+const launcherUpdateChecker = new LauncherUpdateChecker(() => app.getVersion());
 let logTransport: BoundedLogBatchTransport | null = null;
 
 function safeSend(channel: string, ...args: any[]): void {
@@ -527,6 +529,9 @@ app.whenReady().then(async () => {
   // IPC Handlers: Utils
   registerSecureHandler("utils:getAppVersion", IpcSchemas.noArgs, () =>
     app.getVersion(),
+  );
+  registerSecureHandler("updates:check", IpcSchemas.noArgs, () =>
+    launcherUpdateChecker.check(),
   );
   registerSecureHandler(
     "utils:openPath",

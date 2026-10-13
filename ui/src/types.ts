@@ -13,6 +13,7 @@ import type {
   DirectoryMoveProgress,
   DirectoryMoveResult,
   CustomClientMod,
+  LauncherUpdateInfo,
 } from "../../src/types";
 
 export type {
@@ -30,6 +31,7 @@ export type {
   DirectoryMoveProgress,
   DirectoryMoveResult,
   CustomClientMod,
+  LauncherUpdateInfo,
 };
 
 declare global {

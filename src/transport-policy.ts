@@ -7,7 +7,7 @@ import {
 import { TRANSFER_LIMITS } from "./transfer-limits";
 
 export type TransportKind =
-  "portal-auth" | "public-metadata" | "artifact" | "cosmetic";
+  "portal-auth" | "public-metadata" | "artifact" | "cosmetic" | "release-check";
 
 export interface TransportPolicyOptions {
   kind: TransportKind;
@@ -137,6 +137,8 @@ function hostMatchesSuffix(hostname: string, suffix: string): boolean {
 function isApprovedHost(url: URL, kind: TransportKind): boolean {
   if (url.protocol !== "https:") return false;
   const hostname = url.hostname.toLowerCase();
+  // Launcher update checks read one public GitHub API endpoint and nothing else.
+  if (kind === "release-check") return hostname === "api.github.com";
   if (isApprovedRemoteHost(hostname)) return true;
   if (kind === "portal-auth") return false;
   if (kind === "public-metadata") return PUBLIC_METADATA_HOSTS.has(hostname);

@@ -152,6 +152,9 @@ const api: LampasApi = {
       ipcRenderer.invoke("window:isMaximized"),
     close: () => ipcRenderer.invoke("window:close"),
   },
+  updates: {
+    check: () => ipcRenderer.invoke("updates:check"),
+  },
   utils: {
     getAppVersion: (): Promise<string> =>
       ipcRenderer.invoke("utils:getAppVersion"),

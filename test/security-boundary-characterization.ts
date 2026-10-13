@@ -615,14 +615,15 @@ try {
 
   // 1. Inbound IPC Registration Inventory
   await runTest(
-    "Registration harness confirms 43 handles and 1 on channel",
+    "Registration harness confirms 44 handles and 1 on channel",
     () => {
-      if (ipcHandlers.size !== 43)
-        throw new Error(`Expected 43 handles, got ${ipcHandlers.size}`);
+      if (ipcHandlers.size !== 44)
+        throw new Error(`Expected 44 handles, got ${ipcHandlers.size}`);
       for (const channel of [
         "shaders:browseAndAdd",
         "shaders:addPaths",
         "shaders:remove",
+        "updates:check",
       ]) {
         if (!ipcHandlers.has(channel))
           throw new Error(`Missing ${channel} handle`);

@@ -2226,3 +2226,53 @@ input[type="range"] {
 #mods-grid {
   align-content: start;
 }
+
+/* Launcher update notice in the sidebar, above the account card. */
+.update-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid rgba(214, 155, 69, 0.45);
+  border-radius: var(--radius-lg);
+  background: rgba(214, 155, 69, 0.1);
+}
+.update-card-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.update-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+.update-card-version {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.update-card-version:hover {
+  color: var(--cyan-hover);
+  text-decoration: underline;
+}
+.update-card-btn {
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  background: var(--cyan);
+  color: #1a1206;
+  font-size: 12px;
+  font-weight: 700;
+}
+.update-card-btn:hover {
+  background: var(--cyan-hover);
+}
