@@ -558,148 +558,78 @@
         <!-- TAB 3: CONSOLE & LOGS -->
         <section
           id="tab-console"
-          class="tab-content hidden flex-col flex-1 min-h-0 space-y-4"
+          class="tab-content hidden flex-col flex-1 min-h-0 console-screen"
         >
-          <div class="flex items-center justify-between flex-shrink-0">
-            <div class="flex items-center gap-3">
+          <div class="console-header">
+            <div class="console-title-group">
               <h2 class="text-xl font-extrabold text-white tracking-tight">
-                Live Game Console
+                Console
               </h2>
               <div
                 id="console-game-status"
-                class="badge flex items-center gap-1.5 text-slate-400"
+                class="console-status console-status-idle"
               >
                 <span
                   id="console-status-dot"
                   class="status-dot status-dot-idle"
                 ></span>
-                <span
-                  id="console-status-text"
-                  class="font-mono text-[11px] font-bold"
-                  >IDLE</span
-                >
+                <span id="console-status-text">IDLE</span>
               </div>
-              <span id="console-count" class="badge">0 lines</span>
+              <span id="console-count" class="console-count">0 lines</span>
             </div>
-            <div class="flex items-center gap-3">
-              <button
-                id="btn-console-stop"
-                class="btn-danger-sm hidden"
-                title="Force Terminate Game"
-              >
-                <svg
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-                <span>Stop Game</span>
-              </button>
-              <label
-                class="flex items-center gap-2 text-xs text-slate-400 cursor-pointer"
-              >
-                <input
-                  id="console-autoscroll"
-                  type="checkbox"
-                  checked
-                  class="accent-cyan-500 cursor-pointer"
-                />
-                <span>Auto-scroll</span>
-              </label>
-              <button
-                id="btn-open-log-file"
-                class="btn-secondary"
-                title="Open persistent launcher log file on disk"
-              >
-                <svg
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                <span>Launcher Log</span>
-              </button>
-              <button
-                id="btn-open-minecraft-log"
-                class="btn-secondary"
-                title="Open Minecraft latest.log on disk"
-              >
-                <svg
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                <span>Minecraft Log</span>
-              </button>
-              <button
-                id="btn-copy-logs"
-                class="btn-secondary"
-                title="Copy console output to clipboard"
-              >
-                <svg
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                  />
-                </svg>
-                <span>Copy</span>
-              </button>
-              <button
-                id="btn-clear-logs"
-                class="btn-secondary"
-                title="Clear console output"
-              >
-                <svg
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-                <span>Clear</span>
-              </button>
-            </div>
+            <button
+              id="btn-console-stop"
+              class="btn-danger-sm hidden"
+              title="Force-close Minecraft"
+            >
+              Stop game
+            </button>
           </div>
 
-          <div id="console-output" class="console-box flex-1 min-h-0">
-            <div class="console-line text-slate-500 italic">
-              [System] Console ready. Logs will stream in real-time when
-              launching.
+          <div class="console-panel">
+            <div class="console-toolbar">
+              <label class="console-toggle">
+                <input id="console-autoscroll" type="checkbox" checked />
+                <span>Auto-scroll</span>
+              </label>
+              <div class="console-toolbar-actions">
+                <button
+                  id="btn-open-log-file"
+                  class="toolbar-btn"
+                  title="Open the launcher log file on disk"
+                >
+                  Launcher log
+                </button>
+                <button
+                  id="btn-open-minecraft-log"
+                  class="toolbar-btn"
+                  title="Open Minecraft's latest.log on disk"
+                >
+                  Minecraft log
+                </button>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <button
+                  id="btn-copy-logs"
+                  class="toolbar-btn"
+                  title="Copy console output to clipboard"
+                >
+                  Copy
+                </button>
+                <button
+                  id="btn-clear-logs"
+                  class="toolbar-btn"
+                  title="Clear console output"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div id="console-output" class="console-box">
+              <div class="console-line console-empty">
+                Logs from the launcher and Minecraft appear here when you press
+                Play.
+              </div>
             </div>
           </div>
         </section>

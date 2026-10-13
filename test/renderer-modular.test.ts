@@ -92,6 +92,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     expect(css).toContain("IBMPlexSans-Regular.woff2");
     expect(css).toContain("IBMPlexMono-Regular.woff2");
     expect(css).toContain("Rajdhani-Bold.woff2");
+    expect(css).toContain("IosevkaTerm-Regular.woff2");
   });
 
   test("mod-view template eliminates inline onerror attribute in favor of programmatic handling", () => {

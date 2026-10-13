@@ -63,3 +63,20 @@
   font-display: swap;
   src: url("./assets/fonts/Rajdhani-Bold.woff2") format("woff2");
 }
+
+/* Console font: Iosevka Term (Nerd Font Mono build), subset to Latin,
+   punctuation, arrows and box drawing. */
+@font-face {
+  font-family: "Iosevka Term";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/IosevkaTerm-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Iosevka Term";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/IosevkaTerm-Bold.woff2") format("woff2");
+}

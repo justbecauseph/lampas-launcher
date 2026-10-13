@@ -200,21 +200,18 @@ export function initConsoleView(
       if (state === "running") {
         consoleStatusDot.className = "status-dot status-dot-running";
         consoleStatusText.innerText = textOverride || "GAME RUNNING";
-        consoleGameStatus.className =
-          "badge flex items-center gap-1.5 text-emerald-400 border-emerald-500/40 bg-emerald-950/50";
+        consoleGameStatus.className = "console-status console-status-running";
         if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
       } else if (state === "syncing" || state === "launching") {
         consoleStatusDot.className = "status-dot status-dot-launching";
         consoleStatusText.innerText =
           textOverride || (state === "syncing" ? "SYNCING..." : "LAUNCHING...");
-        consoleGameStatus.className =
-          "badge flex items-center gap-1.5 text-amber-400 border-amber-500/40 bg-amber-950/50";
+        consoleGameStatus.className = "console-status console-status-busy";
         if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
       } else {
         consoleStatusDot.className = "status-dot status-dot-idle";
         consoleStatusText.innerText = textOverride || "IDLE";
-        consoleGameStatus.className =
-          "badge flex items-center gap-1.5 text-slate-400";
+        consoleGameStatus.className = "console-status console-status-idle";
         if (btnConsoleStop) btnConsoleStop.classList.add("hidden");
       }
     }
