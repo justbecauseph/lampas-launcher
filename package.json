@@ -21,6 +21,9 @@
     "format": "bunx prettier -w .",
     "package:dir": "tsc && vite build && electron-builder --dir --publish never",
     "package:win": "tsc && vite build && electron-builder --win --publish never",
+    "package:msix": "tsc && vite build && electron-builder --win appx --publish never",
+    "package:appx": "tsc && vite build && electron-builder --win appx --publish never",
+    "package:test": "pwsh scripts/package-and-test.ps1",
     "package:linux": "tsc && vite build && electron-builder --linux --publish never",
     "package:all": "tsc && vite build && electron-builder -mwl --publish never",
     "start": "electron .",
@@ -73,6 +76,9 @@
     "directories": {
       "output": "release"
     },
+    "toolsets": {
+      "winCodeSign": "1.1.0"
+    },
     "files": [
       "dist/**/*",
       "assets/**/*",
@@ -92,6 +98,21 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "appx": {
+      "applicationId": "LampasLauncher",
+      "identityName": "59450PUPProgGuild.LampasLauncher",
+      "publisher": "CN=4930FAFD-2456-4E8B-BED5-C5CC9A2E0575",
+      "publisherDisplayName": "PUPProgGuild",
+      "displayName": "Lampas Launcher",
+      "backgroundColor": "#1e1e1e",
+      "languages": [
+        "en-US"
+      ],
+      "capabilities": [
+        "runFullTrust",
+        "internetClient"
+      ]
     },
     "linux": {
       "icon": "assets/lampas.png",
