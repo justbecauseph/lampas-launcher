@@ -111,23 +111,19 @@ async function startApp(): Promise<void> {
     allocatedRamGb: 4,
     gameDir: "",
     noSync: false,
-    externalImages: false,
+    externalImages: true,
   };
 
   // Initialize Console View
   const consoleView = initConsoleView({ showToast });
 
   // Initialize Auth View
+  let refreshPlayButton = (): void => {};
   const authView = initAuthView({
     showToast,
     getPortalUrl: () => activeConfig.portalUrl,
     externalImages: () => Boolean(activeConfig.externalImages),
-    onUserChanged: (user: RendererUserProfile | null) => {
-      const btnPlayText = document.getElementById("btn-play-text");
-      if (btnPlayText) {
-        btnPlayText.innerText = user ? "PLAY" : "LOG IN TO PLAY";
-      }
-    },
+    onUserChanged: (_user: RendererUserProfile | null) => refreshPlayButton(),
   });
 
   // Initialize Play View
@@ -139,9 +135,22 @@ async function startApp(): Promise<void> {
     },
     appendLog: consoleView.appendLog,
     switchToTab,
+    requestLogin: () => authView.login(),
     isNoSync: () => Boolean(activeConfig.noSync),
     onStatusChange: (status) => consoleView.setGameStatus(status),
   });
+  refreshPlayButton = playView.refreshPlayButton;
+  refreshPlayButton();
+
+  const btnOpenGameDir = document.getElementById("btn-open-gamedir");
+  if (btnOpenGameDir) {
+    btnOpenGameDir.onclick = () =>
+      void window.lampas.utils?.openKnownLocation?.("gameDir");
+  }
+  const btnPlaySettings = document.getElementById("btn-play-settings");
+  if (btnPlaySettings) {
+    btnPlaySettings.onclick = () => switchToTab("tab-settings");
+  }
 
   // Initialize Settings View
   const settingsView = initSettingsView({
@@ -184,6 +193,8 @@ async function startApp(): Promise<void> {
         const appVer = await window.lampas.utils.getAppVersion();
         const badge = document.getElementById("titlebar-version-badge");
         if (appVer && badge) badge.innerText = `v${appVer}`;
+        const about = document.getElementById("about-launcher-version");
+        if (appVer && about) about.innerText = appVer;
       } catch {}
     }
 

@@ -32,8 +32,9 @@ const DEFAULT_CONFIG: LauncherConfig = {
   javaArgs: "",
   disabledClientMods: [],
   customClientMods: [],
+  customShaderPacks: [],
   noSync: false,
-  externalImages: false,
+  externalImages: true,
 };
 
 import {

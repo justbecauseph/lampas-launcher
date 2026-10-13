@@ -8,19 +8,16 @@
       ? status.players.list
       : [];
     const labels = {
-      online: "SERVER ONLINE",
-      starting: "SERVER STARTING",
-      stopping: "SERVER STOPPING",
-      offline: "SERVER OFFLINE",
-      unknown: "STATUS UNAVAILABLE",
+      online: "Server online",
+      starting: "Server starting",
+      stopping: "Server stopping",
+      offline: "Server offline",
+      unknown: "Status unavailable",
     };
     let detail =
       "Unable to verify server status right now. You can still launch.";
     if (state === "online")
-      detail =
-        online === 0
-          ? "No one is online right now."
-          : "Players currently online";
+      detail = online === 0 ? "No one is online right now." : "";
     else if (state === "starting")
       detail = "The server is still loading. You can launch while it starts.";
     else if (state === "stopping")

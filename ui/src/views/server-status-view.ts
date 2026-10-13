@@ -18,17 +18,16 @@ export function getServerStatusView(
     ? status.players.list
     : [];
   const labels: Record<string, string> = {
-    online: "SERVER ONLINE",
-    starting: "SERVER STARTING",
-    stopping: "SERVER STOPPING",
-    offline: "SERVER OFFLINE",
-    unknown: "STATUS UNAVAILABLE",
+    online: "Server online",
+    starting: "Server starting",
+    stopping: "Server stopping",
+    offline: "Server offline",
+    unknown: "Status unavailable",
   };
   let detail =
     "Unable to verify server status right now. You can still launch.";
   if (state === "online")
-    detail =
-      online === 0 ? "No one is online right now." : "Players currently online";
+    detail = online === 0 ? "No one is online right now." : "";
   else if (state === "starting")
     detail = "The server is still loading. You can launch while it starts.";
   else if (state === "stopping")
@@ -91,25 +90,20 @@ export function initServerStatusView(getIsLoggedIn: () => boolean): () => void {
     if (state !== "online" || view.players.length === 0) return;
 
     view.players.forEach((player) => {
-      const card = document.createElement("span");
-      card.className = "presence-player";
-      const avatar = document.createElement("span");
-      avatar.className = "presence-player-avatar";
-      avatar.innerText = player.initial;
-      avatar.setAttribute("aria-hidden", "true");
-      const name = document.createElement("span");
-      name.className = "presence-player-name";
-      name.innerText = player.username;
-      card.append(avatar, name);
-      serverPresencePlayers.appendChild(card);
+      const head = document.createElement("span");
+      head.className = "presence-head";
+      head.title = player.username;
+      head.innerText = player.initial;
+      head.setAttribute("aria-hidden", "true");
+      serverPresencePlayers.appendChild(head);
     });
 
-    if (view.more > 0) {
-      const more = document.createElement("span");
-      more.className = "presence-more";
-      more.innerText = `+${view.more} others`;
-      serverPresencePlayers.appendChild(more);
-    }
+    const names = document.createElement("span");
+    names.className = "presence-names";
+    const listed = view.players.map((player) => player.username).join(", ");
+    names.innerText =
+      view.more > 0 ? `${listed} and ${view.more} more` : listed;
+    serverPresencePlayers.appendChild(names);
   }
 
   async function refreshServerStatus(): Promise<ServerStatus | null> {

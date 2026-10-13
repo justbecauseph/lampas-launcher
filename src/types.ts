@@ -47,6 +47,7 @@ export interface LauncherConfig {
   javaArgs?: string;
   disabledClientMods?: string[];
   customClientMods?: CustomClientMod[];
+  customShaderPacks?: CustomShaderPack[];
   noSync?: boolean;
   externalImages?: boolean;
   token?: string;
@@ -88,6 +89,12 @@ export interface DirectoryMoveResult {
 export interface CustomClientMod {
   filename: string;
   enabled: boolean;
+  addedAt: string;
+  size: number;
+}
+
+export interface CustomShaderPack {
+  filename: string;
   addedAt: string;
   size: number;
 }
@@ -247,6 +254,8 @@ export interface ModCatalogEntry {
   side: "client" | "server" | "both";
   categories?: string[];
   source: "official" | "custom";
+  /** Absent for mods; "shaderpack" for local shader pack archives. */
+  kind?: "mod" | "shaderpack";
   enabled: boolean;
   canDisable: boolean;
   size?: number;
@@ -341,6 +350,11 @@ export interface LampasApi {
       enabled: boolean,
     ) => Promise<CustomClientMod[]>;
     removeCustom: (filename: string) => Promise<CustomClientMod[]>;
+  };
+  shaders: {
+    browseAndAdd: () => Promise<CustomShaderPack[]>;
+    addDropped: (files: File[]) => Promise<CustomShaderPack[]>;
+    remove: (filename: string) => Promise<CustomShaderPack[]>;
   };
   game: {
     launch: () => Promise<boolean>;

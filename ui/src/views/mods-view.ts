@@ -17,6 +17,34 @@ export interface ModsViewOptions {
   externalImages?: () => boolean;
 }
 
+type UploadMode = "mod" | "shader";
+
+const UPLOAD_COPY: Record<
+  UploadMode,
+  {
+    mark: string;
+    title: string;
+    hint: string;
+    button: string;
+    extension: string;
+  }
+> = {
+  mod: {
+    mark: "JAR",
+    title: "Drop client mod JARs here",
+    hint: "Local additions stay yours and are never removed by synchronization.",
+    button: "Add local mods",
+    extension: ".jar",
+  },
+  shader: {
+    mark: "ZIP",
+    title: "Drop shader pack ZIPs here",
+    hint: "Then pick it in-game under Options → Video Settings → Shader Packs.",
+    button: "Add shader packs",
+    extension: ".zip",
+  },
+};
+
 function formatBytes(bytes?: number): string {
   if (!bytes || isNaN(bytes)) return "N/A";
   if (bytes < 1024) return `${bytes} B`;
@@ -75,6 +103,10 @@ export function initModsView(options: ModsViewOptions): () => void {
   ) as HTMLButtonElement | null;
   const modDropZone = (document.getElementById("mod-drop-zone") ||
     document.getElementById("tab-mods")) as HTMLElement | null;
+  const dropMark = document.getElementById("drop-mark");
+  const dropTitle = document.getElementById("drop-title");
+  const dropHint = document.getElementById("drop-hint");
+  const btnAddModsLabel = document.getElementById("btn-add-mods-label");
 
   let allMods: NormalizedMod[] = [];
   let activeModFilter = "all";
@@ -83,6 +115,18 @@ export function initModsView(options: ModsViewOptions): () => void {
   let isComposing = false;
   let isMutating = false;
   let iconRenderGeneration = 0;
+
+  function uploadMode(): UploadMode {
+    return activeModFilter === "shader" ? "shader" : "mod";
+  }
+
+  function updateUploadCopy(): void {
+    const copy = UPLOAD_COPY[uploadMode()];
+    if (dropMark) dropMark.innerText = copy.mark;
+    if (dropTitle) dropTitle.innerText = copy.title;
+    if (dropHint) dropHint.innerText = copy.hint;
+    if (btnAddModsLabel) btnAddModsLabel.innerText = copy.button;
+  }
 
   function precomputeSearchKey(mod: ModCatalogEntry): string {
     const parts = [
@@ -177,9 +221,13 @@ export function initModsView(options: ModsViewOptions): () => void {
     }
 
     if (filtered.length === 0) {
+      const emptyText =
+        filter === "shader" && !query
+          ? "No shader packs yet. Drop a .zip above to add one."
+          : "No mods found matching your search and filter criteria.";
       modsGrid.innerHTML = `
         <div class="col-span-2 py-12 text-center text-slate-500 text-xs">
-          No mods found matching your search and filter criteria.
+          ${emptyText}
         </div>
       `;
       return;
@@ -228,7 +276,7 @@ export function initModsView(options: ModsViewOptions): () => void {
             : "";
         const remove =
           mod.source === "custom"
-            ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" data-name="${modName}" title="Remove this local mod">Remove</button>`
+            ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" data-kind="${mod.kind === "shaderpack" ? "shaderpack" : "mod"}" data-name="${modName}" title="Remove this local ${mod.kind === "shaderpack" ? "shader pack" : "mod"}">Remove</button>`
             : "";
 
         return `
@@ -316,7 +364,11 @@ export function initModsView(options: ModsViewOptions): () => void {
         isMutating = true;
         removeBtn.disabled = true;
         try {
-          await window.lampas.mods.removeCustom(filename);
+          if (removeBtn.dataset.kind === "shaderpack") {
+            await window.lampas.shaders.remove(filename);
+          } else {
+            await window.lampas.mods.removeCustom(filename);
+          }
           showToast(`Removed ${displayName}.`, "info");
           await loadCatalog();
           onModsChanged?.();
@@ -414,20 +466,39 @@ export function initModsView(options: ModsViewOptions): () => void {
       modFilterPills.forEach((p) => p.classList.remove("active"));
       pill.classList.add("active");
       activeModFilter = pill.dataset.filter || "all";
+      updateUploadCopy();
       renderMods();
     });
   });
 
+  async function afterImport(mode: UploadMode, res: unknown): Promise<void> {
+    if (Array.isArray(res) && res.length) {
+      showToast(
+        mode === "shader" ? "Shader packs updated." : "Client mods updated.",
+        "success",
+      );
+      await loadCatalog();
+      onModsChanged?.();
+    }
+  }
+
+  function importErrorToast(mode: UploadMode, err: unknown): void {
+    showToast(
+      `Could not add ${mode === "shader" ? "shader pack" : "mod"}: ${formatFriendlyError(err)}`,
+      "error",
+    );
+  }
+
   const handleAddLocalMods = async () => {
+    const mode = uploadMode();
     try {
-      const res = await window.lampas.mods.browseAndAdd();
-      if (Array.isArray(res) && res.length) {
-        showToast("Client mods updated.", "success");
-        await loadCatalog();
-        onModsChanged?.();
-      }
+      const res =
+        mode === "shader"
+          ? await window.lampas.shaders.browseAndAdd()
+          : await window.lampas.mods.browseAndAdd();
+      await afterImport(mode, res);
     } catch (err: any) {
-      showToast(`Could not add mod: ${formatFriendlyError(err)}`, "error");
+      importErrorToast(mode, err);
     }
   };
 
@@ -527,28 +598,40 @@ export function initModsView(options: ModsViewOptions): () => void {
 
     modDropZone.addEventListener("dragover", (e) => {
       e.preventDefault();
-      modDropZone.classList.add("drag-over");
+      modDropZone.classList.add("drag-active");
     });
     modDropZone.addEventListener("dragleave", () => {
-      modDropZone.classList.remove("drag-over");
+      modDropZone.classList.remove("drag-active");
     });
     modDropZone.addEventListener("drop", async (e) => {
       e.preventDefault();
-      modDropZone.classList.remove("drag-over");
-      const files = Array.from(e.dataTransfer?.files || []).filter((f) =>
-        f.name.toLowerCase().endsWith(".jar"),
+      modDropZone.classList.remove("drag-active");
+      const mode = uploadMode();
+      const { extension } = UPLOAD_COPY[mode];
+      const dropped = Array.from(e.dataTransfer?.files || []);
+      const files = dropped.filter((f) =>
+        f.name.toLowerCase().endsWith(extension),
       );
-      if (files.length === 0) return;
+      if (files.length === 0) {
+        if (dropped.length > 0) {
+          showToast(
+            mode === "shader"
+              ? "Shader packs must be .zip files."
+              : "Client mods must be .jar files. For shader packs, open the Shaders filter first.",
+            "error",
+          );
+        }
+        return;
+      }
 
       try {
-        const res = await window.lampas.mods.addDropped(files);
-        if (Array.isArray(res) && res.length) {
-          showToast("Client mods updated.", "success");
-          await loadCatalog();
-          onModsChanged?.();
-        }
+        const res =
+          mode === "shader"
+            ? await window.lampas.shaders.addDropped(files)
+            : await window.lampas.mods.addDropped(files);
+        await afterImport(mode, res);
       } catch (err: any) {
-        showToast(`Could not add mod: ${formatFriendlyError(err)}`, "error");
+        importErrorToast(mode, err);
       }
     });
   }

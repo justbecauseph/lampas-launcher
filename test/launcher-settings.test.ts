@@ -22,7 +22,8 @@ mock.module("electron", () => ({
 }));
 
 const { ConfigManager, PortalPolicy } = await import("../src/config");
-const { ClientModManager } = await import("../src/client-mods");
+const { ClientModManager, ShaderPackManager } =
+  await import("../src/client-mods");
 const { parseJavaArgs } = await import("../src/game-runner");
 
 beforeEach(() => {
@@ -31,9 +32,18 @@ beforeEach(() => {
   ConfigManager.set({
     gameDir: path.join(testRoot, "game"),
     customClientMods: [],
+    customShaderPacks: [],
     disabledClientMods: [],
   });
 });
+
+// The import check only reads the ZIP local-file-header signature (PK).
+function writeZip(target: string): void {
+  fs.writeFileSync(
+    target,
+    Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(26)]),
+  );
+}
 
 afterAll(() => {
   PortalPolicy.resetForTesting();
@@ -80,6 +90,62 @@ describe("launcher settings", () => {
     ClientModManager.remove("example-client.jar");
     expect(fs.existsSync(disabledPath)).toBe(false);
     expect(ConfigManager.get().customClientMods).toEqual([]);
+  });
+
+  test("imports and removes a local shader pack in shaderpacks/", () => {
+    const source = path.join(testRoot, "Complementary.zip");
+    writeZip(source);
+
+    ShaderPackManager.add([source]);
+    const installed = path.join(
+      testRoot,
+      "game",
+      "shaderpacks",
+      "Complementary.zip",
+    );
+    expect(fs.existsSync(installed)).toBe(true);
+    expect(ConfigManager.get().customShaderPacks?.[0]?.filename).toBe(
+      "Complementary.zip",
+    );
+
+    // Re-importing the same pack replaces it instead of failing.
+    ShaderPackManager.add([source]);
+    expect(ConfigManager.get().customShaderPacks).toHaveLength(1);
+    expect(
+      fs
+        .readdirSync(path.dirname(installed))
+        .filter((f) => f.startsWith(".importing-") || f.endsWith(".bak")),
+    ).toEqual([]);
+
+    ShaderPackManager.remove("Complementary.zip");
+    expect(fs.existsSync(installed)).toBe(false);
+    expect(ConfigManager.get().customShaderPacks).toEqual([]);
+  });
+
+  test("rejects shader packs that are not ZIP archives or would overwrite pack files", () => {
+    const fake = path.join(testRoot, "not-really.zip");
+    fs.writeFileSync(fake, "plain text");
+    expect(() => ShaderPackManager.add([fake])).toThrow(
+      "not a valid shader pack",
+    );
+
+    const jar = path.join(testRoot, "wrong-type.jar");
+    writeZip(jar);
+    expect(() => ShaderPackManager.add([jar])).toThrow(
+      "Only local .zip files can be added as shader packs.",
+    );
+
+    const shaderDir = path.join(testRoot, "game", "shaderpacks");
+    fs.mkdirSync(shaderDir, { recursive: true });
+    writeZip(path.join(shaderDir, "PackManaged.zip"));
+    const source = path.join(testRoot, "PackManaged.zip");
+    writeZip(source);
+    expect(() => ShaderPackManager.add([source])).toThrow(
+      "not a launcher-managed local shader pack",
+    );
+    expect(() => ShaderPackManager.remove("../PackManaged.zip")).toThrow(
+      "Unknown local shader pack",
+    );
   });
 
   test("rejects path traversal in local mod operations", () => {
@@ -150,6 +216,11 @@ describe("launcher settings", () => {
     expect(updated.gameDir).toBe(path.join(testRoot, "initial-dir"));
     expect(updated.gameDirConfigured).toBe(true);
     expect(updated.allocatedRamGb).toBe(8);
+  });
+
+  test("external avatars and mod icons are on by default", () => {
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().externalImages).toBe(true);
   });
 
   test("noSync defaults to false (off by default) and toggles cleanly", () => {

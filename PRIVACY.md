@@ -8,7 +8,7 @@ The launcher contacts Lampas Portal to sign you in, refresh your session, check 
 
 Installing or repairing a pack also downloads files from Minecraft, Fabric and approved pack download providers. Those providers can see your IP address, which files you request and when you request them. Public file downloads do not receive your Lampas Portal credentials or cookies.
 
-**External avatars and mod images are off by default.** The launcher uses initials and placeholders while they are disabled. If you enable them, image providers receive your IP address and request timing; the avatar provider also receives your Minecraft username or account identifier. The launcher temporarily caches these images in memory. Disabling the setting or logging out clears that cache and cancels pending requests.
+**External avatars and mod images are on by default.** You can turn them off in Settings; the launcher then uses initials and placeholders. While they are enabled, image providers receive your IP address and request timing; the avatar provider also receives your Minecraft username or account identifier. The launcher temporarily caches these images in memory. Disabling the setting or logging out clears that cache and cancels pending requests.
 
 ## What stays on your computer
 

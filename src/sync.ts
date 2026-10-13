@@ -563,6 +563,13 @@ export class LauncherSync {
       ]),
     );
 
+    // Player-imported shader packs are never obsolete pack files.
+    const customShaderPackKeys = new Set(
+      (config.customShaderPacks || []).map((pack) =>
+        normalizePathKey(`shaderpacks/${pack.filename}`),
+      ),
+    );
+
     // Identify obsolete managed files from previous state AND unmanifested mods on disk
     const toDeleteSet = new Set<string>();
     for (const [prevPath, info] of Object.entries(prevState.files)) {
@@ -576,7 +583,8 @@ export class LauncherSync {
         info.policy === "MANAGED" &&
         !desiredFilesMap.has(prevKey) &&
         !isPathProtected(prevPath) &&
-        !isCustomMod
+        !isCustomMod &&
+        !customShaderPackKeys.has(prevKey)
       ) {
         try {
           const fullPath = resolveAndContainPath(gameDir, prevPath);
@@ -1232,6 +1240,20 @@ export class LauncherSync {
       canDisable: true,
       size: mod.size,
     }));
-    return [...custom, ...official];
+    const shaderPacks = (config.customShaderPacks || []).map((pack) => ({
+      id: `local-shader:${pack.filename}`,
+      name: pack.filename.replace(/\.zip$/i, ""),
+      filename: pack.filename,
+      description:
+        "Local shader pack. Select it in-game under Video Settings → Shader Packs.",
+      side: "client",
+      categories: ["shader", "custom"],
+      source: "custom",
+      kind: "shaderpack",
+      enabled: true,
+      canDisable: false,
+      size: pack.size,
+    }));
+    return [...shaderPacks, ...custom, ...official];
   }
 }

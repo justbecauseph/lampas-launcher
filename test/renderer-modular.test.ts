@@ -117,7 +117,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     });
 
     expect(view.state).toBe("online");
-    expect(view.label).toBe("SERVER ONLINE");
+    expect(view.label).toBe("Server online");
     expect(view.players.length).toBe(8);
     expect(view.more).toBe(2);
   });

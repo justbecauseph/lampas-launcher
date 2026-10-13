@@ -14,7 +14,7 @@ describe("server status UI view model", () => {
       },
     });
 
-    expect(view.label).toBe("SERVER ONLINE");
+    expect(view.label).toBe("Server online");
     expect(view.count).toBe("12 players");
     expect(view.players).toHaveLength(8);
     expect(view.players[0]).toEqual({ username: "Player0", initial: "P" });
@@ -37,7 +37,7 @@ describe("server status UI view model", () => {
     expect(getServerStatusView(null)).toEqual(
       expect.objectContaining({
         state: "unknown",
-        label: "STATUS UNAVAILABLE",
+        label: "Status unavailable",
         count: "— players",
       }),
     );

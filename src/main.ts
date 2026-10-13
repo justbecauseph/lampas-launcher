@@ -18,7 +18,7 @@ import { SessionManager } from "./session-manager";
 import { LauncherAuth } from "./auth";
 import { LauncherSync } from "./sync";
 import { GameRunner, parseJavaArgs } from "./game-runner";
-import { ClientModManager } from "./client-mods";
+import { ClientModManager, ShaderPackManager } from "./client-mods";
 import { LauncherLogger } from "./logger";
 import { GameDirectoryManager } from "./game-directory";
 import { ServerStatusClient } from "./server-status";
@@ -39,6 +39,7 @@ import {
   registerSecureHandler,
   registerSecureListener,
   validateModPaths,
+  validateShaderPackPaths,
 } from "./ipc-boundary";
 import type {
   DirectoryMoveProgress,
@@ -1062,6 +1063,84 @@ app.whenReady().then(async () => {
     (_, filename) => {
       OperationCoordinator.assertCanMutate("remove custom mod");
       return ClientModManager.remove(filename);
+    },
+  );
+
+  // IPC Handlers: Shader packs
+  registerSecureHandler(
+    "shaders:browseAndAdd",
+    IpcSchemas.noArgs,
+    async (event) => {
+      OperationCoordinator.assertCanMutate("add shader packs");
+      if (!dialog?.showOpenDialog) {
+        throw new IpcSecurityError(
+          "Native dialog service unavailable; file selection denied fail-closed.",
+        );
+      }
+      const snapshot = IpcBoundary.createApprovalSnapshot(event);
+      const result = await dialog.showOpenDialog(snapshot.window, {
+        title: "Add shader packs",
+        filters: [{ name: "Shader packs", extensions: ["zip"] }],
+        properties: ["openFile", "multiSelections"],
+      });
+      IpcBoundary.validateApprovalSnapshot(snapshot);
+      OperationCoordinator.assertCanMutate("add shader packs");
+      if (
+        result.canceled ||
+        !result.filePaths ||
+        result.filePaths.length === 0
+      ) {
+        return ShaderPackManager.list();
+      }
+      validateShaderPackPaths(result.filePaths);
+      for (const p of result.filePaths) {
+        IpcBoundary.grantApproval("shaderpack:import", p, {
+          generation: snapshot.generation,
+        });
+      }
+      for (const p of result.filePaths) {
+        if (!IpcBoundary.consumeApproval("shaderpack:import", p)) {
+          throw new IpcSecurityError(
+            "Shader pack import approval was invalidated or expired.",
+          );
+        }
+      }
+      return ShaderPackManager.add(result.filePaths);
+    },
+  );
+  registerSecureHandler(
+    "shaders:addPaths",
+    IpcSchemas.shaderPackPaths,
+    async (event, paths) => {
+      OperationCoordinator.assertCanMutate("add shader packs");
+      validateShaderPackPaths(paths);
+      const unapproved: string[] = [];
+      for (const p of paths) {
+        if (!IpcBoundary.consumeApproval("shaderpack:import", p)) {
+          unapproved.push(p);
+        }
+      }
+      if (unapproved.length > 0) {
+        const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
+          title: "Confirm Shader Pack Import",
+          message: "Import shader pack(s)?",
+          detail: `Are you sure you want to import the following shader pack file(s)?\n${unapproved.join("\n")}`,
+          confirmButtonText: "Import",
+        });
+        if (!confirmed) {
+          throw new UserCancelledError("Shader pack import cancelled by user.");
+        }
+        OperationCoordinator.assertCanMutate("add shader packs");
+      }
+      return ShaderPackManager.add(paths);
+    },
+  );
+  registerSecureHandler(
+    "shaders:remove",
+    IpcSchemas.shaderPackFilename,
+    (_, filename) => {
+      OperationCoordinator.assertCanMutate("remove shader pack");
+      return ShaderPackManager.remove(filename);
     },
   );
 

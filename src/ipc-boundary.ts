@@ -1373,6 +1373,52 @@ export function validateCustomModToggle(
   return { filename, enabled };
 }
 
+export function validateShaderPackPaths(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new IpcValidationError(
+      "Shader pack paths must be a non-empty array of file paths.",
+    );
+  }
+  if (raw.length > 20) {
+    throw new IpcValidationError(
+      "Cannot import more than 20 shader packs at once.",
+    );
+  }
+  const result: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string" || item.trim().length === 0) {
+      throw new IpcValidationError(
+        "Each shader pack path must be a non-empty string.",
+      );
+    }
+    if (item.length > 1024) {
+      throw new IpcValidationError(
+        "Shader pack path exceeds maximum length of 1024 characters.",
+      );
+    }
+    const resolved = path.resolve(item.trim());
+    if (path.extname(resolved).toLowerCase() !== ".zip") {
+      throw new IpcValidationError(
+        "Shader pack file must have a .zip extension.",
+      );
+    }
+    if (!fs.existsSync(resolved)) {
+      throw new IpcValidationError("Shader pack file does not exist.");
+    }
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) {
+      throw new IpcValidationError("Shader pack path is not a regular file.");
+    }
+    if (stat.size > MAX_CUSTOM_MOD_FILE_SIZE_BYTES) {
+      throw new IpcValidationError(
+        "Shader pack file exceeds maximum allowed size of 100MB.",
+      );
+    }
+    result.push(resolved);
+  }
+  return result;
+}
+
 export function validateCustomModFilename(filename: unknown): string {
   if (typeof filename !== "string" || filename.trim().length === 0) {
     throw new IpcValidationError("Mod filename must be a non-empty string.");
@@ -1448,6 +1494,10 @@ export const IpcSchemas = {
     return [res.filename, res.enabled];
   },
   customModFilename: (raw: unknown): [string] => [
+    validateCustomModFilename(raw),
+  ],
+  shaderPackPaths: (raw: unknown): [string[]] => [validateShaderPackPaths(raw)],
+  shaderPackFilename: (raw: unknown): [string] => [
     validateCustomModFilename(raw),
   ],
   cosmeticModId: (raw: unknown): [string] => [validateCosmeticModId(raw)],

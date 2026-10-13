@@ -615,10 +615,18 @@ try {
 
   // 1. Inbound IPC Registration Inventory
   await runTest(
-    "Registration harness confirms 40 handles and 1 on channel",
+    "Registration harness confirms 43 handles and 1 on channel",
     () => {
-      if (ipcHandlers.size !== 40)
-        throw new Error(`Expected 40 handles, got ${ipcHandlers.size}`);
+      if (ipcHandlers.size !== 43)
+        throw new Error(`Expected 43 handles, got ${ipcHandlers.size}`);
+      for (const channel of [
+        "shaders:browseAndAdd",
+        "shaders:addPaths",
+        "shaders:remove",
+      ]) {
+        if (!ipcHandlers.has(channel))
+          throw new Error(`Missing ${channel} handle`);
+      }
       if (ipcListeners.size !== 1)
         throw new Error(`Expected 1 listener, got ${ipcListeners.size}`);
       if (!ipcListeners.has("game:logAck"))
@@ -3236,6 +3244,48 @@ try {
       if (IpcBoundary.hasApproval("mod:import", tempModFile)) {
         throw new Error("Approval was not consumed single-use");
       }
+    },
+  );
+
+  // 43b. Shader pack import uses the same validation and confinement rules.
+  await runTest(
+    "[Phase 2 Gate] Shader pack import validation and destination confinement",
+    async () => {
+      const addPathsHandler = ipcHandlers.get("shaders:addPaths")!;
+
+      let threw = false;
+      try {
+        await addPathsHandler({}, ["C:\\evil\\payload.exe"]);
+      } catch (e: any) {
+        threw = true;
+        if (!e.message.includes(".zip extension"))
+          throw new Error(`Unexpected error: ${e.message}`);
+      }
+      if (!threw)
+        throw new Error("Expected non-zip shader pack import to be rejected");
+
+      threw = false;
+      try {
+        await addPathsHandler({}, []);
+      } catch {
+        threw = true;
+      }
+      if (!threw)
+        throw new Error(
+          "Expected empty shader pack paths array to be rejected",
+        );
+
+      const removeHandler = ipcHandlers.get("shaders:remove")!;
+      threw = false;
+      try {
+        await removeHandler({}, "..\\..\\escape.zip");
+      } catch {
+        threw = true;
+      }
+      if (!threw)
+        throw new Error(
+          "Expected traversal in shader pack removal to be rejected",
+        );
     },
   );
 

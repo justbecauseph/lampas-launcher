@@ -190,10 +190,7 @@
           </div>
 
           <!-- Logged out state: Portal Login -->
-          <button
-            id="btn-login"
-            class="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-3 rounded-2xl text-xs shadow-md cursor-pointer transition-all"
-          >
+          <button id="btn-login" class="btn-login">
             <svg
               class="w-4 h-4"
               fill="none"
@@ -207,7 +204,7 @@
                 d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"
               />
             </svg>
-            <span>Log In with Portal</span>
+            <span id="btn-login-text">Log in</span>
           </button>
         </div>
       </aside>
@@ -215,248 +212,152 @@
       <!-- Main Viewport -->
       <main class="main-viewport">
         <!-- TAB 1: PLAY SCREEN -->
-        <section id="tab-play" class="tab-content justify-between space-y-6">
-          <!-- Hero Server Banner -->
-          <div
-            class="hero-banner rounded-3xl p-6 relative overflow-hidden border border-slate-800"
-          >
-            <div class="flex items-center justify-between">
-              <div>
-                <div class="flex items-center gap-2 mb-2">
-                  <span class="status-indicator"></span>
-                  <span
-                    id="server-status-text"
-                    class="text-xs font-bold text-emerald-400 font-mono"
-                    >Lampas SMP Online</span
-                  >
-                </div>
-                <h1 class="text-3xl font-black text-white tracking-tight">
-                  Lampas 2
-                </h1>
-                <p class="text-xs text-slate-400 mt-1">
-                  Deterministic Modpack Pipeline • Fabric 26.2 • OpenJDK 25
+        <section id="tab-play" class="tab-content play-screen">
+          <div class="play-hero">
+            <div class="play-identity">
+              <img src="assets/lampas.png" alt="" class="play-hero-logo" />
+              <div class="min-w-0">
+                <h1 class="play-title">Lampas 2</h1>
+                <p class="play-subtitle">
+                  Survival SMP · Minecraft
+                  <span id="runtime-minecraft-version">26.2</span>
                 </p>
               </div>
-
-              <!-- Channel Selector -->
-              <div
-                class="bg-slate-950/80 border border-slate-800 p-1 rounded-2xl flex items-center gap-1"
-              >
-                <button class="channel-btn active" data-channel="stable">
-                  Stable
-                </button>
-                <button class="channel-btn" data-channel="beta">Beta</button>
-                <button class="channel-btn" data-channel="dev">Dev</button>
-              </div>
             </div>
-          </div>
 
-          <!-- Live server presence (informational; never blocks Play) -->
-          <section
-            id="server-presence"
-            class="server-presence"
-            aria-live="polite"
-            aria-label="Lampas server status"
-          >
-            <div class="server-presence-heading">
-              <div class="flex items-center gap-2 min-w-0">
+            <!-- Live server presence (informational; never blocks Play) -->
+            <section
+              id="server-presence"
+              class="server-presence"
+              aria-live="polite"
+              aria-label="Lampas server status"
+            >
+              <div class="presence-summary">
                 <span
                   id="server-presence-dot"
                   class="presence-dot presence-dot-unknown"
                   aria-hidden="true"
                 ></span>
                 <span id="server-presence-state" class="presence-state"
-                  >STATUS UNAVAILABLE</span
+                  >Status unavailable</span
+                >
+                <span class="presence-sep" aria-hidden="true">·</span>
+                <span id="server-presence-count" class="presence-count"
+                  >— players</span
                 >
               </div>
-              <span id="server-presence-count" class="presence-count"
-                >— players</span
-              >
-            </div>
-            <p id="server-presence-detail" class="server-presence-detail">
-              Unable to verify server status right now. You can still launch.
-            </p>
-            <div
-              id="server-presence-players"
-              class="presence-players"
-              aria-label="Players currently online"
-            ></div>
-          </section>
+              <div
+                id="server-presence-players"
+                class="presence-players"
+                aria-label="Players currently online"
+              ></div>
+              <p id="server-presence-detail" class="server-presence-detail">
+                Unable to verify server status right now. You can still launch.
+              </p>
+            </section>
 
-          <!-- Quick Spec Cards -->
-          <div class="grid grid-cols-3 gap-4">
-            <div
-              class="p-4 rounded-2xl border border-slate-800/80 bg-slate-900/40 flex flex-col justify-between"
-            >
-              <span
-                class="text-[10px] uppercase font-bold text-slate-500 tracking-wider"
-                >Engine</span
-              >
-              <div class="flex items-baseline gap-2 mt-2">
-                <span
-                  id="runtime-loader-type"
-                  class="text-sm font-bold text-white"
-                  >Fabric Loader</span
-                >
-                <span
-                  id="runtime-loader-version"
-                  class="text-xs font-mono text-cyan-400"
-                  >—</span
-                >
-              </div>
-            </div>
-            <div
-              class="p-4 rounded-2xl border border-slate-800/80 bg-slate-900/40 flex flex-col justify-between"
-            >
-              <span
-                class="text-[10px] uppercase font-bold text-slate-500 tracking-wider"
-                >Game Version</span
-              >
-              <div class="flex items-baseline gap-2 mt-2">
-                <span class="text-sm font-bold text-white">Minecraft</span>
-                <span
-                  id="runtime-minecraft-version"
-                  class="text-xs font-mono text-indigo-400"
-                  >26.2</span
-                >
-              </div>
-            </div>
-            <div
-              class="p-4 rounded-2xl border border-slate-800/80 bg-slate-900/40 flex flex-col justify-between"
-            >
-              <span
-                class="text-[10px] uppercase font-bold text-slate-500 tracking-wider"
-                >Integrity</span
-              >
-              <div class="flex items-baseline gap-2 mt-2">
-                <span class="text-sm font-bold text-white">SHA-256</span>
-                <span class="text-xs font-mono text-emerald-400">Verified</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Action & Launch Bar -->
-          <div class="space-y-4 pt-2">
-            <!-- Progress Bar (hidden by default) -->
-            <div id="progress-container" class="hidden space-y-2">
-              <div class="flex items-center justify-between text-xs font-mono">
-                <span
-                  id="progress-msg"
-                  class="text-cyan-400 font-medium truncate max-w-[80%]"
-                  >Synchronizing pack...</span
-                >
-                <span id="progress-percent" class="text-slate-400 font-bold"
-                  >0%</span
-                >
-              </div>
-              <div class="progress-track">
-                <div
-                  id="progress-fill"
-                  class="progress-fill"
-                  style="width: 0%"
-                ></div>
-              </div>
-            </div>
-
-            <!-- Bottom Controls Bar -->
-            <div
-              class="flex items-center justify-between gap-4 border-t border-slate-900 pt-5 pb-4"
-            >
-              <!-- Memory & Settings Quick View -->
-              <div class="flex items-center gap-6">
-                <div class="flex flex-col">
-                  <span
-                    class="text-[10px] uppercase font-bold text-slate-500 tracking-wider"
-                    >Memory Allocation</span
-                  >
-                  <span
-                    id="ram-display"
-                    class="text-xs font-bold font-mono text-white"
-                    >4 GB RAM</span
-                  >
-                </div>
-                <div class="flex flex-col">
-                  <span
-                    class="text-[10px] uppercase font-bold text-slate-500 tracking-wider"
-                    >Game Directory</span
-                  >
-                  <div class="flex items-center gap-2">
-                    <span
-                      id="gamedir-display"
-                      class="text-xs font-mono text-slate-300 truncate max-w-[220px]"
-                      >.minecraft-lampas</span
-                    >
-                    <button
-                      id="btn-open-gamedir"
-                      class="icon-btn text-slate-400 hover:text-cyan-400"
-                      title="Open Game Directory in File Explorer"
-                    >
-                      <svg
-                        class="w-3.5 h-3.5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Launch & Kill Controls -->
-              <div class="flex items-center gap-3">
+            <!-- Launch panel: one primary action, progress and errors inline -->
+            <div class="launch-panel">
+              <div class="launch-actions">
+                <button id="btn-play" class="btn-play">
+                  <span id="btn-play-spinner" class="spinner hidden"></span>
+                  <span id="btn-play-text">PLAY</span>
+                </button>
                 <button
                   id="btn-stop"
                   class="btn-stop hidden"
-                  title="Force Terminate Game"
+                  title="Force-close Minecraft"
                 >
-                  <svg
-                    class="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                  <span>STOP GAME</span>
+                  Stop
                 </button>
+              </div>
 
-                <div class="flex flex-col items-center">
-                  <button
-                    id="btn-play"
-                    class="btn-play shadow-lg cursor-pointer"
+              <div
+                id="progress-container"
+                class="launch-progress hidden"
+                aria-live="polite"
+              >
+                <div class="launch-progress-row">
+                  <span id="progress-msg" class="launch-progress-msg"
+                    >Checking for updates…</span
                   >
-                    <span
-                      id="btn-play-spinner"
-                      class="spinner hidden mr-2"
-                    ></span>
-                    <span id="btn-play-text">PLAY</span>
-                  </button>
+                  <span id="progress-percent" class="launch-progress-percent"
+                    >0%</span
+                  >
+                </div>
+                <div class="progress-track">
                   <div
-                    id="play-target-container"
-                    class="hidden flex items-center gap-1 text-[10px] text-slate-400 font-mono mt-1"
+                    id="progress-fill"
+                    class="progress-fill"
+                    style="width: 0%"
+                  ></div>
+                </div>
+              </div>
+
+              <p id="play-target-container" class="launch-target hidden">
+                Joins <span id="play-target-server"></span> automatically
+              </p>
+
+              <div id="launch-error" class="launch-error hidden" role="alert">
+                <div class="min-w-0">
+                  <p class="launch-error-title">Minecraft didn't start</p>
+                  <p id="launch-error-msg" class="launch-error-msg"></p>
+                </div>
+                <div class="launch-error-actions">
+                  <button
+                    id="btn-launch-error-logs"
+                    class="btn-secondary"
+                    type="button"
                   >
-                    <span>Connecting to:</span>
-                    <span
-                      id="play-target-server"
-                      class="text-cyan-400 font-semibold"
-                    ></span>
-                  </div>
+                    View logs
+                  </button>
+                  <button
+                    id="btn-launch-error-repair"
+                    class="btn-secondary"
+                    type="button"
+                  >
+                    Repair &amp; retry
+                  </button>
                 </div>
               </div>
             </div>
           </div>
+
+          <footer class="play-footer">
+            <span class="play-footer-item">
+              <span class="play-footer-label">Memory</span>
+              <span id="ram-display">4 GB RAM</span>
+            </span>
+            <span class="play-footer-item min-w-0">
+              <span class="play-footer-label">Folder</span>
+              <span id="gamedir-display" class="truncate"
+                >.minecraft-lampas</span
+              >
+              <button
+                id="btn-open-gamedir"
+                class="icon-btn"
+                title="Open game folder"
+                aria-label="Open game folder"
+              >
+                <svg
+                  class="w-3.5 h-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                  />
+                </svg>
+              </button>
+            </span>
+            <button id="btn-play-settings" class="link-btn" type="button">
+              Change in Settings
+            </button>
+          </footer>
         </section>
 
         <!-- TAB 2: MODPACK INFO -->
@@ -493,7 +394,7 @@
                     d="M12 4v16m8-8H4"
                   />
                 </svg>
-                <span>Add local mods</span>
+                <span id="btn-add-mods-label">Add local mods</span>
               </button>
               <button
                 id="btn-repair-pack"
@@ -599,7 +500,7 @@
                 <button class="mod-filter-pill" data-filter="disabled">
                   Disabled
                 </button>
-                |
+                <span class="pill-divider" aria-hidden="true"></span>
                 <button class="mod-filter-pill" data-filter="optimization">
                   Optimization
                 </button>
@@ -615,7 +516,7 @@
                 <button class="mod-filter-pill" data-filter="utility">
                   Utility
                 </button>
-                |
+                <span class="pill-divider" aria-hidden="true"></span>
                 <button class="mod-filter-pill" data-filter="both">
                   Required
                 </button>
@@ -626,18 +527,21 @@
                 class="mod-drop-zone flex items-center justify-between flex-shrink-0"
               >
                 <div class="flex items-center gap-3">
-                  <div class="drop-mark">JAR</div>
+                  <div id="drop-mark" class="drop-mark">JAR</div>
                   <div>
-                    <div class="text-xs font-bold text-slate-200">
+                    <div
+                      id="drop-title"
+                      class="text-xs font-bold text-slate-200"
+                    >
                       Drop client mod JARs here
                     </div>
-                    <div class="text-[10px] text-slate-500">
+                    <div id="drop-hint" class="text-[11px] text-slate-500">
                       Local additions stay yours and are never removed by
                       synchronization.
                     </div>
                   </div>
                 </div>
-                <span class="badge">LOCAL OVERRIDES</span>
+                <span class="badge">or click to browse</span>
               </div>
 
               <!-- Mod List Grid: flex-1 fills remaining height cleanly! -->
@@ -805,36 +709,33 @@
           id="tab-settings"
           class="tab-content hidden flex-col flex-1 min-h-0 space-y-4"
         >
-          <div class="flex-shrink-0">
-            <h2 class="text-xl font-extrabold text-white tracking-tight">
-              Launcher Settings
-            </h2>
-            <p class="text-xs text-slate-400 mt-1">
-              Configure performance, Java launch behavior, and pipeline access.
-            </p>
+          <div class="flex items-end justify-between flex-shrink-0">
+            <div>
+              <h2 class="text-xl font-extrabold text-white tracking-tight">
+                Settings
+              </h2>
+              <p class="text-xs text-slate-400 mt-1">
+                Changes save automatically.
+              </p>
+            </div>
+            <span
+              id="settings-saved"
+              class="saved-indicator"
+              aria-live="polite"
+            ></span>
           </div>
 
           <div class="flex-1 min-h-0 overflow-y-auto space-y-5 pr-1 pb-6">
-            <!-- Game & Performance Settings -->
-            <div
-              class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5"
-            >
-              <h3
-                class="text-sm font-bold text-white border-b border-slate-800 pb-3"
-              >
-                Performance & Directory
-              </h3>
+            <!-- Game -->
+            <div class="settings-card">
+              <h3 class="settings-card-title">Game</h3>
 
               <div class="space-y-3">
                 <div class="flex items-center justify-between">
-                  <label
-                    for="ram-slider"
-                    class="text-xs font-bold text-slate-300"
-                    >RAM Allocation</label
+                  <label for="ram-slider" class="settings-label"
+                    >Memory (RAM)</label
                   >
-                  <span id="setting-ram-val" class="badge text-cyan-400"
-                    >4 GB</span
-                  >
+                  <span id="setting-ram-val" class="settings-value">4 GB</span>
                 </div>
                 <input
                   id="ram-slider"
@@ -855,47 +756,122 @@
                   <span style="--range-position: 71.4286%">12 GB</span>
                   <span style="--range-position: 100%">16 GB</span>
                 </div>
+                <p id="ram-hint" class="settings-help">
+                  6–8 GB suits most computers. Don't use more than half of your
+                  computer's memory.
+                </p>
               </div>
 
-              <div class="space-y-2 pt-2 border-t border-slate-800/80">
-                <label
-                  for="setting-gamedir-input"
-                  class="text-xs font-bold text-slate-300"
-                  >Game Installation Directory</label
+              <div class="settings-row">
+                <label for="setting-gamedir-input" class="settings-label"
+                  >Game folder</label
                 >
                 <div class="flex items-center gap-2">
                   <input
                     id="setting-gamedir-input"
                     type="text"
                     readonly
-                    class="input-field cursor-not-allowed opacity-80 text-slate-400"
+                    class="input-field text-slate-400"
                   />
                   <button
                     id="btn-settings-open-dir"
                     class="btn-secondary whitespace-nowrap"
                     type="button"
                   >
-                    <span>Open Folder</span>
+                    <span>Open</span>
                   </button>
                   <button
                     id="btn-settings-move-dir"
-                    class="btn-secondary whitespace-nowrap text-cyan-400 hover:border-cyan-500/50"
+                    class="btn-secondary whitespace-nowrap"
                     type="button"
                   >
-                    <span>Move Installation…</span>
+                    <span>Move…</span>
                   </button>
                 </div>
               </div>
 
-              <div class="space-y-2 pt-2 border-t border-slate-800/80">
-                <div class="flex items-center justify-between">
+              <div class="settings-row flex items-center justify-between gap-4">
+                <div>
                   <label
-                    for="setting-java-args"
-                    class="text-xs font-bold text-slate-300"
-                    >Custom Java arguments</label
+                    for="setting-external-images"
+                    class="settings-label cursor-pointer"
+                    >Show player avatars and mod icons</label
                   >
-                  <span class="badge">ADVANCED</span>
+                  <p class="settings-help">
+                    Loads skins and mod icons from approved image services. Turn
+                    off to show initials instead.
+                  </p>
                 </div>
+                <label class="toggle-switch mod-switch">
+                  <input id="setting-external-images" type="checkbox" />
+                  <span></span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Troubleshooting -->
+            <div class="settings-card">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <h3 class="settings-card-title">Something not working?</h3>
+                  <p class="settings-help">
+                    Re-checks every game file, library and the Java runtime, and
+                    re-downloads anything that's missing or damaged.
+                  </p>
+                </div>
+                <button
+                  id="btn-repair-settings"
+                  class="btn-secondary whitespace-nowrap"
+                >
+                  <span>Repair game files</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Advanced -->
+            <details class="settings-card settings-advanced">
+              <summary class="settings-card-title">Advanced</summary>
+
+              <div class="settings-row">
+                <span class="settings-label">Release channel</span>
+                <div
+                  class="channel-group"
+                  role="group"
+                  aria-label="Release channel"
+                >
+                  <button class="channel-btn active" data-channel="stable">
+                    Stable
+                  </button>
+                  <button class="channel-btn" data-channel="beta">Beta</button>
+                  <button class="channel-btn" data-channel="dev">Dev</button>
+                </div>
+                <p class="settings-help">
+                  Beta and Dev get pack changes early and may be unstable.
+                </p>
+              </div>
+
+              <div class="settings-row flex items-center justify-between gap-4">
+                <div>
+                  <label
+                    for="setting-nosync"
+                    class="settings-label cursor-pointer"
+                    >Skip pack updates (No Sync)</label
+                  >
+                  <p class="settings-help">
+                    Launch with the files already on disk. You may be unable to
+                    join the server if the pack has changed.
+                  </p>
+                </div>
+                <label class="toggle-switch mod-switch">
+                  <input id="setting-nosync" type="checkbox" />
+                  <span></span>
+                </label>
+              </div>
+
+              <div class="settings-row">
+                <label for="setting-java-args" class="settings-label"
+                  >Custom Java arguments</label
+                >
                 <textarea
                   id="setting-java-args"
                   rows="3"
@@ -903,28 +879,15 @@
                   class="input-field java-args-field"
                   placeholder="-Dexample=value -XX:+UseStringDeduplication"
                 ></textarea>
-                <p class="text-[11px] text-slate-500">
-                  Passed to Java after the launcher's memory and GC defaults.
-                  Use quotes around values containing spaces.
+                <p class="settings-help">
+                  Added after the launcher's memory and GC defaults. Quote
+                  values that contain spaces.
                 </p>
               </div>
-            </div>
 
-            <!-- Auth & Pipeline Settings -->
-            <div
-              class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5"
-            >
-              <h3
-                class="text-sm font-bold text-white border-b border-slate-800 pb-3"
-              >
-                Network & Modpack Pipeline
-              </h3>
-
-              <div class="space-y-2">
-                <label
-                  for="setting-portal"
-                  class="text-xs font-bold text-slate-300"
-                  >Portal API Endpoint</label
+              <div class="settings-row">
+                <label for="setting-portal" class="settings-label"
+                  >Portal API endpoint</label
                 >
                 <input
                   id="setting-portal"
@@ -932,123 +895,24 @@
                   placeholder="https://dev.lampas.town"
                   class="input-field"
                 />
-                <p class="text-[11px] text-slate-500">
-                  The remote portal URL for API queries and authentication.
+                <p class="settings-help">
+                  Used for sign-in and pack updates. Only change this if the
+                  Lampas team asks you to.
                 </p>
               </div>
+            </details>
 
-              <div class="space-y-2 pt-2 border-t border-slate-800/80">
-                <div class="flex items-center justify-between">
-                  <div>
-                    <div class="flex items-center gap-2">
-                      <label
-                        for="setting-nosync"
-                        class="text-xs font-bold text-slate-300 cursor-pointer"
-                        >No Sync</label
-                      >
-                      <span
-                        class="badge text-amber-400 border-amber-500/30 bg-amber-950/40"
-                        >SKIP PIPELINE</span
-                      >
-                    </div>
-                    <p class="text-[11px] text-slate-500 mt-0.5">
-                      Skip modpack update checks and file synchronization on
-                      launch. Uses existing local files.
-                    </p>
-                  </div>
-                  <label
-                    class="toggle-switch mod-switch"
-                    title="Toggle No Sync (Off by default)"
-                  >
-                    <input id="setting-nosync" type="checkbox" />
-                    <span></span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="space-y-2 pt-2 border-t border-slate-800/80">
-                <div class="flex items-center justify-between">
-                  <div>
-                    <label
-                      for="setting-external-images"
-                      class="text-xs font-bold text-slate-300 cursor-pointer"
-                      >External profile and mod images</label
-                    >
-                    <p class="text-[11px] text-slate-500 mt-0.5">
-                      Fetch approved avatar and mod icons through the launcher.
-                      Off by default.
-                    </p>
-                  </div>
-                  <label
-                    class="toggle-switch mod-switch"
-                    title="Allow approved external cosmetic images"
-                  >
-                    <input id="setting-external-images" type="checkbox" />
-                    <span></span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <!-- Maintenance & Diagnostics -->
-            <div
-              class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4"
-            >
-              <div class="flex items-center justify-between">
-                <div>
-                  <h3 class="text-sm font-bold text-white">
-                    Maintenance & File Repair
-                  </h3>
-                  <p class="text-[11px] text-slate-400 mt-0.5">
-                    Force verification of all asset objects, and Java 25
-                    runtime.
-                  </p>
-                </div>
-                <button
-                  id="btn-repair-settings"
-                  class="btn-secondary text-cyan-400 hover:border-cyan-500/50 flex items-center gap-2 whitespace-nowrap"
-                >
-                  <svg
-                    class="w-3.5 h-3.5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                    />
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                    />
-                  </svg>
-                  <span>Repair Game Files</span>
-                </button>
-              </div>
-            </div>
-
-            <div class="flex justify-end pt-2 pb-6">
-              <button id="btn-save-settings" class="btn-primary">
-                <svg
-                  class="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
-                <span>Save Settings</span>
-              </button>
+            <!-- About -->
+            <div class="settings-card">
+              <h3 class="settings-card-title">About</h3>
+              <dl class="about-grid">
+                <dt>Launcher</dt>
+                <dd id="about-launcher-version">—</dd>
+                <dt>Minecraft</dt>
+                <dd id="about-minecraft-version">—</dd>
+                <dt>Fabric Loader</dt>
+                <dd id="runtime-loader-version">—</dd>
+              </dl>
             </div>
           </div>
         </section>

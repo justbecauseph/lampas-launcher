@@ -70,6 +70,16 @@ const api: LampasApi = {
     removeCustom: (filename: string) =>
       ipcRenderer.invoke("mods:removeCustom", filename),
   },
+  shaders: {
+    browseAndAdd: () => ipcRenderer.invoke("shaders:browseAndAdd"),
+    addDropped: (files: File[]) =>
+      ipcRenderer.invoke(
+        "shaders:addPaths",
+        files.map((file) => webUtils.getPathForFile(file)),
+      ),
+    remove: (filename: string) =>
+      ipcRenderer.invoke("shaders:remove", filename),
+  },
   game: {
     launch: (): Promise<boolean> => ipcRenderer.invoke("game:launch"),
     kill: (): Promise<void> => ipcRenderer.invoke("game:kill"),

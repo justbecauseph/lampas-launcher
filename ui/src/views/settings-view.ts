@@ -53,9 +53,9 @@ export function initSettingsView(options: SettingsViewOptions): {
   const btnRepairSettings = document.getElementById(
     "btn-repair-settings",
   ) as HTMLButtonElement | null;
-  const btnSaveSettings = document.getElementById(
-    "btn-save-settings",
-  ) as HTMLButtonElement | null;
+  const settingsSaved = document.getElementById(
+    "settings-saved",
+  ) as HTMLElement | null;
   const settingPortal = document.getElementById(
     "setting-portal",
   ) as HTMLInputElement | null;
@@ -140,7 +140,18 @@ export function initSettingsView(options: SettingsViewOptions): {
 
   let currentConfig: RendererSettingsDto | null = null;
   let pendingMoveTargetPath = "";
+  let savedTimer: ReturnType<typeof setTimeout> | null = null;
   const disposers: Array<() => void> = [];
+
+  function flashSaved(): void {
+    if (!settingsSaved) return;
+    settingsSaved.innerText = "Saved";
+    settingsSaved.classList.add("visible");
+    if (savedTimer) clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => {
+      settingsSaved.classList.remove("visible");
+    }, 1800);
+  }
 
   function updateGameDirUI(dir: string): void {
     if (gamedirDisplay) gamedirDisplay.innerText = dir;
@@ -160,6 +171,8 @@ export function initSettingsView(options: SettingsViewOptions): {
     });
     if (titlebarChannelBadge) {
       titlebarChannelBadge.innerText = channel.toUpperCase();
+      if (channel === "stable") titlebarChannelBadge.classList.add("hidden");
+      else titlebarChannelBadge.classList.remove("hidden");
     }
   }
 
@@ -280,14 +293,18 @@ export function initSettingsView(options: SettingsViewOptions): {
 
   // RAM Slider change
   if (ramSlider) {
-    ramSlider.addEventListener("input", async () => {
+    ramSlider.addEventListener("input", () => {
       const val = parseInt(ramSlider.value, 10);
       if (ramDisplay) ramDisplay.innerText = `${val} GB RAM`;
       if (settingRamVal) settingRamVal.innerText = `${val} GB`;
+    });
+    ramSlider.addEventListener("change", async () => {
+      const val = parseInt(ramSlider.value, 10);
       try {
         const updated = await window.lampas.config.set({ allocatedRamGb: val });
         currentConfig = updated;
         onConfigChanged(updated);
+        flashSaved();
       } catch (err: any) {
         showToast(
           `Could not update RAM allocation: ${formatFriendlyError(err)}`,
@@ -333,7 +350,10 @@ export function initSettingsView(options: SettingsViewOptions): {
         updateNoSyncUI(nextVal);
         currentConfig = updated;
         onConfigChanged(updated);
-        showToast(`No-Sync mode ${nextVal ? "enabled" : "disabled"}.`, "info");
+        flashSaved();
+        if (nextVal) {
+          showToast("Pack updates will be skipped when you launch.", "info");
+        }
       } catch (err: any) {
         showToast(
           `Could not update No-Sync setting: ${formatFriendlyError(err)}`,
@@ -358,10 +378,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         });
         currentConfig = updated;
         onConfigChanged(updated);
-        showToast(
-          `External images ${updated.externalImages ? "enabled" : "disabled"}.`,
-          "info",
-        );
+        flashSaved();
       } catch (err: any) {
         settingExternalImages.checked = Boolean(currentConfig?.externalImages);
         showToast(
@@ -560,7 +577,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         });
         currentConfig = updated;
         onConfigChanged(updated);
-        showToast("Portal URL updated.", "info");
+        flashSaved();
       } catch (err: any) {
         showToast(
           `Could not save portal URL: ${formatFriendlyError(err)}`,
@@ -578,48 +595,10 @@ export function initSettingsView(options: SettingsViewOptions): {
         });
         currentConfig = updated;
         onConfigChanged(updated);
-        showToast("JVM arguments updated.", "info");
+        flashSaved();
       } catch (err: any) {
         showToast(
           `Could not save JVM arguments: ${formatFriendlyError(err)}`,
-          "error",
-        );
-      }
-    };
-  }
-
-  if (btnSaveSettings) {
-    btnSaveSettings.onclick = async () => {
-      try {
-        const ram = ramSlider
-          ? parseInt(ramSlider.value, 10)
-          : currentConfig?.allocatedRamGb || 4;
-        const portalUrl =
-          settingPortal?.value?.trim() ||
-          currentConfig?.portalUrl ||
-          "https://dev.lampas.town";
-        const javaArgs = settingJavaArgs?.value?.trim() || "";
-        const noSync =
-          settingNoSync && "checked" in settingNoSync
-            ? Boolean(settingNoSync.checked)
-            : Boolean(currentConfig?.noSync);
-        const externalImages =
-          settingExternalImages?.checked ??
-          Boolean(currentConfig?.externalImages);
-
-        const updated = await window.lampas.config.set({
-          allocatedRamGb: ram,
-          portalUrl,
-          javaArgs,
-          noSync,
-          externalImages,
-        });
-        currentConfig = updated;
-        onConfigChanged(updated);
-        showToast("Settings saved successfully!", "success");
-      } catch (err: any) {
-        showToast(
-          `Could not save settings: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -656,6 +635,7 @@ export function initSettingsView(options: SettingsViewOptions): {
     initSettings,
     checkInitialGameDir,
     dispose: () => {
+      if (savedTimer) clearTimeout(savedTimer);
       disposers.forEach((d) => d());
     },
   };
