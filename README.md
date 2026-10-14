@@ -3,9 +3,8 @@
 > **The zero-braincells, 1-click way to play Lampas SMP.**  
 > No Prism, no CurseForge, no _"hey why is my mod version different than the server"_ pain. Just click **PLAY** and jump straight in! 🚀
 
-<a href="https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct"><img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get it from Microsoft" width="200"/></a>
-
-On Linux, or want a portable `.exe`? Grab it from [**GitHub Releases**](https://github.com/justbecauseph/lampas-launcher/releases/latest).
+[![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-Get%20it-0078D4?style=for-the-badge&logo=microsoft&logoColor=white)](https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct)
+[![Linux & Portable](https://img.shields.io/github/v/release/justbecauseph/lampas-launcher?label=Linux%20%26%20Portable&style=for-the-badge&color=2ea44f&logo=github)](https://github.com/justbecauseph/lampas-launcher/releases/latest)
 
 ---
 
