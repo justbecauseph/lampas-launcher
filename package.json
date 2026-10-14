@@ -84,6 +84,12 @@
       "assets/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "ui/assets/fonts/LICENSE.txt",
+        "to": "licenses/fonts-LICENSE.txt"
+      }
+    ],
     "win": {
       "icon": "assets/lampas.png",
       "artifactName": "LampasLauncher-${version}-Windows.${ext}",
