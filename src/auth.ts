@@ -16,6 +16,7 @@ import {
 import type { UserProfile } from "./types";
 import { LauncherLogger } from "./logger";
 import { OperationConflictError, UserCancelledError } from "./ipc-boundary";
+import { renderErrorHtml, renderSuccessHtml } from "./callback-page";
 
 export const LOGIN_TIMEOUT_MS = 120_000; // 120 seconds (2 minutes) timeout
 
@@ -32,76 +33,6 @@ function generatePkce() {
   const hash = createHash("sha256").update(verifier).digest();
   const challenge = base64Url(hash);
   return { verifier, challenge };
-}
-
-function renderSuccessHtml(): string {
-  return `<!DOCTYPE html>
-<html>
-  <head>
-    <title>Lampas Launcher - Logged In</title>
-    <style>
-      body { background: #030712; color: #f9fafb; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-      .card { background: #111827; border: 1px solid #1f2937; padding: 2.5rem; border-radius: 1.5rem; text-align: center; max-width: 400px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
-      .check { color: #10b981; font-size: 3rem; margin-bottom: 0.5rem; }
-      h2 { margin: 0 0 0.5rem 0; font-size: 1.25rem; font-weight: 700; }
-      p { color: #9ca3af; font-size: 0.875rem; margin: 0; }
-      .countdown { margin-top: 1.25rem; font-size: 0.75rem; color: #64748b; font-family: monospace; }
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <div class="check">✓</div>
-      <h2>Logged in to Lampas!</h2>
-      <p>You can close this tab and return to the launcher.</p>
-      <div id="timer" class="countdown">Closing in 5 seconds...</div>
-    </div>
-    <script>
-      let remaining = 5;
-      const timerEl = document.getElementById("timer");
-      const countdownInterval = setInterval(() => {
-        remaining--;
-        if (timerEl && remaining > 0) {
-          timerEl.innerText = "Closing in " + remaining + " second" + (remaining === 1 ? "" : "s") + "...";
-        }
-        if (remaining <= 0) {
-          clearInterval(countdownInterval);
-          window.close();
-          // Browsers only let a script close tabs that a script opened. This tab
-          // came from shell.openExternal and a cross-origin redirect, so
-          // window.close() is usually a no-op; tell the user to close it.
-          setTimeout(() => {
-            if (timerEl) timerEl.innerText = "You can close this tab now.";
-          }, 250);
-        }
-      }, 1000);
-    </script>
-  </body>
-</html>`;
-}
-
-function renderErrorHtml(
-  message: string = "Authentication failed. Please return to the launcher and try again.",
-): string {
-  return `<!DOCTYPE html>
-<html>
-  <head>
-    <title>Lampas Launcher - Authentication Error</title>
-    <style>
-      body { background: #030712; color: #f9fafb; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-      .card { background: #111827; border: 1px solid #1f2937; padding: 2.5rem; border-radius: 1.5rem; text-align: center; max-width: 400px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
-      .err { color: #ef4444; font-size: 3rem; margin-bottom: 0.5rem; }
-      h2 { margin: 0 0 0.5rem 0; font-size: 1.25rem; font-weight: 700; }
-      p { color: #9ca3af; font-size: 0.875rem; margin: 0; }
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <div class="err">✕</div>
-      <h2>Authentication Error</h2>
-      <p>${message}</p>
-    </div>
-  </body>
-</html>`;
 }
 
 interface LoginOperationContext {
