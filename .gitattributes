@@ -1,0 +1,3 @@
+# Check text files out with LF on every platform, matching .prettierrc
+# ("endOfLine": "lf"); Git for Windows defaults to core.autocrlf=true.
+* text=auto eol=lf
