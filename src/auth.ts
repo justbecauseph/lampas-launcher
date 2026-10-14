@@ -106,6 +106,17 @@ export class LauncherAuth {
       let exchanged = false;
       const abortController = new AbortController();
       const clientSockets = new Set<net.Socket>();
+      // Sockets carrying a final page written just before an immediate abort.
+      const pageSockets = new Set<net.Socket>();
+      let closeServerWhenIdle = false;
+      let serverClosed = false;
+      const closeServer = () => {
+        if (serverClosed) return;
+        serverClosed = true;
+        try {
+          server.close();
+        } catch {}
+      };
 
       const settleOnce = (
         result:
@@ -125,10 +136,6 @@ export class LauncherAuth {
           LauncherAuth.activeLoginContext = null;
         }
 
-        try {
-          server.close();
-        } catch {}
-
         // Separate immediate logical settlement from bounded transport cleanup:
         // Immediate termination reasons (cancelled, timeout, superseded, shutdown):
         // Destroy client sockets immediately so aborted / hung operations terminate.
@@ -141,12 +148,21 @@ export class LauncherAuth {
 
         if (isImmediateAbort) {
           for (const socket of clientSockets) {
+            // A socket still sending this login's final page is left to the
+            // fallback timer below; destroying it would cut the page off.
+            if (pageSockets.has(socket)) continue;
             try {
               socket.destroy();
             } catch {}
+            clientSockets.delete(socket);
           }
-          clientSockets.clear();
-        } else {
+        }
+        // Stop listening once the remaining sockets have closed. Closing the
+        // server earlier cuts off a page that is still sending under Bun's
+        // node:http; requests that arrive meanwhile hit the terminal barrier.
+        closeServerWhenIdle = true;
+        if (clientSockets.size === 0) closeServer();
+        if (clientSockets.size > 0) {
           // Intentional terminal response delivery (200 success, 409 conflict, etc.):
           // All HTTP responses set 'Connection: close' and call res.end(). Node's HTTP engine owns
           // transmission and graceful socket closure. We do NOT call socket.end() here.
@@ -158,6 +174,7 @@ export class LauncherAuth {
               } catch {}
             }
             clientSockets.clear();
+            closeServer();
           }, 1000);
           if (lingeringTimer.unref) lingeringTimer.unref();
         }
@@ -326,6 +343,7 @@ export class LauncherAuth {
                 "Authentication session was superseded or cancelled.",
               ),
             );
+            pageSockets.add(req.socket);
             opContext.terminate(
               "superseded",
               new Error(
@@ -488,6 +506,7 @@ export class LauncherAuth {
                 "Authentication session was superseded or cancelled.",
               ),
             );
+            pageSockets.add(req.socket);
             opContext.terminate(
               "superseded",
               new Error(
@@ -553,7 +572,10 @@ export class LauncherAuth {
 
       server.on("connection", (socket) => {
         clientSockets.add(socket);
-        socket.once("close", () => clientSockets.delete(socket));
+        socket.once("close", () => {
+          clientSockets.delete(socket);
+          if (closeServerWhenIdle && clientSockets.size === 0) closeServer();
+        });
       });
 
       server.on("error", (err: any) => {
