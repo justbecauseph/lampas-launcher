@@ -84,7 +84,8 @@ jobs:
             release/*.cdx.json
             release/SHA256SUMS-*.txt
           if-no-files-found: error
-          retention-days: 7
+          # Tag builds keep the Windows AppX for 90 days so a manual Store publish can use it later.
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest' && 90 || 7 }}
 
   release:
     name: Verify and publish release artifacts
@@ -138,7 +139,6 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           RELEASE_URL: ${{ steps.release.outputs.url }}
-          STORE_PUBLISH_ENABLED: ${{ vars.ENABLE_STORE_PUBLISH == 'true' }}
         run: |
           set -euo pipefail
           if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
@@ -157,15 +157,12 @@ jobs:
             --slurpfile assets "$assets" \
             --arg tag "$TAG" \
             --arg url "$RELEASE_URL" \
-            --arg store "$STORE_PUBLISH_ENABLED" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '
             (if ($notes | length) == 0 then "Release notes: see the release page."
              elif ($notes | length) > 1500 then $notes[0:1500] + "..."
              else $notes end) as $body
-            | (if $store == "true"
-               then "Microsoft Store: submission enabled. The AppX is sent to Partner Center after this release publishes."
-               else "Microsoft Store: submission disabled for this release." end) as $store_line
+            | "Microsoft Store: submission is checked after this release publishes (skipped if a submission is still in certification)." as $store_line
             | ($assets[0] // []) as $files
             | ([
                 ($files[] | select(.name | test("^LampasLauncher-Setup-.*\\.exe$")) | "Windows installer: [" + .name + "](" + .url + ")"),
@@ -191,10 +188,20 @@ jobs:
     name: Submit to Microsoft Store
     needs: release
     runs-on: windows-latest
-    if: startsWith(github.ref, 'refs/tags/') && vars.ENABLE_STORE_PUBLISH == 'true'
+    if: startsWith(github.ref, 'refs/tags/')
+    # Shared with the manual publish in store-status.yml, so two Store submissions never overlap.
+    concurrency:
+      group: microsoft-store-submission
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
+      # The preflight script lives in this repository, so check out the tagged commit to get it.
+      - name: Checkout exact tag commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Download Windows artifacts from this run
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -208,15 +215,23 @@ jobs:
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
         with:
           version: v0.4.3
-      - name: Configure Store credentials
+      # Credentials, msstore sign-in, pending submissions, and the Store version. A skip is not a failure:
+      # the release stays published, and the Discord notice gives the reason.
+      - name: Check Store submission preflight
+        id: preflight
+        shell: bash
         env:
+          TAG: ${{ github.ref_name }}
+          ARTIFACT_DIR: release-artifacts
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
           SELLER_ID: ${{ secrets.SELLER_ID }}
-        run: msstore reconfigure --tenantId $env:AZURE_AD_TENANT_ID --sellerId $env:SELLER_ID --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID --clientSecret $env:AZURE_AD_APPLICATION_SECRET
+        run: bash .github/scripts/store-preflight.sh
       # Replaces any pending draft submission with a new one that carries this package.
       - name: Publish AppX submission
+        id: publish
+        if: steps.preflight.outputs.decision == 'submit'
         run: |
           $appx = Get-ChildItem release-artifacts -Filter *.appx | Select-Object -First 1
           if (-not $appx) { throw "No .appx artifact found" }
@@ -225,8 +240,8 @@ jobs:
           Copy-Item $appx.FullName $msix
           msstore publish $msix -id 9P9WWSV7L7RS
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Ordered before the success notice: failure() is true only when an earlier step failed, so the success
-      # notice (which can fail softly) never triggers this one.
+      # Ordered after the publish step and before the success notice: failure() is true only when an earlier step
+      # failed, so a skipped or soft-failing notice never triggers this one.
       - name: Notify Discord of Store submission failure
         if: failure()
         continue-on-error: true
@@ -259,6 +274,7 @@ jobs:
             }' > "$payload"
           curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
       - name: Notify Discord of Store submission
+        if: steps.publish.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
@@ -286,3 +302,64 @@ jobs:
               }]
             }' > "$payload"
           curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
+      # Skips are not failures. The job succeeds, and the notice names the reason and the manual publish path.
+      - name: Notify Discord of Store skip
+        if: steps.preflight.outputs.decision == 'skip'
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ github.ref_name }}
+          REASON: ${{ steps.preflight.outputs.reason }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          payload=$(mktemp)
+          jq -n \
+            --arg tag "$TAG" \
+            --arg reason "$REASON" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "Releases",
+              embeds: [{
+                title: ("Lampas Launcher " + $tag + ": Microsoft Store submission skipped — " + $reason + ". Run Actions → Microsoft Store Status → publish once certification finishes."),
+                color: 16753920,
+                description: "The GitHub release is published as usual. Nothing was sent to the Store.",
+                footer: { text: "Microsoft Store submission" },
+                timestamp: $timestamp
+              }]
+            }' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
+      - name: Summarize Store submission
+        if: always()
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          DECISION: ${{ steps.preflight.outputs.decision }}
+          REASON: ${{ steps.preflight.outputs.reason }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+        run: |
+          {
+            echo "## Microsoft Store submission for ${TAG}"
+            echo ""
+            case "$DECISION" in
+              submit)
+                if [ "$PUBLISH_OUTCOME" = "success" ]; then
+                  echo "Submitted for certification."
+                else
+                  echo "The preflight passed, but msstore publish did not complete. See the run log."
+                fi
+                ;;
+              skip)
+                echo "Skipped: $REASON."
+                echo ""
+                echo "Run Actions, Microsoft Store Status, Run workflow, action publish, once certification finishes."
+                ;;
+              *)
+                echo "The run stopped before the preflight decided. See the run log."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"

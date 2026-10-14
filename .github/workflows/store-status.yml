@@ -2,26 +2,41 @@ name: Microsoft Store Status
 
 on:
   schedule:
-    # Every 6 hours, at minute 0 UTC.
+    # Every 6 hours, at minute 0 UTC. Scheduled runs only check status.
     - cron: "0 */6 * * *"
   workflow_dispatch:
+    inputs:
+      action:
+        description: "status checks the Store. publish submits a confirmed release after every Store check passes (run from main)."
+        type: choice
+        options:
+          - status
+          - publish
+        default: status
+        required: true
+      tag:
+        description: "publish only: release tag such as v1.6.1. Leave empty to use the latest GitHub release."
+        type: string
+        default: ""
+        required: false
 
 permissions:
   contents: read
 
-# Runs queue instead of overlapping. Two overlapping runs could both miss the notice cache and post twice.
-# Cancelling is off so a run never stops between posting a notice and saving its marker.
-concurrency:
-  group: store-status
-  cancel-in-progress: false
-
 jobs:
   status:
     name: Check Microsoft Store availability
+    # Scheduled runs and manual status runs. The tag input is ignored here; only publish reads it.
+    if: github.event_name != 'workflow_dispatch' || inputs.action != 'publish'
     # ubuntu-latest: msstore-cli is cross-platform, and microsoft-store-apppublisher installs
     # MSStoreCLI-linux-<arch>.tar.gz on Linux runners (v0.4.3 publishes linux-x64). Linux minutes are cheaper.
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Overlapping status runs could both miss the notice cache and post twice. Cancelling is off so a run
+    # never stops between posting a notice and saving its marker.
+    concurrency:
+      group: store-status
+      cancel-in-progress: false
     steps:
       - name: Detect Store credentials
         id: store-credentials
@@ -314,3 +329,220 @@ jobs:
             echo "| Live notice | $(notice_result live "$POSTED_LIVE" "$LIVE_HIT") |"
             echo "| Failure notice | $(notice_result failed "$POSTED_FAILED" "$FAILED_HIT") |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Manual only, from main. It runs the same preflight as the automatic store job, but any skip is a refusal:
+  # the run fails with the reason instead of finishing green.
+  publish:
+    name: Publish a confirmed release to the Microsoft Store
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'publish' && github.ref == 'refs/heads/main'
+    # windows-latest matches the automatic store job, whose msstore publish path is proven on Windows.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    # Shared with the automatic store job in release-pack.yml, so two Store submissions never overlap.
+    concurrency:
+      group: microsoft-store-submission
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      # The preflight script is in this repository, so check out main to get it.
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Resolve the release tag
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG_INPUT" ]; then
+            tag="$TAG_INPUT"
+          else
+            tag=$(gh release view --repo "$REPO" --json tagName | jq -r .tagName)
+          fi
+          # The input is not echoed: it is user text, and the error line must not carry it.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid tag::The tag must look like vMAJOR.MINOR.PATCH, for example v1.6.1."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Check that the tag is a published release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! info=$(gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease 2>/dev/null); then
+            echo "::error title=Release not found::No GitHub release exists for $TAG."
+            exit 1
+          fi
+          if [ "$(jq -r .isDraft <<<"$info")" != "false" ]; then
+            echo "::error title=Release is a draft::$TAG is a draft, so it is not a published release."
+            exit 1
+          fi
+          if [ "$(jq -r .isPrerelease <<<"$info")" != "false" ]; then
+            echo "::error title=Release is a prerelease::$TAG is a prerelease. Only full releases are published."
+            exit 1
+          fi
+          sha=$(gh api "repos/$REPO/commits/$TAG" | jq -r .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check the release-pack run for this tag
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Tag pushes report the tag as headBranch, so the newest push run with that headBranch is the tag's run.
+          run=$(gh run list --repo "$REPO" --workflow release-pack.yml --event push --limit 200 \
+            --json databaseId,headBranch,headSha,status,conclusion,createdAt \
+            | jq -c --arg tag "$TAG" '[.[] | select(.headBranch == $tag)] | sort_by(.createdAt) | last // empty')
+          if [ -z "$run" ]; then
+            echo "::error title=No release run::No push run of release-pack.yml exists for $TAG."
+            exit 1
+          fi
+          run_id=$(jq -r .databaseId <<<"$run")
+          head_sha=$(jq -r .headSha <<<"$run")
+          if [ "$(jq -r .status <<<"$run")" != "completed" ] || [ "$(jq -r .conclusion <<<"$run")" != "success" ]; then
+            echo "::error title=Release run not successful::The newest release-pack.yml run for $TAG has status $(jq -r .status <<<"$run") and conclusion $(jq -r '.conclusion // "none"' <<<"$run")."
+            exit 1
+          fi
+          if [ "$head_sha" != "$RELEASE_SHA" ]; then
+            echo "::error title=Commit mismatch::The release-pack.yml run for $TAG was built from a different commit than the tag."
+            exit 1
+          fi
+          release_job=$(gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+            | jq -r '[.jobs[] | select(.name == "Verify and publish release artifacts")] | if length == 1 then (.[0].conclusion // "pending") else "missing" end')
+          if [ "$release_job" != "success" ]; then
+            echo "::error title=Release job not successful::The release job of run $run_id ended as $release_job, so $TAG has no confirmed release."
+            exit 1
+          fi
+          {
+            echo "run_id=$run_id"
+            echo "head_sha=$head_sha"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download the release AppX
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: launcher-windows-latest-${{ steps.run.outputs.head_sha }}
+          path: release-artifacts
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Setup Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.3
+      - name: Check Store submission preflight
+        id: preflight
+        shell: bash
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          ARTIFACT_DIR: release-artifacts
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: bash .github/scripts/store-preflight.sh
+      # Any skip refuses the publish. The step after this one runs only when the preflight decided submit.
+      - name: Refuse unless the preflight submits
+        shell: bash
+        env:
+          DECISION: ${{ steps.preflight.outputs.decision }}
+          REASON: ${{ steps.preflight.outputs.reason }}
+        run: |
+          if [ "$DECISION" != "submit" ]; then
+            echo "::error title=Publish refused::$REASON"
+            exit 1
+          fi
+      # Replaces any pending draft submission with a new one that carries this package.
+      - name: Publish AppX submission
+        id: publish
+        run: |
+          $appx = Get-ChildItem release-artifacts -Filter *.appx | Select-Object -First 1
+          if (-not $appx) { throw "No .appx artifact found" }
+          # msstore only accepts .msix/.msixbundle/.msixupload; AppX and MSIX share the package format.
+          $msix = Join-Path $env:RUNNER_TEMP ($appx.BaseName + ".msix")
+          Copy-Item $appx.FullName $msix
+          msstore publish $msix -id 9P9WWSV7L7RS
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Notify Discord of publish failure
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          DECISION: ${{ steps.preflight.outputs.decision }}
+          REASON: ${{ steps.preflight.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          if [ "$DECISION" = "submit" ]; then
+            detail="msstore publish did not complete. Check Partner Center for a partial submission before retrying."
+          elif [ -n "$DECISION" ]; then
+            detail="Publish refused: $REASON. Open the run log before retrying."
+          else
+            detail="The run stopped before the Store checks finished. Open the run log before retrying."
+          fi
+          payload=$(mktemp)
+          jq -n \
+            --arg tag "${TAG:-unknown}" \
+            --arg detail "$detail" \
+            --arg run_url "$RUN_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "Releases",
+              embeds: [{
+                title: ("Lampas Launcher " + $tag + " Microsoft Store publish stopped"),
+                url: $run_url,
+                color: 15158332,
+                description: $detail,
+                footer: { text: "Microsoft Store publish" },
+                timestamp: $timestamp
+              }]
+            }' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
+      - name: Notify Discord of Store submission
+        if: steps.publish.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          payload=$(mktemp)
+          jq -n \
+            --arg tag "$TAG" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "Releases",
+              embeds: [{
+                title: ("Lampas Launcher " + $tag + " submitted to Microsoft Store for certification"),
+                url: "https://apps.microsoft.com/detail/9P9WWSV7L7RS",
+                color: 3447003,
+                description: "Microsoft signs the package during certification, which takes from a few hours to a few days. The Store status check posts again once this version is installable.",
+                footer: { text: "Microsoft Store submission" },
+                timestamp: $timestamp
+              }]
+            }' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
