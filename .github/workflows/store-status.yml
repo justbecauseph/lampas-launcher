@@ -1,0 +1,316 @@
+name: Microsoft Store Status
+
+on:
+  schedule:
+    # Every 6 hours, at minute 0 UTC.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Runs queue instead of overlapping. Two overlapping runs could both miss the notice cache and post twice.
+# Cancelling is off so a run never stops between posting a notice and saving its marker.
+concurrency:
+  group: store-status
+  cancel-in-progress: false
+
+jobs:
+  status:
+    name: Check Microsoft Store availability
+    # ubuntu-latest: msstore-cli is cross-platform, and microsoft-store-apppublisher installs
+    # MSStoreCLI-linux-<arch>.tar.gz on Linux runners (v0.4.3 publishes linux-x64). Linux minutes are cheaper.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Detect Store credentials
+        id: store-credentials
+        shell: bash
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          # Secret values are never printed; only whether all four are set.
+          if [ -n "$AZURE_AD_TENANT_ID" ] && [ -n "$AZURE_AD_APPLICATION_CLIENT_ID" ] \
+            && [ -n "$AZURE_AD_APPLICATION_SECRET" ] && [ -n "$SELLER_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Microsoft Store Developer CLI
+        if: steps.store-credentials.outputs.configured == 'true'
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.3
+
+      # The expected Store version is the latest release tag with the v removed and .0 appended, matching
+      # electron-builder's package version (README: Microsoft Store Releases).
+      - name: Compare latest release with the Store catalog
+        id: catalog
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          IFS=$'\t' read -r tag release_url < <(gh release view --repo "$REPO" --json tagName,url --jq '[.tagName, .url] | @tsv')
+          if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            expected="${BASH_REMATCH[1]}.0"
+          else
+            echo "::error title=Unexpected release tag::Latest release tag '$tag' is not vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+
+          # Display Catalog is public and needs no credentials. The response is saved to a file and read with stdin
+          # redirection, so jq never receives a Windows path as an argument.
+          catalog=$(mktemp)
+          curl -fsS --retry 3 --max-time 30 -o "$catalog" \
+            "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=9P9WWSV7L7RS&market=US&languages=en-US"
+
+          product_count=$(jq '.Products | length' < "$catalog")
+          if [ "$product_count" -ne 1 ]; then
+            echo "::error title=Unexpected Display Catalog response::Expected one product for 9P9WWSV7L7RS, found $product_count."
+            exit 1
+          fi
+
+          # Package full names look like Name_1.5.3.0_x64__publisher, so field 2 is the version. Sort with -V because
+          # plain string order puts 1.5.10 before 1.5.9.
+          versions=$(jq -r '[.Products[0].DisplaySkuAvailabilities[]?.Sku.Properties.Packages[]?.PackageFullName | split("_")[1]] | unique | .[]' < "$catalog")
+          store_version=$(printf '%s\n' "$versions" | sed '/^$/d' | sort -V | tail -n1)
+          installable=$(jq -r '[.Products[0].DisplaySkuAvailabilities[]?.Availabilities[]?.Actions[]?] | any(. == "Purchase" or . == "Fulfill")' < "$catalog")
+
+          live=false
+          if [ -n "$store_version" ] && [ "$installable" = "true" ]; then
+            newest=$(printf '%s\n%s\n' "$expected" "$store_version" | sort -V | tail -n1)
+            if [ "$newest" = "$store_version" ]; then
+              live=true
+            fi
+          fi
+
+          echo "Latest release: $tag ($release_url)"
+          echo "Expected Store version: $expected"
+          echo "Store catalog version: ${store_version:-not listed}"
+          echo "Installable: $installable"
+          {
+            echo "tag=$tag"
+            echo "release_url=$release_url"
+            echo "expected_version=$expected"
+            echo "store_version=$store_version"
+            echo "installable=$installable"
+            echo "live=$live"
+          } >> "$GITHUB_OUTPUT"
+
+      # Context only: the release is judged from the Display Catalog above. This step never fails the job, and it
+      # is skipped when the Store secrets are not set.
+      - name: Read Partner Center submission status
+        id: cli-status
+        if: steps.store-credentials.outputs.configured == 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          status=unavailable
+          failed=false
+          if msstore reconfigure --tenantId "$AZURE_AD_TENANT_ID" --sellerId "$SELLER_ID" \
+            --clientId "$AZURE_AD_APPLICATION_CLIENT_ID" --clientSecret "$AZURE_AD_APPLICATION_SECRET"; then
+            output=$(msstore submission status 9P9WWSV7L7RS 2>&1) || true
+            echo "$output"
+            # Output format is taken from the msstore CLI; only "Submission Status = <State>" is parsed. Other
+            # output, including "no pending submission", leaves the state as unrecognized.
+            parsed=$(printf '%s\n' "$output" | sed -n 's/.*Submission Status[[:space:]]*=[[:space:]]*\([A-Za-z][A-Za-z]*\).*/\1/p' | head -n1)
+            if [ -n "$parsed" ]; then
+              status="$parsed"
+            else
+              status=unrecognized
+            fi
+            lowered=$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]')
+            case "$lowered" in
+              *fail*) failed=true ;;
+            esac
+          else
+            echo "::warning title=Store CLI unavailable::msstore reconfigure failed, so the Partner Center status is not included."
+          fi
+          echo "submission_status=$status" >> "$GITHUB_OUTPUT"
+          echo "submission_failed=$failed" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Decide notification state
+        id: state
+        shell: bash
+        env:
+          LIVE: ${{ steps.catalog.outputs.live }}
+          SUBMISSION_FAILED: ${{ steps.cli-status.outputs.submission_failed }}
+        run: |
+          set -euo pipefail
+          # A live version takes precedence, so a failed newer submission never posts a failure for a live release.
+          if [ "$LIVE" = "true" ]; then
+            state=live
+          elif [ "$SUBMISSION_FAILED" = "true" ]; then
+            state=failed
+          else
+            state=pending
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      # Notice markers are Actions caches keyed by release tag. Each run restores both markers, not only when it
+      # has something to post. GitHub evicts a cache after 7 days without access, so scheduled runs keep the markers
+      # warm. Caches are scoped to the branch that saves them, so dispatch this workflow from the default branch;
+      # a marker saved on another branch is invisible to the schedule and would allow a second post.
+      - name: Restore live notice marker
+        id: live-marker
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: store-status/live
+          key: store-notified-${{ steps.catalog.outputs.tag }}-live
+
+      - name: Restore failure notice marker
+        id: failed-marker
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: store-status/failed
+          key: store-notified-${{ steps.catalog.outputs.tag }}-failed
+
+      - name: Post live notice
+        id: post-live
+        if: steps.state.outputs.state == 'live' && steps.live-marker.outputs.cache-hit != 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.catalog.outputs.tag }}
+          RELEASE_URL: ${{ steps.catalog.outputs.release_url }}
+          STORE_VERSION: ${{ steps.catalog.outputs.store_version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          payload=$(mktemp)
+          jq -n \
+            --arg tag "$TAG" \
+            --arg store_version "$STORE_VERSION" \
+            --arg release_url "$RELEASE_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "Releases",
+              embeds: [{
+                title: ("Lampas Launcher " + $tag + " is live on the Microsoft Store"),
+                url: "https://apps.microsoft.com/detail/9P9WWSV7L7RS",
+                color: 3066959,
+                description: ("Store package version " + $store_version + " is installable from the Store.\nGitHub release: " + $release_url),
+                footer: { text: "Microsoft Store status" },
+                timestamp: $timestamp
+              }]
+            }' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
+          mkdir -p store-status/live
+          date -u +%Y-%m-%dT%H:%M:%SZ > store-status/live/posted-at.txt
+          echo "posted=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save live notice marker
+        if: steps.post-live.outputs.posted == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: store-status/live
+          key: store-notified-${{ steps.catalog.outputs.tag }}-live
+
+      - name: Post failure notice
+        id: post-failed
+        if: steps.state.outputs.state == 'failed' && steps.failed-marker.outputs.cache-hit != 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.catalog.outputs.tag }}
+          RELEASE_URL: ${{ steps.catalog.outputs.release_url }}
+          SUBMISSION_STATUS: ${{ steps.cli-status.outputs.submission_status }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          payload=$(mktemp)
+          jq -n \
+            --arg tag "$TAG" \
+            --arg status "$SUBMISSION_STATUS" \
+            --arg release_url "$RELEASE_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "Releases",
+              embeds: [{
+                title: ("Lampas Launcher " + $tag + " Microsoft Store submission failed"),
+                url: $release_url,
+                color: 15158332,
+                description: ("Partner Center reports the submission status as " + $status + ". Check the submission in Partner Center."),
+                footer: { text: "Microsoft Store status" },
+                timestamp: $timestamp
+              }]
+            }' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
+          mkdir -p store-status/failed
+          date -u +%Y-%m-%dT%H:%M:%SZ > store-status/failed/posted-at.txt
+          echo "posted=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save failure notice marker
+        if: steps.post-failed.outputs.posted == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: store-status/failed
+          key: store-notified-${{ steps.catalog.outputs.tag }}-failed
+
+      - name: Write step summary
+        if: always()
+        shell: bash
+        env:
+          TAG: ${{ steps.catalog.outputs.tag }}
+          RELEASE_URL: ${{ steps.catalog.outputs.release_url }}
+          EXPECTED_VERSION: ${{ steps.catalog.outputs.expected_version }}
+          STORE_VERSION: ${{ steps.catalog.outputs.store_version }}
+          INSTALLABLE: ${{ steps.catalog.outputs.installable }}
+          CREDENTIALS_CONFIGURED: ${{ steps.store-credentials.outputs.configured }}
+          SUBMISSION_STATUS: ${{ steps.cli-status.outputs.submission_status }}
+          STATE: ${{ steps.state.outputs.state }}
+          POSTED_LIVE: ${{ steps.post-live.outputs.posted }}
+          LIVE_HIT: ${{ steps.live-marker.outputs.cache-hit }}
+          POSTED_FAILED: ${{ steps.post-failed.outputs.posted }}
+          FAILED_HIT: ${{ steps.failed-marker.outputs.cache-hit }}
+        run: |
+          # Args: $1 is the notice's state, $2 is the posted output, $3 is the marker cache-hit output.
+          notice_result() {
+            if [ "$2" = "true" ]; then
+              echo "posted"
+            elif [ "$3" = "true" ]; then
+              echo "already posted for this release"
+            elif [ "$STATE" = "$1" ]; then
+              echo "not posted (see the step log)"
+            else
+              echo "not due"
+            fi
+          }
+          {
+            echo "## Microsoft Store status"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Latest release | ${TAG:-unknown} ${RELEASE_URL:-} |"
+            echo "| Expected Store version | ${EXPECTED_VERSION:-unknown} |"
+            echo "| Store catalog version | ${STORE_VERSION:-not listed} |"
+            echo "| Installable in the Store | ${INSTALLABLE:-unknown} |"
+            if [ "$CREDENTIALS_CONFIGURED" = "true" ]; then
+              echo "| Partner Center status | ${SUBMISSION_STATUS:-unavailable} |"
+            else
+              echo "| Partner Center status | not checked (Store secrets not set) |"
+            fi
+            echo "| Notification state | ${STATE:-unknown} |"
+            echo "| Live notice | $(notice_result live "$POSTED_LIVE" "$LIVE_HIT") |"
+            echo "| Failure notice | $(notice_result failed "$POSTED_FAILED" "$FAILED_HIT") |"
+          } >> "$GITHUB_STEP_SUMMARY"

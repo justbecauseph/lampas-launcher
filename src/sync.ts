@@ -14,6 +14,7 @@ import {
 } from "./file-transfer";
 import { reconcileRequiredResourcePacks } from "./resource-packs";
 import { app } from "electron";
+import { placeSeedFileIfAbsent, seedEntryExists } from "./seed-file";
 import { reconcileConfigPatches } from "./config-patches";
 import { LauncherLogger } from "./logger";
 import { resolveRuntimeDefinition } from "./runtime-definition";
@@ -121,7 +122,7 @@ function isKnownSyncSafetyFailure(error: unknown): boolean {
       return true;
     if (
       candidate instanceof Error &&
-      /Invalid (?:Lampas )?(?:release|client manifest)|Verification failed|Integrity violation|Unsafe relative path|installation state is malformed|Unsupported modpack protocol/i.test(
+      /Invalid (?:Lampas )?(?:release|client manifest)|Verification failed|Integrity violation|Unsafe relative path|installation state is malformed/i.test(
         candidate.message,
       )
     )
@@ -152,6 +153,17 @@ function safetyReason(error: unknown): "DENIAL" | "SCHEMA" | "INTEGRITY" {
   return "SCHEMA";
 }
 
+/**
+ * The release or manifest needs a newer launcher. Callers show this message as
+ * is. It is not a safety failure, so it never persists a sync safety block.
+ */
+class LauncherUpdateRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LauncherUpdateRequiredError";
+  }
+}
+
 export function compareVersions(a: string, b: string): number {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
   const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
@@ -167,6 +179,7 @@ export function compareVersions(a: string, b: string): number {
 import {
   isSafeRelativePath,
   isPathProtected,
+  isPreservedSeedFile,
   canonicalizeRelativePath,
   validateDigestString,
   sanitizeInstallationState,
@@ -218,6 +231,48 @@ export class LauncherSync {
     runtime: MinecraftRuntimeDefinition;
   }> {
     return this.runSyncWithSafety(onProgress, verificationMode, true);
+  }
+
+  /** Rejects a release whose minimumLauncherVersion is newer than this launcher. */
+  private static assertLauncherVersionSupported(release: {
+    minimumLauncherVersion?: string;
+  }): void {
+    if (!release?.minimumLauncherVersion) return;
+    let currentLauncherVersion = "1.1.0";
+    try {
+      currentLauncherVersion = app.getVersion();
+    } catch {}
+    if (
+      compareVersions(currentLauncherVersion, release.minimumLauncherVersion) <
+      0
+    ) {
+      throw new LauncherUpdateRequiredError(
+        `Launcher update required: release requires launcher version ${release.minimumLauncherVersion} or newer (current: ${currentLauncherVersion}). Please update Lampas Launcher.`,
+      );
+    }
+  }
+
+  /**
+   * Rejects a modpack protocol newer than this launcher supports. It takes the
+   * raw manifest, so it runs before validateClientManifest.
+   */
+  private static assertProtocolSupported(
+    release: { protocol?: unknown },
+    rawManifest: unknown,
+  ): void {
+    const manifestProtocol =
+      rawManifest && typeof rawManifest === "object"
+        ? (rawManifest as { protocol?: unknown }).protocol
+        : undefined;
+    const requiredProtocol = manifestProtocol ?? release?.protocol;
+    if (
+      typeof requiredProtocol === "number" &&
+      requiredProtocol > MAX_SUPPORTED_PROTOCOL
+    ) {
+      throw new LauncherUpdateRequiredError(
+        `Unsupported modpack protocol: release requires protocol ${requiredProtocol}, but this launcher only supports up to protocol ${MAX_SUPPORTED_PROTOCOL}. Please update Lampas Launcher.`,
+      );
+    }
   }
 
   private static async runSyncWithSafety(
@@ -358,6 +413,8 @@ export class LauncherSync {
         );
       }
 
+      this.assertLauncherVersionSupported(releaseData);
+
       // 3. Fetch client manifest
       onProgress({
         status: "checking",
@@ -377,6 +434,7 @@ export class LauncherSync {
         ),
         channelHeaders,
       );
+      this.assertProtocolSupported(releaseData, manifest);
       validateClientManifest(manifest, releaseData);
     } catch (portalErr: any) {
       // Only an unavailable Portal can use the explicitly supported local
@@ -403,48 +461,30 @@ export class LauncherSync {
           `Portal unavailable (${portalErr.message}) and no local manifest found.`,
         );
       }
+      let localRelease: ValidatedReleaseDescriptor;
+      let localManifest: any;
       try {
-        releaseData = validateReleaseDescriptor(
+        localRelease = validateReleaseDescriptor(
           JSON.parse(fs.readFileSync(localReleasePath, "utf-8")),
         );
-        targetVersion = releaseData.version;
-        manifest = JSON.parse(fs.readFileSync(localManifestPath, "utf-8"));
-        validateClientManifest(manifest, releaseData);
+        localManifest = JSON.parse(fs.readFileSync(localManifestPath, "utf-8"));
       } catch {
-        const metadataError = new MetadataValidationError(
+        throw new MetadataValidationError(
           `Portal unavailable (${portalErr.message}) and local metadata is invalid.`,
         );
-        throw metadataError;
       }
-    }
-
-    // Validate protocol capability
-    const requiredProtocol = manifest.protocol ?? releaseData.protocol;
-    if (
-      typeof requiredProtocol === "number" &&
-      requiredProtocol > MAX_SUPPORTED_PROTOCOL
-    ) {
-      throw new Error(
-        `Unsupported modpack protocol: release requires protocol ${requiredProtocol}, but this launcher only supports up to protocol ${MAX_SUPPORTED_PROTOCOL}. Please update Lampas Launcher.`,
-      );
-    }
-
-    // Validate minimum launcher version
-    if (releaseData?.minimumLauncherVersion) {
-      let currentLauncherVersion = "1.1.0";
+      this.assertLauncherVersionSupported(localRelease);
+      this.assertProtocolSupported(localRelease, localManifest);
       try {
-        currentLauncherVersion = app.getVersion();
-      } catch {}
-      if (
-        compareVersions(
-          currentLauncherVersion,
-          releaseData.minimumLauncherVersion,
-        ) < 0
-      ) {
-        throw new Error(
-          `Launcher update required: release requires launcher version ${releaseData.minimumLauncherVersion} or newer (current: ${currentLauncherVersion}). Please update Lampas Launcher.`,
+        validateClientManifest(localManifest, localRelease);
+      } catch {
+        throw new MetadataValidationError(
+          `Portal unavailable (${portalErr.message}) and local metadata is invalid.`,
         );
       }
+      releaseData = localRelease;
+      targetVersion = releaseData.version;
+      manifest = localManifest;
     }
 
     // Validate complete manifest and release metadata before any filesystem mutation
@@ -531,6 +571,16 @@ export class LauncherSync {
       async (file, index) => {
         const localPath = path.join(gameDir, file.path);
         const policy = file.policy || "MANAGED";
+
+        // A pack seed is never fetched when any entry exists at its path, including
+        // a dangling symlink. lstat does not follow the link.
+        if (
+          isPreservedSeedFile(file.path, policy) &&
+          (await seedEntryExists(localPath))
+        ) {
+          checkResults[index] = { file, needDownload: false };
+          return;
+        }
 
         if (policy === "PRESERVE" || isPathProtected(file.path)) {
           if (fs.existsSync(localPath)) {
@@ -843,13 +893,41 @@ export class LauncherSync {
           expectedCategory: "RESERVED_INTERNAL",
         });
         const destPath = resolveAndContainPath(gameDir, file.path);
-        await checkPhysicalAncestry(gameDir, destPath, {
-          enforceOwnership: true,
-          disallowSymlinks: true,
-        });
-
-        await copyAtomic(cachePath, destPath);
-        LauncherLogger.info(`  ✓ [Replaced] ${file.path}`);
+        // A pack seed (options.txt or servers.dat) is placed only where the player has none.
+        const isSeedFile = isPreservedSeedFile(file.path, file.policy);
+        // lstat first: any existing entry (file, directory, symlink, dangling
+        // symlink) belongs to the player. It is kept, never followed or replaced.
+        if (isSeedFile && (await seedEntryExists(destPath))) {
+          LauncherLogger.info(
+            `  [Kept] ${file.path} already exists; the player's file is not overwritten`,
+          );
+          continue;
+        }
+        await checkPhysicalAncestry(
+          gameDir,
+          destPath,
+          isSeedFile
+            ? {
+                expectedCategory: "PROTECTED_PLAYER_DATA",
+                disallowSymlinks: true,
+              }
+            : { enforceOwnership: true, disallowSymlinks: true },
+        );
+        if (isSeedFile) {
+          // Exclusive create: a player file that appears after the metadata check
+          // is kept, never replaced.
+          const placement = await placeSeedFileIfAbsent(cachePath, destPath);
+          if (placement === "kept") {
+            LauncherLogger.info(
+              `  [Kept] ${file.path} already exists; the player's file is not overwritten`,
+            );
+            continue;
+          }
+          LauncherLogger.info(`  ✓ [Placed] ${file.path} (pack default)`);
+        } else {
+          await copyAtomic(cachePath, destPath);
+          LauncherLogger.info(`  ✓ [Replaced] ${file.path}`);
+        }
         const outcome = transferOutcomes.get(file.path);
         if (outcome) {
           outcome.stage = "installed";
@@ -979,6 +1057,9 @@ export class LauncherSync {
     };
 
     for (const file of manifestFiles) {
+      // Pack seeds (options.txt, servers.dat) are never recorded. Installation
+      // state rejects protected keys, so recording one would block the next sync.
+      if (isPreservedSeedFile(file.path, file.policy)) continue;
       const filePath = path.join(gameDir, file.path);
       const stat = await fs.promises.stat(filePath).catch(() => null);
       const previous = prevState.files[file.path];
@@ -1257,6 +1338,8 @@ export class LauncherSync {
       if (release.version !== channelData.version) {
         throw new Error("Channel and release versions do not match.");
       }
+      // The Mods tab surfaces the update-required message instead of a schema error.
+      this.assertLauncherVersionSupported(release);
       const manifest = await fetchPortalJsonWithRetry(
         metadataUrl(
           portalUrl,
@@ -1264,6 +1347,7 @@ export class LauncherSync {
           "release client manifest",
         ),
       );
+      this.assertProtocolSupported(release, manifest);
       validateClientManifest(manifest, release);
       return Array.isArray((manifest as any).mods)
         ? (manifest as any).mods

@@ -21,12 +21,15 @@ export interface ReconcileResult {
 }
 
 import {
+  PathContainmentError,
   canonicalizeRelativePath,
+  isOptionsKeybindPatch,
   isPathProtected,
   resolveAndContainPath,
   checkPhysicalAncestry,
 } from "../path-policy";
 import { writeAtomicFile } from "../file-transfer";
+import { planKeybindRewrite, type KeybindUpdate } from "./keybind-lines";
 
 export function isSafeConfigPatchPath(targetPath: string): boolean {
   if (!targetPath || typeof targetPath !== "string") return false;
@@ -48,6 +51,98 @@ async function atomicWriteConfig(
   await writeAtomicFile(destination, content, { encoding: "utf-8" });
 }
 
+type KeybindOutcome = "applied" | "unchanged" | "deferred";
+
+/**
+ * Applies a keybind patch to an existing options.txt. A read or validation
+ * failure defers the patch with a warning, so it cannot fail the sync. Write and
+ * verification failures still throw, because they could leave a partial file.
+ */
+async function applyOptionsKeybindPatch(
+  patch: ConfigPatch,
+  targetFullPath: string,
+): Promise<KeybindOutcome> {
+  const updates: KeybindUpdate[] = patch.operations.map((op) => {
+    const { path: keyPath, value } = op as { path: unknown[]; value: unknown };
+    return { key: String(keyPath[0]), value: String(value) };
+  });
+
+  let source = "";
+  try {
+    source = await fs.promises.readFile(targetFullPath, "utf-8");
+    if (source.includes("\0")) {
+      throw new Error("file contains null bytes");
+    }
+    // Invalid UTF-8 decodes to U+FFFD. Writing the decoded text back would
+    // replace those bytes in other lines, so the file is left alone.
+    if (source.includes("�")) {
+      throw new Error("file is not valid UTF-8");
+    }
+  } catch (err: any) {
+    LauncherLogger.warn(
+      `[Config Patch] ↪ ${patch.id} deferred; options.txt could not be safely read (${err.message}); file was left unchanged`,
+    );
+    return "deferred";
+  }
+
+  const plan = planKeybindRewrite(source, updates);
+  if (plan.missingKey !== undefined) {
+    LauncherLogger.info(
+      `[Config Patch] ↪ ${patch.id} deferred; ${plan.missingKey} not in options.txt yet`,
+    );
+    return "deferred";
+  }
+  if (!plan.changed) {
+    LauncherLogger.info(`[Config Patch] ✓ ${patch.id} already satisfied`);
+    return "unchanged";
+  }
+
+  // A read-only file is deferred rather than rewritten. The atomic write would
+  // replace it with a new file, which changes its mode.
+  try {
+    await fs.promises.access(targetFullPath, fs.constants.W_OK);
+  } catch (accessErr: any) {
+    LauncherLogger.warn(
+      `[Config Patch] ↪ ${patch.id} deferred; options.txt is not writable (${accessErr.code}); file was left unchanged`,
+    );
+    return "deferred";
+  }
+
+  try {
+    await atomicWriteConfig(targetFullPath, plan.output);
+  } catch (writeErr: any) {
+    LauncherLogger.error(
+      `[Config Patch] ✗ ${patch.id}\n  failed to atomically write target: ${writeErr.message}; file was left unchanged`,
+    );
+    throw writeErr;
+  }
+
+  // Verify the written file with the same matcher that planned the rewrite.
+  try {
+    const written = await fs.promises.readFile(targetFullPath, "utf-8");
+    const check = planKeybindRewrite(written, updates);
+    if (check.missingKey !== undefined) {
+      throw new Error(`no line for '${check.missingKey}' after the write`);
+    }
+    if (check.changed) {
+      throw new Error("keybind value was not rewritten");
+    }
+  } catch (verifyErr: any) {
+    LauncherLogger.error(
+      `[Config Patch] ✗ ${patch.id}\n  post-patch verification failed: ${verifyErr.message}`,
+    );
+    throw new Error(
+      `[Config Patch] ✗ ${patch.id}: post-patch verification failed: ${verifyErr.message}`,
+    );
+  }
+
+  const details = plan.details.map((d) => `\n  ${d}`).join("");
+  LauncherLogger.info(
+    `[Config Patch] ✓ ${patch.id}\n  ${patch.path}${details}`,
+  );
+  return "applied";
+}
+
 export async function reconcileConfigPatches(
   options: ReconcileOptions,
 ): Promise<ReconcileResult> {
@@ -61,7 +156,7 @@ export async function reconcileConfigPatches(
   let deferredCount = 0;
 
   for (const patch of patches) {
-    if (!isSafeConfigPatchPath(patch.path)) {
+    if (!isSafeConfigPatchPath(patch.path) && !isOptionsKeybindPatch(patch)) {
       LauncherLogger.error(
         `[Config Patch] ✗ ${patch.id}\n  unsafe target path '${patch.path}'; file was left unchanged`,
       );
@@ -80,10 +175,32 @@ export async function reconcileConfigPatches(
     }
 
     const targetFullPath = resolveAndContainPath(gameDir, patch.path);
-    await checkPhysicalAncestry(gameDir, targetFullPath, {
-      enforceOwnership: true,
-      disallowSymlinks: true,
-    });
+    // options.txt is player data, so keybind patches pin the destination to
+    // that category instead of rejecting it under enforceOwnership.
+    const keybind = isOptionsKeybindPatch(patch);
+    try {
+      await checkPhysicalAncestry(
+        gameDir,
+        targetFullPath,
+        keybind
+          ? {
+              expectedCategory: "PROTECTED_PLAYER_DATA",
+              disallowSymlinks: true,
+            }
+          : { enforceOwnership: true, disallowSymlinks: true },
+      );
+    } catch (ancestryErr) {
+      // A symlink on options.txt defers the keybind patch. Throwing here would
+      // record a permanent INTEGRITY block that repair cannot clear.
+      if (!keybind || !(ancestryErr instanceof PathContainmentError)) {
+        throw ancestryErr;
+      }
+      LauncherLogger.warn(
+        `[Config Patch] ↪ ${patch.id} deferred; options.txt failed the physical containment check (${ancestryErr.message}); file was left unchanged`,
+      );
+      deferredCount++;
+      continue;
+    }
 
     for (const op of patch.operations || []) {
       if (op && typeof op === "object") {
@@ -162,6 +279,23 @@ export async function reconcileConfigPatches(
         );
         throw new Error(`[Config Patch] ✗ ${patch.id}: ${err.message}`);
       }
+      continue;
+    }
+
+    // Keybind patches on an existing options.txt use the dedicated line matcher,
+    // not the properties adapter.
+    if (isOptionsKeybindPatch(patch)) {
+      const outcome = await applyOptionsKeybindPatch(patch, targetFullPath);
+      if (outcome === "deferred") {
+        deferredCount++;
+        continue;
+      }
+      if (outcome === "unchanged") unchangedCount++;
+      else appliedCount++;
+      appliedState[patch.id] = {
+        revision: patch.revision,
+        appliedAt: new Date().toISOString(),
+      };
       continue;
     }
 

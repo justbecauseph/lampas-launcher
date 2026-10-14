@@ -118,6 +118,7 @@ jobs:
         if: github.event.repository.private == true && vars.ENABLE_ARTIFACT_ATTESTATIONS != 'true'
         run: echo "No GitHub artifact attestation is generated for this private repository. The release includes the commit and dependency inventory in its SBOM and artifact hashes in SHA256SUMS."
       - name: Create GitHub release
+        id: release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
@@ -127,6 +128,53 @@ jobs:
             release-artifacts/*.cdx.json
             release-artifacts/SHA256SUMS-*.txt
           generate_release_notes: true
+      # Discord problems never fail the release: a missing webhook is a warning, and a failed post is ignored.
+      - name: Notify Discord
+        id: notify
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+          STORE_PUBLISH_ENABLED: ${{ vars.ENABLE_STORE_PUBLISH == 'true' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          notes="$RUNNER_TEMP/release-notes.md"
+          payload="$RUNNER_TEMP/discord-release.json"
+          # generate_release_notes stores GitHub's generated notes in the release body.
+          gh release view "$TAG" --repo "$REPO" --json body --jq '.body // ""' > "$notes" || : > "$notes"
+          jq -n \
+            --rawfile notes "$notes" \
+            --arg tag "$TAG" \
+            --arg url "$RELEASE_URL" \
+            --arg store "$STORE_PUBLISH_ENABLED" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '
+            (if ($notes | length) == 0 then "Release notes: see the release page."
+             elif ($notes | length) > 1500 then $notes[0:1500] + "..."
+             else $notes end) as $body
+            | (if $store == "true"
+               then "Microsoft Store: submission enabled. The AppX is sent to Partner Center after this release publishes."
+               else "Microsoft Store: submission disabled for this release." end) as $store_line
+            | {
+                username: "Releases",
+                embeds: [{
+                  title: ("Lampas Launcher " + $tag + " released"),
+                  url: $url,
+                  color: 3066959,
+                  description: ("Tag: " + $tag + "\n" + $store_line + "\n\n" + $body),
+                  footer: { text: "Lampas Launcher releases" },
+                  timestamp: $timestamp
+                }]
+              }
+            ' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
 
   store:
     name: Submit to Microsoft Store
@@ -166,3 +214,64 @@ jobs:
           Copy-Item $appx.FullName $msix
           msstore publish $msix -id 9P9WWSV7L7RS
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Ordered before the success notice: failure() is true only when an earlier step failed, so the success
+      # notice (which can fail softly) never triggers this one.
+      - name: Notify Discord of Store submission failure
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          payload=$(mktemp)
+          jq -n \
+            --arg tag "$TAG" \
+            --arg run_url "$RUN_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "Releases",
+              embeds: [{
+                title: ("Lampas Launcher " + $tag + " Microsoft Store submission failed"),
+                url: $run_url,
+                color: 15158332,
+                description: "A step in the store job failed, so the AppX was not confirmed as submitted. Open the run log, and check Partner Center for a partial submission before retrying.",
+                footer: { text: "Microsoft Store submission" },
+                timestamp: $timestamp
+              }]
+            }' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"
+      - name: Notify Discord of Store submission
+        continue-on-error: true
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::warning title=Discord notification skipped::DISCORD_WEBHOOK_URL is not set."
+            exit 0
+          fi
+          payload=$(mktemp)
+          jq -n \
+            --arg tag "$TAG" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "Releases",
+              embeds: [{
+                title: ("Lampas Launcher " + $tag + " submitted to Microsoft Store for certification"),
+                url: "https://apps.microsoft.com/detail/9P9WWSV7L7RS",
+                color: 3447003,
+                description: "Microsoft signs the package during certification, which takes from a few hours to a few days. The Store status check posts again once this version is installable.",
+                footer: { text: "Microsoft Store submission" },
+                timestamp: $timestamp
+              }]
+            }' > "$payload"
+          curl -fsS --max-time 30 -H 'Content-Type: application/json' --data "@$payload" "$DISCORD_WEBHOOK_URL"

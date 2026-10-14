@@ -283,6 +283,85 @@ export function isPathProtected(relPath: string): boolean {
   );
 }
 
+const OPTIONS_KEYBIND_KEY_PATTERN = /^key_[A-Za-z0-9_.\-]+$/;
+const OPTIONS_KEYBIND_VALUE_PATTERN =
+  /^key\.(keyboard|mouse)\.[A-Za-z0-9_.\-]+$/;
+
+/**
+ * The one config-patch exception to PROTECTED_PLAYER_DATA: a pack may rebind
+ * keybinds in options.txt. Returns true only for a `properties` patch with
+ * `mode: "once"` and `missingFile: "defer"` whose operations are all `set` ops
+ * on a `key_*` entry with a `key.keyboard.*` or `key.mouse.*` value. The target
+ * must be exactly `options.txt` in lowercase. An enforce-mode keybind patch would
+ * revert the player's rebind on every sync, so it gets no exception.
+ *
+ * The reconciler rewrites only lines that already exist (see keybind-lines.ts).
+ *
+ * Accepts raw manifest objects, which may name the target `file` instead of
+ * `path`, the same way validateManifestMetadata does. Never throws.
+ */
+export function isOptionsKeybindPatch(patch: unknown): boolean {
+  try {
+    if (!patch || typeof patch !== "object") return false;
+    const raw = patch as Record<string, unknown>;
+    const rawPath =
+      typeof raw.path === "string" && raw.path.trim()
+        ? raw.path
+        : typeof raw.file === "string" && raw.file.trim()
+          ? raw.file
+          : "";
+    if (!rawPath) return false;
+    if (canonicalizeRelativePath(rawPath) !== "options.txt") return false;
+    if (raw.adapter !== "properties") return false;
+    if (raw.mode !== "once") return false;
+    if (raw.missingFile !== "defer") return false;
+    const operations = raw.operations;
+    if (!Array.isArray(operations) || operations.length === 0) return false;
+    return operations.every((operation: unknown) => {
+      if (!operation || typeof operation !== "object") return false;
+      const op = operation as Record<string, unknown>;
+      if (op.op !== "set") return false;
+      const keyPath = op.path;
+      if (!Array.isArray(keyPath) || keyPath.length !== 1) return false;
+      const key = keyPath[0];
+      if (typeof key !== "string" || !OPTIONS_KEYBIND_KEY_PATTERN.test(key)) {
+        return false;
+      }
+      return (
+        typeof op.value === "string" &&
+        OPTIONS_KEYBIND_VALUE_PATTERN.test(op.value)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+// Protected player files that a pack may seed. A seed is placed only when the
+// player has no such file, and it is never recorded in installation state.
+const PRESERVED_SEED_FILES: ReadonlySet<string> = new Set([
+  "options.txt",
+  "servers.dat",
+]);
+
+/**
+ * Returns true for a pack seed file: a manifest file whose path is exactly
+ * `options.txt` or `servers.dat` in lowercase, with policy PRESERVE. Other
+ * spellings (OPTIONS.TXT, Servers.dat), other policies, and other protected
+ * paths get no exception.
+ */
+export function isPreservedSeedFile(
+  relPath: unknown,
+  policy: unknown,
+): boolean {
+  if (policy !== "PRESERVE" || typeof relPath !== "string") return false;
+  try {
+    return PRESERVED_SEED_FILES.has(canonicalizeRelativePath(relPath));
+  } catch {
+    return false;
+  }
+}
+
 function stripExtendedPathPrefix(p: string): string {
   if (process.platform !== "win32") return p;
   if (p.startsWith("\\\\?\\UNC\\")) {
@@ -743,7 +822,10 @@ export function validateManifestMetadata(
     }
 
     // 2. Reject attempts to target protected namespaces or launcher internal state
-    if (isPathProtected(canonicalPath)) {
+    if (
+      isPathProtected(canonicalPath) &&
+      !isPreservedSeedFile(canonicalPath, file.policy)
+    ) {
       throw new PathContainmentError(
         `Manifest file '${file.path}' targets protected or reserved namespace '${canonicalPath}'. Pack files cannot overwrite user data or launcher state.`,
       );
@@ -836,15 +918,28 @@ export function validateManifestMetadata(
         );
       }
 
-      if (isPathProtected(canonicalPatchPath)) {
+      if (
+        isPathProtected(canonicalPatchPath) &&
+        !isOptionsKeybindPatch(patch)
+      ) {
         throw new PathContainmentError(
           `Config patch '${patch.id}' targets protected namespace: '${canonicalPatchPath}'`,
         );
       }
 
-      // Check collision between whole-file management and config patches
+      // Check collision between whole-file management and config patches. The
+      // one exception: a PRESERVE seed options.txt may ship alongside keybind
+      // patches on it, which apply to existing player files. isOptionsKeybindPatch
+      // accepts only options.txt, so servers.dat has no exception.
       const patchKey = normalizePathKey(canonicalPatchPath);
-      if (destinationMap.has(patchKey)) {
+      const wholeFile = destinationMap.get(patchKey);
+      if (
+        wholeFile &&
+        !(
+          isPreservedSeedFile(wholeFile.path, wholeFile.policy) &&
+          isOptionsKeybindPatch(patch)
+        )
+      ) {
         throw new PathContainmentError(
           `Conflict: file '${canonicalPatchPath}' is managed both as a whole file and by config patch '${patch.id}'.`,
         );

@@ -1,7 +1,9 @@
 import {
   PathContainmentError,
   canonicalizeRelativePath,
+  isOptionsKeybindPatch,
   isPathProtected,
+  isPreservedSeedFile,
   sanitizeInstallationState,
   validateDigestString,
   validateManifestMetadata,
@@ -489,7 +491,10 @@ function validateFile(value: unknown, index: number): number {
       `Unsafe relative path in manifest: '${String(file.path)}': ${String(error)}`,
     );
   }
-  if (isPathProtected(relativePath))
+  if (
+    isPathProtected(relativePath) &&
+    !isPreservedSeedFile(relativePath, file.policy)
+  )
     fail(`${context}.path targets a protected namespace.`);
   const size = integer(file.size, `${context}.size`, 0, MAX_FILE_SIZE);
   const hashes = record(file.hashes, `${context}.hashes`);
@@ -536,7 +541,7 @@ function validateConfigPatch(value: unknown, index: number): ConfigPatch {
   const patchPath = canonicalizeRelativePath(
     stringValue(patch.path, `${context}.path`, 1024),
   );
-  if (isPathProtected(patchPath))
+  if (isPathProtected(patchPath) && !isOptionsKeybindPatch(patch))
     fail(`${context}.path targets a protected namespace.`);
   const adapter = stringValue(patch.adapter, `${context}.adapter`, 32);
   if (

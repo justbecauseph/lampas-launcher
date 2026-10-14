@@ -159,6 +159,8 @@ The Windows build also produces an unsigned `LampasLauncher-<version>-Windows.ap
 - The job replaces a pending submission that was created through the API, but it fails if a draft submission started in the Partner Center web UI exists. Submit or delete such drafts before tagging a release.
 - Every Store upload needs a higher package version than the last one. electron-builder maps `package.json` version `1.5.4` to package version `1.5.4.0`.
 - Store installs skip the launcher's GitHub update notice because the Store delivers updates.
+- The `release` job posts to Discord through the `DISCORD_WEBHOOK_URL` secret and the `store` job posts its submission result. A missing secret logs a warning, and a Discord error never fails either job.
+- `store-status.yml` runs every 6 hours. It compares the latest release with the Display Catalog and posts once per tag when that version is installable or its Partner Center submission fails. The one-time markers are Actions caches named `store-notified-<tag>-live` and `store-notified-<tag>-failed`, so run `workflow_dispatch` from the default branch.
 
 ---
 
