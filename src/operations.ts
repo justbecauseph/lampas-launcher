@@ -11,7 +11,7 @@
 import { GameRunner } from "./game-runner";
 
 export type LauncherOperationType =
-  "sync" | "repair" | "move" | "launch" | "mod-mutation";
+  "sync" | "repair" | "move" | "launch" | "mod-mutation" | "remove";
 
 export interface ActiveOperationInfo {
   id: string;

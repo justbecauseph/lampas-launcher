@@ -3,7 +3,7 @@ import { initConsoleView } from "./views/console-view";
 import { initModsView } from "./views/mods-view";
 import { initServerStatusView } from "./views/server-status-view";
 import { initAuthView } from "./views/auth-view";
-import { initSettingsView } from "./views/settings-view";
+import { initSettingsView, showPendingToast } from "./views/settings-view";
 import { initPlayView } from "./views/play-view";
 import { initUpdateView } from "./views/update-view";
 
@@ -104,6 +104,7 @@ function initWindowControls(): void {
 
 async function startApp(): Promise<void> {
   initWindowControls();
+  showPendingToast(showToast);
   const switchToTab = initNavigation();
 
   let activeConfig: RendererSettingsDto = {

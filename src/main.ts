@@ -13,7 +13,14 @@ import {
   validateWebUrl,
   PortalPolicy,
   getUserDataDir,
+  getDefaultGameDir,
+  getLegacyDefaultGameDir,
 } from "./config";
+import {
+  GameFilesRemovalError,
+  planGameFilesRemoval,
+  removeGameFiles,
+} from "./game-files-removal";
 import { SessionManager } from "./session-manager";
 import { LauncherAuth } from "./auth";
 import { LauncherSync } from "./sync";
@@ -51,6 +58,7 @@ import type {
   RendererSettingsDto,
   KnownLocationId,
   UpdateSettingsDto,
+  GameFilesRemovalResultDto,
 } from "./types";
 
 let mainWindow: BrowserWindow | null = null;
@@ -817,6 +825,132 @@ app.whenReady().then(async () => {
     },
   );
 
+  registerSecureHandler(
+    "gameDir:removeFiles",
+    IpcSchemas.noArgs,
+    async (event): Promise<GameFilesRemovalResultDto> => {
+      OperationCoordinator.assertCanMutate("remove game files");
+      const plan = await planGameFilesRemoval(
+        ConfigManager.get().gameDir,
+        [getDefaultGameDir(), getLegacyDefaultGameDir()],
+        ConfigManager.get().gameDirPreexistingEntries ?? [],
+      );
+      const size = formatBytesForDialog(plan.totalBytes);
+      // In a folder the user chose, name exactly what goes, since generic
+      // names like "config" or "logs" may be theirs.
+      const shown = plan.entries.slice(0, 12).join(", ");
+      const more =
+        plan.entries.length > 12 ? ` and ${plan.entries.length - 12} more` : "";
+      const scope = plan.isDefaultFolder
+        ? "This deletes everything in the folder, including Minecraft, the Java runtime, mods, mod settings, resource packs, shader packs, screenshots, worlds, your server list, game options and logs."
+        : `This is a folder you chose. Only these items are deleted: ${shown}${more}. ${plan.leftoverEntries.length} other item${plan.leftoverEntries.length === 1 ? " stays" : "s stay"}.`;
+      const { confirmed, optionChecked: resetSettings } =
+        await IpcBoundary.confirmPrivilegedOperationWithOption(event, {
+          title: "Remove game files",
+          message: `Remove ${size} of game files?`,
+          detail: `Folder: ${plan.gameDir}\n\n${scope}\n\nPressing Play later downloads the game again.`,
+          confirmButtonText: "Remove",
+          checkboxLabel: "Also reset launcher settings and sign out",
+        });
+      if (!confirmed) {
+        return {
+          cancelled: true,
+          gameDir: plan.gameDir,
+          freedBytes: 0,
+          removedEntries: 0,
+          failedEntries: [],
+          leftoverEntries: plan.leftoverEntries.length,
+          folderRemoved: false,
+          settingsReset: false,
+        };
+      }
+
+      const op = OperationCoordinator.acquire(
+        "remove",
+        `Remove game files in ${plan.gameDir}`,
+      );
+      let result;
+      try {
+        // The dialog can stay open a while. Re-check the folder and delete
+        // only what was confirmed and is still eligible now.
+        const fresh = await planGameFilesRemoval(
+          ConfigManager.get().gameDir,
+          [getDefaultGameDir(), getLegacyDefaultGameDir()],
+          ConfigManager.get().gameDirPreexistingEntries ?? [],
+        );
+        if (
+          fresh.gameDir !== plan.gameDir ||
+          fresh.isDefaultFolder !== plan.isDefaultFolder
+        ) {
+          throw new GameFilesRemovalError(
+            "The game folder changed while the dialog was open. Nothing was removed.",
+          );
+        }
+        const confirmedEntries = new Set(plan.entries);
+        LauncherLogger.info(`[Storage] Removing game files in ${plan.gameDir}`);
+        result = await removeGameFiles({
+          ...fresh,
+          entries: fresh.entries.filter((e) => confirmedEntries.has(e)),
+        });
+      } finally {
+        op.release();
+      }
+      for (const failure of result.failed) {
+        LauncherLogger.warn(
+          `[Storage] Couldn't remove ${failure.entry}: ${failure.message}`,
+        );
+      }
+      LauncherLogger.info(
+        `[Storage] Removed ${result.removedEntries.length} entries; ${result.failed.length} failed; ${result.leftoverEntries.length} left in place`,
+      );
+
+      // Local mods and shader packs are gone with their folders, and launching
+      // without a sync would find no game, so clear those settings.
+      const removed = new Set(
+        result.removedEntries.map((e) => e.toLowerCase()),
+      );
+      const cleanup: Partial<LauncherConfig> = {};
+      if (removed.has("mods")) cleanup.customClientMods = [];
+      if (removed.has("shaderpacks")) cleanup.customShaderPacks = [];
+      const noSyncTurnedOff =
+        result.failed.length === 0 && Boolean(ConfigManager.get().noSync);
+      if (noSyncTurnedOff) cleanup.noSync = false;
+      if (Object.keys(cleanup).length > 0) ConfigManager.set(cleanup);
+
+      // Leave settings alone after a partial failure, so the folder stays
+      // configured and the user can retry.
+      let settingsReset = false;
+      let signOutWarning: string | undefined;
+      if (resetSettings && result.failed.length === 0) {
+        const logoutResult = LauncherAuth.logout();
+        cosmeticImageBroker.clear();
+        if (logoutResult && !logoutResult.success) {
+          signOutWarning =
+            logoutResult.error || "saved sign-in couldn't be deleted";
+          LauncherLogger.warn(
+            `[Storage] Sign-out cleanup incomplete: ${signOutWarning}`,
+          );
+        }
+        ConfigManager.resetToDefaults();
+        settingsReset = true;
+      }
+
+      return {
+        cancelled: false,
+        gameDir: plan.gameDir,
+        freedBytes: result.failed.length === 0 ? plan.totalBytes : 0,
+        removedEntries: result.removedEntries.length,
+        failedEntries: result.failed.map((f) => f.entry),
+        leftoverEntries: result.leftoverEntries.length,
+        folderRemoved: result.folderRemoved,
+        settingsReset,
+        settingsResetSkipped: resetSettings && !settingsReset,
+        signOutWarning,
+        noSyncTurnedOff: noSyncTurnedOff && !settingsReset,
+      };
+    },
+  );
+
   // IPC Handlers: Auth
   registerSecureHandler("auth:login", IpcSchemas.noArgs, async () => {
     const res = await LauncherAuth.loginWithPortal();
@@ -1391,3 +1525,9 @@ app.on("before-quit", async (event) => {
     app.quit();
   }
 });
+
+function formatBytesForDialog(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}

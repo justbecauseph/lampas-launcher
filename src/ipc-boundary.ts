@@ -889,6 +889,50 @@ export class IpcBoundary {
     return result.response === 0;
   }
 
+  /**
+   * Like confirmPrivilegedOperation, with a checkbox for an optional extra
+   * step. The checkbox only counts when the user also confirms.
+   */
+  static async confirmPrivilegedOperationWithOption(
+    event: IpcMainInvokeEvent,
+    options: {
+      title: string;
+      message: string;
+      detail?: string;
+      confirmButtonText?: string;
+      cancelButtonText?: string;
+      checkboxLabel: string;
+    },
+  ): Promise<{ confirmed: boolean; optionChecked: boolean }> {
+    if (!dialog || typeof dialog.showMessageBox !== "function") {
+      throw new IpcSecurityError(
+        "Native dialog service unavailable; privileged action denied fail-closed.",
+      );
+    }
+    const snapshot = this.createApprovalSnapshot(event);
+    const result = await dialog.showMessageBox(snapshot.window, {
+      type: "warning",
+      buttons: [
+        options.confirmButtonText || "Confirm",
+        options.cancelButtonText || "Cancel",
+      ],
+      defaultId: 1,
+      cancelId: 1,
+      title: options.title,
+      message: options.message,
+      detail: options.detail,
+      checkboxLabel: options.checkboxLabel,
+      checkboxChecked: false,
+      noLink: true,
+    });
+    this.validateApprovalSnapshot(snapshot);
+    const confirmed = result.response === 0;
+    return {
+      confirmed,
+      optionChecked: confirmed && Boolean(result.checkboxChecked),
+    };
+  }
+
   static validateIpcSender(event: IpcMainInvokeEvent | IpcMainEvent): {
     sender: any;
     frame: any;

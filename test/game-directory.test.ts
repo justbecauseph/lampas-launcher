@@ -131,6 +131,23 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     expect(GameDirectoryManager.needsInitialSetup()).toBe(false);
   });
 
+  test("first-run setup in a folder that already holds files remembers them, outside the folder", async () => {
+    ConfigManager.resetForTesting();
+    ConfigManager.set({ gameDirConfigured: false });
+    const picked = path.join(testRoot, "picked-pictures");
+    fs.mkdirSync(path.join(picked, "Screenshots"), { recursive: true });
+    fs.writeFileSync(path.join(picked, "notes.txt"), "mine");
+
+    const updated = await GameDirectoryManager.configureInitial(picked);
+
+    expect(updated.gameDirPreexistingEntries?.sort()).toEqual([
+      "Screenshots",
+      "notes.txt",
+    ]);
+    // Nothing is written into the folder itself.
+    expect(fs.readdirSync(picked).sort()).toEqual(["Screenshots", "notes.txt"]);
+  });
+
   test("configureInitial is rejected when game directory is already configured", async () => {
     ConfigManager.set({ gameDirConfigured: true });
     await expect(

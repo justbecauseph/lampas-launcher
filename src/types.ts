@@ -43,6 +43,11 @@ export interface LauncherConfig {
   allocatedRamGb: number;
   gameDir: string;
   gameDirConfigured?: boolean;
+  /**
+   * Top-level entries the game folder already held when it was chosen at
+   * first-run setup. Remove game files never deletes these. Main-only.
+   */
+  gameDirPreexistingEntries?: string[];
   javaPath?: string;
   javaArgs?: string;
   disabledClientMods?: string[];
@@ -84,6 +89,27 @@ export interface DirectoryMoveResult {
   gameDir: string;
   previousGameDir: string;
   error?: string;
+}
+
+/** Outcome of Settings > Remove game files. */
+export interface GameFilesRemovalResultDto {
+  /** True when the user dismissed the confirmation; nothing was removed. */
+  cancelled: boolean;
+  gameDir: string;
+  freedBytes: number;
+  removedEntries: number;
+  /** Top-level entries that couldn't be removed, e.g. locked files. */
+  failedEntries: string[];
+  /** Entries left in a user-chosen folder because the launcher didn't create them. */
+  leftoverEntries: number;
+  folderRemoved: boolean;
+  settingsReset: boolean;
+  /** Reset was requested but skipped because some files couldn't be removed. */
+  settingsResetSkipped?: boolean;
+  /** Set when signing out couldn't delete the saved sign-in. */
+  signOutWarning?: string;
+  /** No Sync was on and has been turned off, since there's no game left to launch. */
+  noSyncTurnedOff?: boolean;
 }
 
 export interface CustomClientMod {
@@ -391,6 +417,7 @@ export interface LampasApi {
     ) => Promise<DirectoryValidationResult>;
     configure: (targetPath: string) => Promise<RendererSettingsDto>;
     move: (targetPath: string) => Promise<DirectoryMoveResult>;
+    removeFiles: () => Promise<GameFilesRemovalResultDto>;
     onMoveProgress: (
       callback: (progress: DirectoryMoveProgress) => void,
     ) => () => void;

@@ -615,11 +615,12 @@ try {
 
   // 1. Inbound IPC Registration Inventory
   await runTest(
-    "Registration harness confirms 44 handles and 1 on channel",
+    "Registration harness confirms 45 handles and 1 on channel",
     () => {
-      if (ipcHandlers.size !== 44)
-        throw new Error(`Expected 44 handles, got ${ipcHandlers.size}`);
+      if (ipcHandlers.size !== 45)
+        throw new Error(`Expected 45 handles, got ${ipcHandlers.size}`);
       for (const channel of [
+        "gameDir:removeFiles",
         "shaders:browseAndAdd",
         "shaders:addPaths",
         "shaders:remove",
@@ -5983,6 +5984,80 @@ try {
 
       // Cleanup
       SessionManager.clearSession();
+    },
+  );
+
+  // 62. [Storage] gameDir:removeFiles is main-owned, natively confirmed, and fails closed
+  await runTest(
+    "[Storage] gameDir:removeFiles removes only after native confirmation, ignores renderer paths, and refuses non-Lampas folders",
+    async () => {
+      const win = MockBrowserWindow.allWindows[0];
+      const event = {
+        sender: win.webContents,
+        senderFrame: win.webContents.mainFrame,
+      };
+      const removeHandler = ipcHandlers.get("gameDir:removeFiles")!;
+      const previousGameDir = ConfigManager.get().gameDir;
+      const removalDir = path.join(testRoot, "removal-game");
+      const elsewhere = path.join(testRoot, "removal-elsewhere");
+      try {
+        // A. A folder without a Lampas installation is refused before any dialog.
+        fs.mkdirSync(path.join(removalDir, "mods"), { recursive: true });
+        fs.writeFileSync(path.join(removalDir, "mods", "a.jar"), "x");
+        ConfigManager.set({ gameDir: removalDir });
+        mockDialog.showMessageBox.mockReset();
+        let refused = false;
+        try {
+          await removeHandler(event as any);
+        } catch {
+          refused = true;
+        }
+        if (!refused)
+          throw new Error("Expected a folder without .lampas to be refused");
+        if (mockDialog.showMessageBox.mock.calls.length !== 0)
+          throw new Error("Confirmation was shown for a refused folder");
+        if (!fs.existsSync(path.join(removalDir, "mods", "a.jar")))
+          throw new Error("A refused removal deleted files");
+
+        // B. Cancelling the native dialog removes nothing, even with the box ticked.
+        fs.mkdirSync(path.join(removalDir, ".lampas"), { recursive: true });
+        fs.writeFileSync(path.join(removalDir, "notes.txt"), "keep");
+        mockDialog.showMessageBox.mockImplementationOnce(async () => ({
+          response: 1,
+          checkboxChecked: true,
+        }));
+        const cancelled = await removeHandler(event as any);
+        if (!cancelled.cancelled || cancelled.settingsReset)
+          throw new Error("Cancelled removal reported work");
+        if (!fs.existsSync(path.join(removalDir, "mods", "a.jar")))
+          throw new Error("Cancelled removal deleted files");
+
+        // C. Confirming removes known entries from the configured folder only;
+        // a renderer-supplied path is ignored and unknown files stay.
+        fs.mkdirSync(path.join(elsewhere, ".lampas"), { recursive: true });
+        fs.mkdirSync(path.join(elsewhere, "mods"), { recursive: true });
+        fs.writeFileSync(path.join(elsewhere, "mods", "b.jar"), "x");
+        mockDialog.showMessageBox.mockImplementationOnce(async () => ({
+          response: 0,
+          checkboxChecked: false,
+        }));
+        const done = await removeHandler(event as any, elsewhere);
+        if (done.cancelled || done.settingsReset)
+          throw new Error("Confirmed removal did not run as requested");
+        if (
+          fs.existsSync(path.join(removalDir, "mods")) ||
+          fs.existsSync(path.join(removalDir, ".lampas"))
+        )
+          throw new Error("Known entries were not removed");
+        if (!fs.existsSync(path.join(removalDir, "notes.txt")))
+          throw new Error("An unknown file in a chosen folder was removed");
+        if (done.leftoverEntries !== 1)
+          throw new Error(`Expected 1 leftover, got ${done.leftoverEntries}`);
+        if (!fs.existsSync(path.join(elsewhere, "mods", "b.jar")))
+          throw new Error("A renderer-supplied path was acted on");
+      } finally {
+        ConfigManager.set({ gameDir: previousGameDir });
+      }
     },
   );
 

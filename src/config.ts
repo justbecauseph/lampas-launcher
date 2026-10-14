@@ -11,10 +11,53 @@ export function getDefaultGameDir(): string {
   if (process.env.LAMPAS_DEFAULT_GAME_DIR) {
     return process.env.LAMPAS_DEFAULT_GAME_DIR;
   }
+  // Store (MSIX) builds default to the package's own storage, which Windows
+  // deletes on uninstall. Users who want the files kept choose another
+  // location during setup.
+  const packageCache = getStorePackageCacheDir();
+  if (packageCache) {
+    return path.join(packageCache, ".minecraft-lampas");
+  }
+  return getLegacyDefaultGameDir();
+}
+
+/** The %APPDATA% default every build used before Store builds got their own. */
+export function getLegacyDefaultGameDir(): string {
   return path.join(
     process.env.APPDATA || process.env.HOME || process.cwd(),
     ".minecraft-lampas",
   );
+}
+
+/**
+ * For a Store (MSIX) install, the package's LocalCache folder, written to
+ * directly rather than through the %APPDATA% redirection, so the path the
+ * launcher shows is where the files really are. Null for other builds or
+ * when the package folder can't be found.
+ */
+export function getStorePackageCacheDir(
+  execPath: string = process.execPath,
+  isStore: boolean = Boolean(
+    (process as { windowsStore?: boolean }).windowsStore,
+  ),
+): string | null {
+  if (!isStore || !process.env.LOCALAPPDATA) return null;
+  // Installed under ...\WindowsApps\<Name>_<Version>_<Arch>_<ResourceId>_<PublisherId>\
+  const segments = execPath.split(/[\\/]/);
+  const appsIndex = segments.findIndex(
+    (s) => s.toLowerCase() === "windowsapps",
+  );
+  const fullName = appsIndex >= 0 ? segments[appsIndex + 1] : undefined;
+  const parts = fullName?.split("_");
+  if (!parts || parts.length !== 5 || !parts[0] || !parts[4]) return null;
+  const packageRoot = path.join(
+    process.env.LOCALAPPDATA,
+    "Packages",
+    `${parts[0]}_${parts[4]}`,
+  );
+  return fs.existsSync(packageRoot)
+    ? path.join(packageRoot, "LocalCache")
+    : null;
 }
 
 export function getUserDataDir(): string {
@@ -400,6 +443,31 @@ export class ConfigManager {
 
     this.cachedConfig = updated;
     return this.cachedConfig;
+  }
+
+  /**
+   * Main-only: restores default settings, which brings back first-run setup.
+   * Callers must clear the session first; this refuses while one is active.
+   */
+  static resetToDefaults(): void {
+    this.initPath();
+    const current = this.get();
+    if (current.token) {
+      throw new Error("Sign out before resetting launcher settings.");
+    }
+    const dir = path.dirname(this.configPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    writeAtomicFileSync(
+      this.configPath,
+      JSON.stringify(DEFAULT_CONFIG, null, 2),
+      "utf-8",
+    );
+    LauncherLogger.info("[Config] Settings reset to defaults");
+    this.incrementSessionGeneration();
+    // Re-derive on next read so the default game folder and portal apply.
+    this.cachedConfig = null;
   }
 
   static resetForTesting(): void {

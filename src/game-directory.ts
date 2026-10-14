@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { listPreexistingEntries } from "./game-files-removal";
 import * as os from "node:os";
 import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
@@ -930,6 +931,9 @@ export class GameDirectoryManager {
     }
 
     const resolved = path.resolve(targetPath.trim());
+    // A folder that already holds things: remember them so Settings >
+    // Remove game files never deletes them.
+    const preexisting = await listPreexistingEntries(resolved);
     if (!fs.existsSync(resolved)) {
       await fs.promises.mkdir(resolved, { recursive: true });
     }
@@ -937,6 +941,7 @@ export class GameDirectoryManager {
     return ConfigManager.set({
       gameDir: resolved,
       gameDirConfigured: true,
+      gameDirPreexistingEntries: preexisting,
     });
   }
 

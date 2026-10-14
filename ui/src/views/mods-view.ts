@@ -673,6 +673,14 @@ export function initModsView(options: ModsViewOptions): () => void {
     });
   }
 
+  // Removing game files deletes local mods and shader packs; reload the list.
+  const onGameFilesRemoved = () => {
+    catalogLoaded = false;
+    const tab = document.getElementById("tab-mods");
+    if (tab && !tab.classList.contains("hidden")) void loadCatalog();
+  };
+  window.addEventListener?.("lampas:game-files-removed", onGameFilesRemoved);
+
   const navMods = document.getElementById("nav-mods");
   navMods?.addEventListener("click", loadCatalogOnFirstView);
   const tabMods = document.getElementById("tab-mods");
@@ -682,5 +690,9 @@ export function initModsView(options: ModsViewOptions): () => void {
   return () => {
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     navMods?.removeEventListener("click", loadCatalogOnFirstView);
+    window.removeEventListener?.(
+      "lampas:game-files-removed",
+      onGameFilesRemoved,
+    );
   };
 }

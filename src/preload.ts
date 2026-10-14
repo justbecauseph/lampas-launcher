@@ -7,6 +7,7 @@ import type {
   DirectoryValidationResult,
   DirectoryMoveProgress,
   DirectoryMoveResult,
+  GameFilesRemovalResultDto,
   ServerStatus,
   RendererUserProfile,
   RendererSettingsDto,
@@ -134,6 +135,8 @@ const api: LampasApi = {
       ipcRenderer.invoke("gameDir:configure", targetPath),
     move: (targetPath: string): Promise<DirectoryMoveResult> =>
       ipcRenderer.invoke("gameDir:move", targetPath),
+    removeFiles: (): Promise<GameFilesRemovalResultDto> =>
+      ipcRenderer.invoke("gameDir:removeFiles"),
     onMoveProgress: (callback: (progress: DirectoryMoveProgress) => void) => {
       const handler = (_: any, data: DirectoryMoveProgress) => callback(data);
       ipcRenderer.on("gameDir:moveProgress", handler);

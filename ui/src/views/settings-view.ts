@@ -15,11 +15,53 @@ export interface SettingsViewOptions {
   switchToTab?: (tabId: string) => void;
 }
 
+const PENDING_TOAST_KEY = "lampas:pending-toast";
+
+/** Holds a toast across window.location.reload(); see showPendingToast. */
+function queueToastAfterReload(
+  message: string,
+  type: "success" | "error",
+): void {
+  try {
+    sessionStorage.setItem(
+      PENDING_TOAST_KEY,
+      JSON.stringify({ message, type }),
+    );
+  } catch {
+    // Storage unavailable: the reload still happens, without the toast.
+  }
+}
+
+/** Shows a toast queued before the last reload, once. */
+export function showPendingToast(
+  showToast: (
+    message: string,
+    type: "success" | "error",
+    duration?: number,
+  ) => void,
+): void {
+  try {
+    const raw = sessionStorage.getItem(PENDING_TOAST_KEY);
+    if (!raw) return;
+    sessionStorage.removeItem(PENDING_TOAST_KEY);
+    const { message, type } = JSON.parse(raw);
+    if (
+      typeof message === "string" &&
+      (type === "success" || type === "error")
+    ) {
+      showToast(message, type, 8000);
+    }
+  } catch {
+    // Ignore a malformed or unavailable entry.
+  }
+}
+
 function formatBytes(bytes?: number): string {
   if (!bytes || isNaN(bytes)) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 ** 3) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
 export function initSettingsView(options: SettingsViewOptions): {
@@ -601,6 +643,69 @@ export function initSettingsView(options: SettingsViewOptions): {
           `Could not save JVM arguments: ${formatFriendlyError(err)}`,
           "error",
         );
+      }
+    };
+  }
+
+  const btnRemoveGameFiles = document.getElementById(
+    "btn-remove-game-files",
+  ) as HTMLButtonElement | null;
+  if (btnRemoveGameFiles) {
+    btnRemoveGameFiles.onclick = async () => {
+      if (!window.lampas?.gameDirectory?.removeFiles) return;
+      const label = btnRemoveGameFiles.textContent;
+      btnRemoveGameFiles.disabled = true;
+      btnRemoveGameFiles.textContent = "Checking…";
+      try {
+        // Main measures the folder and asks for confirmation in a system dialog.
+        const res = await window.lampas.gameDirectory.removeFiles();
+        if (res.cancelled) return;
+        if (res.settingsReset) {
+          // Signed out with default settings: restart the renderer into
+          // first-run setup, and show the outcome once it has loaded.
+          queueToastAfterReload(
+            res.signOutWarning
+              ? `Game files removed and settings reset, but the saved sign-in couldn't be deleted (${res.signOutWarning}).`
+              : `Removed ${formatBytes(res.freedBytes)} of game files and reset launcher settings.`,
+            res.signOutWarning ? "error" : "success",
+          );
+          window.location.reload();
+          return;
+        }
+        window.dispatchEvent(new Event("lampas:game-files-removed"));
+        // Main may have cleared local mods and turned off No Sync.
+        const freshConfig = await window.lampas.config.get();
+        currentConfig = freshConfig;
+        onConfigChanged(freshConfig);
+        updateNoSyncUI(freshConfig.noSync);
+        if (res.failedEntries.length > 0) {
+          const skipped = res.settingsResetSkipped
+            ? " Settings weren't reset."
+            : "";
+          showToast(
+            `Some game files couldn't be removed (${res.failedEntries.join(", ")}). Close Minecraft or anything else using them and try again.${skipped}`,
+            "error",
+            8000,
+          );
+        } else {
+          const leftover =
+            res.leftoverEntries > 0
+              ? ` ${res.leftoverEntries} other item${res.leftoverEntries === 1 ? " was" : "s were"} left in the folder.`
+              : "";
+          const noSync = res.noSyncTurnedOff
+            ? " No Sync is now off so Play can download the game."
+            : "";
+          showToast(
+            `Removed ${formatBytes(res.freedBytes)} of game files.${leftover}${noSync}`,
+            "success",
+            6000,
+          );
+        }
+      } catch (err: any) {
+        showToast(formatFriendlyError(err), "error", 6000);
+      } finally {
+        btnRemoveGameFiles.disabled = false;
+        btnRemoveGameFiles.textContent = label;
       }
     };
   }
