@@ -3,7 +3,9 @@
 > **The zero-braincells, 1-click way to play Lampas SMP.**  
 > No Prism, no CurseForge, no _"hey why is my mod version different than the server"_ pain. Just click **PLAY** and jump straight in! 🚀
 
-[![Download Latest Release](https://img.shields.io/github/v/release/justbecauseph/lampas-launcher?label=Download%20Latest%20Release&style=for-the-badge&color=2ea44f)](https://github.com/justbecauseph/lampas-launcher/releases/latest)
+<a href="https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct"><img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get it from Microsoft" width="200"/></a>
+
+On Linux, or want a portable `.exe`? Grab it from [**GitHub Releases**](https://github.com/justbecauseph/lampas-launcher/releases/latest).
 
 ---
 
@@ -36,10 +38,10 @@ graph LR
     C --> D["4. You're in the SMP! 🏰"]
 ```
 
-1. **Download the latest release**:
-   - Grab the installer from [**GitHub Releases (Latest)**](https://github.com/justbecauseph/lampas-launcher/releases/latest).
-   - **Windows**: Download `LampasLauncher-Setup-<version>.exe` (Installer) or `LampasLauncher-<version>-Windows.exe` (Portable).
-   - **Linux**: Download `LampasLauncher-<version>-Linux.AppImage` (make executable & run) or `.tar.gz`.
+1. **Get the launcher**:
+   - **Windows**: Install it from the [**Microsoft Store**](https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct). The Store keeps the launcher up to date for you.
+   - **Windows (without the Store)**: Download `LampasLauncher-Setup-<version>.exe` (Installer) or `LampasLauncher-<version>-Windows.exe` (Portable) from [**GitHub Releases (Latest)**](https://github.com/justbecauseph/lampas-launcher/releases/latest). The launcher tells you when a newer version is out.
+   - **Linux**: Download `LampasLauncher-<version>-Linux.AppImage` (make executable & run) or `.tar.gz` from [**GitHub Releases (Latest)**](https://github.com/justbecauseph/lampas-launcher/releases/latest).
 2. **Log in**:
    - Click **Login with Lampas Portal**.
    - Your browser will open. Authorize your account, link your Minecraft username, and boom — you're logged in!
@@ -92,7 +94,7 @@ If you want to build or tinker with the launcher code locally:
 ### Supported Platforms & Runtime Requirements
 
 - **Supported Target Platforms:**
-  - **Windows (x64):** Windows 10, Windows 11 (NSIS installer & portable `.exe`).
+  - **Windows (x64):** Windows 10, Windows 11 (NSIS installer & portable `.exe`). The Microsoft Store AppX requires Windows 10 version 1809 (build 17763) or later.
   - **Linux (x64):** Modern glibc distributions (AppImage & `.tar.gz`).
 - **Tooling Requirements:**
   - **Bun:** `v1.4.2` (pinned in CI)
@@ -132,6 +134,7 @@ bun run package:dir
 
 # 9. Package production distribution artifacts
 bun run package:win    # Windows installer & portable exe
+bun run package:appx   # Windows Microsoft Store AppX (unsigned; the Store signs it)
 bun run package:linux  # Linux AppImage & tar.gz
 bun run package:all    # Multi-platform distribution build
 ```
@@ -143,6 +146,16 @@ Windows packages built by GitHub Actions are unsigned when signing certificate c
 Running the release workflow manually on a branch builds and uploads artifacts for that workflow run without publishing a GitHub Release. Pushing a version tag builds and publishes a release after validation. Signature verification should be restored when signing certificate custody is ready.
 
 GitHub artifact attestations are generated for public repositories. This private repository does not generate an attestation on GitHub Free; an eligible Enterprise Cloud repository can enable it with the `ENABLE_ARTIFACT_ATTESTATIONS` repository variable set to `true`. Releases still include a CycloneDX SBOM with the dependency inventory and a `SHA256SUMS` file with artifact hashes. The hashes do not verify publisher identity.
+
+### Microsoft Store Releases
+
+The Windows build also produces an unsigned `LampasLauncher-<version>-Windows.appx`, which is checksummed with the other artifacts but not attached to the GitHub Release. After a version tag publishes the GitHub Release, the `store` job submits that AppX to the Microsoft Store (product ID `9P9WWSV7L7RS`) with the Microsoft Store Developer CLI. The Store signs the package during certification, which takes from a few hours to a few days.
+
+- The job runs only when the repository variable `ENABLE_STORE_PUBLISH` is `true`, and it needs the secrets `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET` and `SELLER_ID`. The Entra application must have the **Manager** role under Partner Center → User management → Microsoft Entra applications.
+- `msstore publish` accepts only `.msix`, `.msixbundle` and `.msixupload` files, so the job uploads the AppX under an `.msix` name. Partner Center rejects MSIX uploads with a `MinVersion` of `10.0.17134.0` or lower, so `appx.minVersion` in `package.json` must stay at `10.0.17763.0` or higher.
+- The job replaces a pending submission that was created through the API, but it fails if a draft submission started in the Partner Center web UI exists. Submit or delete such drafts before tagging a release.
+- Every Store upload needs a higher package version than the last one. electron-builder maps `package.json` version `1.5.4` to package version `1.5.4.0`.
+- Store installs skip the launcher's GitHub update notice because the Store delivers updates.
 
 ---
 
