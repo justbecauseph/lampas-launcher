@@ -106,6 +106,7 @@
       "publisherDisplayName": "PUPProgGuild",
       "displayName": "Lampas Launcher",
       "backgroundColor": "#1e1e1e",
+      "minVersion": "10.0.17763.0",
       "languages": [
         "en-US"
       ],
