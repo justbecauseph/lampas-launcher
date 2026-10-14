@@ -56,7 +56,7 @@ graph LR
 | **🚀 Play**        | The main dashboard. See server status, who's online, pick your channel (`Stable`, `Beta`, `Dev`), and press the big **PLAY** button. |
 | **🧩 Client Mods** | Toggle official optional mods or drop your own `.jar` files here.                                                                    |
 | **📜 Console**     | Live logs while your game is running. If something goes wrong, you can search and copy errors here to send to staff.                 |
-| **⚙️ Settings**    | Allocate more RAM (slider), change game directory, customize Java settings, or view your logs.                                       |
+| **⚙️ Settings**    | Allocate more RAM (slider), change or remove the game directory, set extra JVM arguments, or open your logs.                         |
 
 ---
 
@@ -74,6 +74,10 @@ Head over to the [Lampas Portal](https://dev.lampas.town) dashboard, link your M
 ### 💾 "Will updating delete my worlds, screenshots, or keybinds?"
 
 **Nope!** Your `saves/`, `screenshots/`, `logs/`, `servers.dat`, and custom `options.txt` settings are strictly protected and will never be overwritten or deleted.
+
+### 🚪 "Does closing the launcher close Minecraft?"
+
+No. Minecraft keeps running if you close the launcher, and the launcher picks the running game up again when you reopen it (live console output is not available for a game started by an earlier launcher session; use **Minecraft Log** instead). Use the **Stop** button on the Play or Console tab to end the game from the launcher; it force-closes the process.
 
 ### 🧩 "How does config file ownership work?"
 
@@ -113,7 +117,7 @@ bun install --frozen-lockfile
 # 2. Typecheck main/preload (tsconfig.json) and renderer (tsconfig.renderer.json)
 bun run typecheck
 
-# 3. Run full unit & integration test suite (233 tests across 29 files)
+# 3. Run full unit & integration test suite (554 tests across 52 files)
 bun test
 
 # 4. Run real Electron smoke test harness (verifies assets, fonts, preload, & execution)

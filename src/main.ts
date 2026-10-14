@@ -64,6 +64,7 @@ import type {
 let mainWindow: BrowserWindow | null = null;
 const launcherUpdateChecker = new LauncherUpdateChecker(() => app.getVersion());
 let logTransport: BoundedLogBatchTransport | null = null;
+let adoptionAnnounced = false;
 
 function safeSend(channel: string, ...args: any[]): void {
   safeSendToWindow(mainWindow, channel, ...args);
@@ -272,7 +273,26 @@ function createWindow() {
   }
 }
 
+// Only one launcher may run per user-data directory. A second launch hands
+// off to the running instance (which brings its window forward) and exits,
+// so two launchers never race over the game-session record or the game files.
+const hasSingleInstanceLock =
+  typeof app.requestSingleInstanceLock === "function"
+    ? app.requestSingleInstanceLock()
+    : true;
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
   LauncherLogger.init();
   LauncherLogger.info(
     `Lampas Launcher initialized (App: ${app.getName()} ${app.getVersion()})`,
@@ -309,6 +329,33 @@ app.whenReady().then(async () => {
     );
     OperationCoordinator.blockMutations(err.message);
   }
+
+  // Adoption of a game left running by a previous launcher session proceeds
+  // in the background so the window appears at once. While it is pending,
+  // GameRunner reports the game as running, and game:isRunning waits for the
+  // outcome before answering the renderer.
+  const adoptionSettled: Promise<{ pid: number } | null> =
+    GameRunner.adoptRunningGame((code) => {
+      logTransport?.flushSession();
+      LauncherLogger.info(
+        "Minecraft process from a previous launcher session exited",
+      );
+      safeSend("game:exit", code);
+    })
+      .then((adopted) => {
+        if (adopted) {
+          LauncherLogger.info(
+            `[Game] Adopted running Minecraft process ${adopted.pid} from a previous launcher session`,
+          );
+        }
+        return adopted;
+      })
+      .catch((err: any) => {
+        LauncherLogger.warn(
+          `[Game] Could not check for a running Minecraft process: ${err?.message || err}`,
+        );
+        return null;
+      });
 
   createWindow();
 
@@ -1303,9 +1350,22 @@ app.whenReady().then(async () => {
     LauncherLogger.warn("Game kill request received from user.");
     await GameRunner.killGame();
   });
-  registerSecureHandler("game:isRunning", IpcSchemas.noArgs, () =>
-    GameRunner.isGameRunning(),
-  );
+  registerSecureHandler("game:isRunning", IpcSchemas.noArgs, async () => {
+    const adopted = await adoptionSettled;
+    if (
+      adopted &&
+      !adoptionAnnounced &&
+      GameRunner.getAdoptedPid() === adopted.pid
+    ) {
+      adoptionAnnounced = true;
+      logTransport?.push({
+        timestamp: new Date().toLocaleTimeString(),
+        level: "INFO",
+        message: `Minecraft is still running from a previous launcher session (process ${adopted.pid}). Live game output is unavailable; use the Minecraft Log button to view it.`,
+      });
+    }
+    return GameRunner.isGameRunning();
+  });
 
   if (process.argv.includes("--smoke-test")) {
     const runSmokeCheck = async () => {
@@ -1492,6 +1552,7 @@ app.on("before-quit", async (event) => {
   event.preventDefault();
   isQuitting = true;
   LauncherAuth.cancelLogin();
+  GameRunner.releaseForShutdown();
   try {
     await Promise.race([
       Promise.all([

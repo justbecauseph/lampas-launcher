@@ -14,12 +14,18 @@ import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import * as crypto from "node:crypto";
 import type { ReleaseDescriptor, UserProfile } from "../src/types";
+import type { ProcessProbe } from "../src/game-session";
 
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-runner-test-"));
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
+const sessionFile = path.join(userDataDir, "game-session.json");
 
-let spawnedCalls: Array<{ javaExe: string; jvmArgs: string[] }> = [];
+let spawnedCalls: Array<{
+  javaExe: string;
+  jvmArgs: string[];
+  options: any;
+}> = [];
 let bootstrapCalls: Array<{ gameDir: string; runtime: any }> = [];
 
 mock.module("electron", () => ({
@@ -33,9 +39,19 @@ let mockSpawnHook: ((proc: any) => void) | null = null;
 
 mock.module("node:child_process", () => ({
   ...actualChildProcess,
-  spawn: (javaExe: string, jvmArgs: string[]) => {
-    spawnedCalls.push({ javaExe, jvmArgs });
+  spawn: (javaExe: string, jvmArgs: string[], options?: any) => {
+    // The window maximizer helper (PowerShell, started once the game has a
+    // pid) goes through this mock too; it is neither a game launch nor a
+    // process the spawn hook should see.
+    if (/powershell\.exe$/i.test(javaExe)) {
+      const helper = new EventEmitter() as any;
+      helper.exitCode = null;
+      helper.kill = () => {};
+      return helper;
+    }
+    spawnedCalls.push({ javaExe, jvmArgs, options });
     const proc = new EventEmitter() as any;
+    proc.pid = 4242;
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
     proc.killed = false;
@@ -64,7 +80,7 @@ let mockSessionUser: any = {
 const { JavaRuntimeManager } = await import("../src/java-runtime");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { ConfigManager } = await import("../src/config");
-const { GameRunner } = await import("../src/game-runner");
+const { GameRunner, buildLaunchArguments } = await import("../src/game-runner");
 const { LauncherAuth } = await import("../src/auth");
 
 const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(
@@ -113,6 +129,7 @@ beforeEach(() => {
   };
   GameRunner.resetForTesting();
   ConfigManager.resetForTesting();
+  fs.rmSync(sessionFile, { force: true });
   bootstrapCalls = [];
   ConfigManager.set({
     gameDir,
@@ -619,5 +636,488 @@ describe("GameRunner launch flow & Quick Play", () => {
       mockSpawnHook = null;
       GameRunner.resetForTesting();
     }
+  });
+});
+
+const sessionMarkerPattern = /^-Dlampas\.launcher\.session=[a-f0-9]{32}$/;
+
+function sessionRelease(): ReleaseDescriptor {
+  return {
+    schemaVersion: 1,
+    pack: "Lampas 2",
+    version: "2.0.0",
+    minecraft: "26.2",
+    loader: { type: "fabric", version: "0.19.3" },
+    minimumLauncherVersion: "1.1.0",
+    protocol: 2,
+    created: new Date().toISOString(),
+    clientManifest: "/manifest",
+    serverManifest: "/server-manifest",
+    launch: {},
+  };
+}
+
+const sessionUser: UserProfile = {
+  id: "user-123",
+  name: "TestPlayer",
+  minecraftUsername: "TestPlayer",
+  isAdmin: false,
+  isTech: false,
+  roles: [],
+  allowedChannels: ["stable"],
+};
+
+function writeSessionRecord(pid: number, sessionId: string): void {
+  fs.mkdirSync(userDataDir, { recursive: true });
+  fs.writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      version: 1,
+      pid,
+      sessionId,
+      startedAt: new Date().toISOString(),
+      gameDir,
+    }),
+  );
+}
+
+function makeFakeProbe(commandLine: string | null) {
+  const state = {
+    alive: true,
+    commandLine,
+    terminated: [] as Array<{ pid: number; signal: string }>,
+    terminateDelayMs: 0,
+  };
+  const probe: ProcessProbe = {
+    isAlive: () => state.alive,
+    readCommandLine: async () => state.commandLine,
+    terminate: (pid, signal) => {
+      state.terminated.push({ pid, signal });
+      setTimeout(() => {
+        state.alive = false;
+      }, state.terminateDelayMs);
+    },
+  };
+  return { state, probe };
+}
+
+describe("GameRunner detached launch and session record", () => {
+  test("spawns detached with a hidden window, one session marker before custom args, and records the session", async () => {
+    spawnedCalls = [];
+    ConfigManager.set({ javaArgs: "-Dcustom.first=1 -Dcustom.second=2" });
+    try {
+      await GameRunner.launchGame(
+        sessionUser,
+        () => {},
+        () => {},
+        sessionRelease(),
+      );
+    } finally {
+      // Config persists to disk and would leak into later tests.
+      ConfigManager.set({ javaArgs: "" });
+    }
+
+    expect(spawnedCalls.length).toBe(1);
+    const { jvmArgs, options } = spawnedCalls[0];
+    expect(options.detached).toBe(true);
+    expect(options.windowsHide).toBe(true);
+
+    const markers = jvmArgs.filter((arg) =>
+      arg.startsWith("-Dlampas.launcher.session="),
+    );
+    expect(markers.length).toBe(1);
+    expect(markers[0]).toMatch(sessionMarkerPattern);
+    const markerIndex = jvmArgs.indexOf(markers[0]);
+    expect(markerIndex).toBeLessThan(jvmArgs.indexOf("-Dcustom.first=1"));
+    expect(markerIndex).toBeLessThan(jvmArgs.indexOf("-Dcustom.second=2"));
+    expect(jvmArgs[markerIndex - 1]).toBe(
+      `-Dminecraft.applet.TargetDirectory=${jvmArgs[jvmArgs.indexOf("--gameDir") + 1]}`,
+    );
+
+    const record = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+    expect(record.version).toBe(1);
+    expect(record.pid).toBe(4242);
+    expect(record.sessionId).toBe(markers[0].split("=")[1]);
+    expect(record.gameDir).toBe(jvmArgs[jvmArgs.indexOf("--gameDir") + 1]);
+    expect(path.resolve(record.gameDir)).toBe(path.resolve(gameDir));
+    expect(Number.isNaN(Date.parse(record.startedAt))).toBe(false);
+  });
+
+  test("removes the session record when the game exits", async () => {
+    let childProc: any = null;
+    mockSpawnHook = (proc) => {
+      childProc = proc;
+    };
+    try {
+      await GameRunner.launchGame(
+        sessionUser,
+        () => {},
+        () => {},
+        sessionRelease(),
+      );
+      expect(fs.existsSync(sessionFile)).toBe(true);
+
+      childProc.emit("exit", 0);
+
+      expect(fs.existsSync(sessionFile)).toBe(false);
+      expect(GameRunner.isGameRunning()).toBe(false);
+    } finally {
+      mockSpawnHook = null;
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("releaseForShutdown detaches from a running game but keeps the session record", async () => {
+    let childProc: any = null;
+    let unrefCalled = false;
+    let stdoutDestroyed = false;
+    let stderrDestroyed = false;
+    mockSpawnHook = (proc) => {
+      childProc = proc;
+      proc.unref = () => {
+        unrefCalled = true;
+      };
+      proc.stdout.destroy = () => {
+        stdoutDestroyed = true;
+      };
+      proc.stderr.destroy = () => {
+        stderrDestroyed = true;
+      };
+    };
+    try {
+      await GameRunner.launchGame(
+        sessionUser,
+        () => {},
+        () => {},
+        sessionRelease(),
+      );
+      expect(fs.existsSync(sessionFile)).toBe(true);
+
+      GameRunner.releaseForShutdown();
+
+      expect(unrefCalled).toBe(true);
+      expect(stdoutDestroyed).toBe(true);
+      expect(stderrDestroyed).toBe(true);
+      expect(fs.existsSync(sessionFile)).toBe(true);
+
+      // An exit observed during shutdown must not erase the record either.
+      childProc.emit("exit", 0);
+      expect(fs.existsSync(sessionFile)).toBe(true);
+    } finally {
+      mockSpawnHook = null;
+      GameRunner.resetForTesting();
+    }
+  });
+});
+
+describe("GameRunner adoption of a game from a previous launcher session", () => {
+  const sessionId = "0123456789abcdef0123456789abcdef";
+  const marker = `-Dlampas.launcher.session=${sessionId}`;
+
+  test("adopts a live process carrying the session marker and reports its exit once", async () => {
+    writeSessionRecord(4242, sessionId);
+    const { state, probe } = makeFakeProbe(
+      `java.exe -Xmx4G ${marker} -cp x net.fabricmc.loader.impl.launch.knot.KnotClient`,
+    );
+    GameRunner._processProbe = probe;
+    GameRunner._adoptedPollMs = 20;
+
+    const exitCodes: Array<number | null> = [];
+    let onExitCalled!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      onExitCalled = resolve;
+    });
+
+    try {
+      const adopted = await GameRunner.adoptRunningGame((code) => {
+        exitCodes.push(code);
+        onExitCalled();
+      });
+
+      expect(adopted).toEqual({ pid: 4242 });
+      expect(GameRunner.isGameRunning()).toBe(true);
+      expect(GameRunner.getAdoptedPid()).toBe(4242);
+      expect(fs.existsSync(sessionFile)).toBe(true);
+
+      state.alive = false;
+      await exited;
+      // Let several more poll intervals pass to prove the callback is not repeated.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(exitCodes).toEqual([null]);
+      expect(fs.existsSync(sessionFile)).toBe(false);
+      expect(GameRunner.isGameRunning()).toBe(false);
+      expect(GameRunner.getAdoptedPid()).toBeNull();
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("refuses to launch while an adopted game is running", async () => {
+    writeSessionRecord(4242, sessionId);
+    const { probe } = makeFakeProbe(`java.exe ${marker}`);
+    GameRunner._processProbe = probe;
+    try {
+      await GameRunner.adoptRunningGame(() => {});
+      await expect(
+        GameRunner.launchGame(
+          sessionUser,
+          () => {},
+          () => {},
+          sessionRelease(),
+        ),
+      ).rejects.toThrow("Minecraft is already running!");
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("does not adopt a process whose command line lacks the marker", async () => {
+    writeSessionRecord(4242, sessionId);
+    const { probe } = makeFakeProbe(
+      "java.exe -Dlampas.launcher.session=ffffffffffffffffffffffffffffffff -cp x",
+    );
+    GameRunner._processProbe = probe;
+    try {
+      const adopted = await GameRunner.adoptRunningGame(() => {});
+
+      expect(adopted).toBeNull();
+      expect(GameRunner.isGameRunning()).toBe(false);
+      expect(fs.existsSync(sessionFile)).toBe(false);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("does not adopt a dead process", async () => {
+    writeSessionRecord(4242, sessionId);
+    const { state, probe } = makeFakeProbe(`java.exe ${marker}`);
+    state.alive = false;
+    GameRunner._processProbe = probe;
+    try {
+      const adopted = await GameRunner.adoptRunningGame(() => {});
+
+      expect(adopted).toBeNull();
+      expect(GameRunner.isGameRunning()).toBe(false);
+      expect(fs.existsSync(sessionFile)).toBe(false);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("a failing probe is not adoptable, leaks nothing, and keeps the record for a later start", async () => {
+    writeSessionRecord(4242, sessionId);
+    const probe: ProcessProbe = {
+      isAlive: () => true,
+      readCommandLine: async () => {
+        throw new Error("java.exe --accessToken super-secret-token");
+      },
+      terminate: () => {},
+    };
+    GameRunner._processProbe = probe;
+    GameRunner._adoptionAttempts = 2;
+    GameRunner._adoptionRetryMs = 10;
+    try {
+      const adopted = await GameRunner.adoptRunningGame(() => {});
+
+      expect(adopted).toBeNull();
+      expect(GameRunner.isGameRunning()).toBe(false);
+      // The process is alive but unverified, so the record must survive for
+      // the next launcher start to try again.
+      expect(fs.existsSync(sessionFile)).toBe(true);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("an unreadable command line is retried, then gives up and keeps the record", async () => {
+    writeSessionRecord(4242, sessionId);
+    let reads = 0;
+    const probe: ProcessProbe = {
+      isAlive: () => true,
+      readCommandLine: async () => {
+        reads++;
+        return null;
+      },
+      terminate: () => {},
+    };
+    GameRunner._processProbe = probe;
+    GameRunner._adoptionAttempts = 3;
+    GameRunner._adoptionRetryMs = 10;
+    try {
+      expect(await GameRunner.adoptRunningGame(() => {})).toBeNull();
+      expect(reads).toBe(3);
+      expect(GameRunner.isGameRunning()).toBe(false);
+      expect(fs.existsSync(sessionFile)).toBe(true);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("adopts once a previously unreadable command line can be read", async () => {
+    writeSessionRecord(4242, sessionId);
+    let reads = 0;
+    const probe: ProcessProbe = {
+      isAlive: () => true,
+      readCommandLine: async () =>
+        ++reads === 1 ? null : `java.exe ${marker}`,
+      terminate: () => {},
+    };
+    GameRunner._processProbe = probe;
+    GameRunner._adoptionAttempts = 3;
+    GameRunner._adoptionRetryMs = 10;
+    try {
+      expect(await GameRunner.adoptRunningGame(() => {})).toEqual({
+        pid: 4242,
+      });
+      expect(reads).toBe(2);
+      expect(GameRunner.isGameRunning()).toBe(true);
+      expect(GameRunner.getAdoptedPid()).toBe(4242);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("reports the game as running and refuses to launch while adoption is pending", async () => {
+    writeSessionRecord(4242, sessionId);
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const probe: ProcessProbe = {
+      isAlive: () => true,
+      readCommandLine: () => gate,
+      terminate: () => {},
+    };
+    GameRunner._processProbe = probe;
+    try {
+      const adoption = GameRunner.adoptRunningGame(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      expect(GameRunner.isAdoptionPending()).toBe(true);
+      expect(GameRunner.isGameRunning()).toBe(true);
+      await expect(
+        GameRunner.launchGame(
+          mockSessionUser,
+          () => {},
+          () => {},
+        ),
+      ).rejects.toThrow(/previous launcher session/);
+      expect(fs.existsSync(sessionFile)).toBe(true);
+
+      release(`java.exe ${marker}`);
+      expect(await adoption).toEqual({ pid: 4242 });
+      expect(GameRunner.isAdoptionPending()).toBe(false);
+      expect(GameRunner.getAdoptedPid()).toBe(4242);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("returns null when there is no session record", async () => {
+    const { probe } = makeFakeProbe(`java.exe ${marker}`);
+    GameRunner._processProbe = probe;
+    try {
+      expect(await GameRunner.adoptRunningGame(() => {})).toBeNull();
+      expect(GameRunner.isGameRunning()).toBe(false);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("killGame on an adopted game sends SIGTERM and resolves once the process is gone", async () => {
+    writeSessionRecord(4242, sessionId);
+    const { state, probe } = makeFakeProbe(`java.exe ${marker}`);
+    state.terminateDelayMs = 150;
+    GameRunner._processProbe = probe;
+    GameRunner._adoptedPollMs = 20;
+
+    let onExitCalled!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      onExitCalled = resolve;
+    });
+
+    try {
+      await GameRunner.adoptRunningGame(() => onExitCalled());
+
+      const start = performance.now();
+      await GameRunner.killGame();
+      const elapsed = performance.now() - start;
+
+      expect(state.terminated).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+      expect(state.alive).toBe(false);
+      expect(elapsed).toBeGreaterThanOrEqual(100);
+
+      await exited;
+      expect(GameRunner.isGameRunning()).toBe(false);
+      expect(fs.existsSync(sessionFile)).toBe(false);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("releaseForShutdown stops watching an adopted game and keeps its session record", async () => {
+    writeSessionRecord(4242, sessionId);
+    const { state, probe } = makeFakeProbe(`java.exe ${marker}`);
+    GameRunner._processProbe = probe;
+    GameRunner._adoptedPollMs = 20;
+    let exitCalls = 0;
+    try {
+      await GameRunner.adoptRunningGame(() => {
+        exitCalls++;
+      });
+
+      GameRunner.releaseForShutdown();
+      state.alive = false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(exitCalls).toBe(0);
+      expect(fs.existsSync(sessionFile)).toBe(true);
+    } finally {
+      GameRunner.resetForTesting();
+    }
+  });
+});
+
+describe("buildLaunchArguments session marker", () => {
+  const baseOptions = {
+    gameDir: path.join(testRoot, "marker-game"),
+    ramGb: 4,
+    runtime: { minecraft: "26.2" },
+    assetIndex: "26.2",
+    username: "TestPlayer",
+    uuid: "11111111222233334444555555555555",
+    token: "0",
+    userType: "legacy",
+    customJavaArgs: ["-Dcustom.arg=1"],
+    mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+    classpathString: "a.jar",
+  };
+
+  test("omits the marker when no sessionId is given", () => {
+    const args = buildLaunchArguments(baseOptions);
+
+    expect(
+      args.some((arg) => arg.startsWith("-Dlampas.launcher.session")),
+    ).toBe(false);
+  });
+
+  test("inserts only the marker, right after the target directory, when a sessionId is given", () => {
+    const withoutMarker = buildLaunchArguments(baseOptions);
+    const withMarker = buildLaunchArguments({
+      ...baseOptions,
+      sessionId: "0123456789abcdef0123456789abcdef",
+    });
+
+    const targetIndex = withoutMarker.findIndex((arg) =>
+      arg.startsWith("-Dminecraft.applet.TargetDirectory="),
+    );
+    const expected = [...withoutMarker];
+    expected.splice(
+      targetIndex + 1,
+      0,
+      "-Dlampas.launcher.session=0123456789abcdef0123456789abcdef",
+    );
+    expect(withMarker).toEqual(expected);
   });
 });

@@ -28,6 +28,16 @@ import {
 import { checkPhysicalAncestrySync } from "./path-policy";
 import { TRANSFER_LIMITS } from "./transfer-limits";
 import { maximizeGameWindow, MAXIMIZE_EXIT } from "./window-maximizer";
+import {
+  classifyGameSession,
+  clearGameSession,
+  newGameSessionId,
+  readGameSession,
+  sessionMarkerArg,
+  systemProcessProbe,
+  writeGameSession,
+} from "./game-session";
+import type { GameSessionVerdict, ProcessProbe } from "./game-session";
 
 function readInstalledMetadata(gameDir: string, filePath: string): unknown {
   checkPhysicalAncestrySync(gameDir, filePath, {
@@ -74,9 +84,102 @@ export class GameRunner {
   private static runningProcess: ChildProcess | null = null;
   private static exitPromise: Promise<number | null> | null = null;
   private static isStarting = false;
+  // A game started by an earlier launcher session that this one picked up.
+  private static adopted: {
+    pid: number;
+    sessionId: string;
+    timer: ReturnType<typeof setInterval>;
+  } | null = null;
+  private static releasedForShutdown = false;
+  private static adoptionPending = false;
+  static _processProbe: ProcessProbe = systemProcessProbe;
+  static _adoptedPollMs = 2000;
+  static _adoptionRetryMs = 5000;
+  static _adoptionAttempts = 3;
 
   static isGameRunning(): boolean {
-    return this.isStarting || this.runningProcess !== null;
+    return (
+      this.isStarting ||
+      this.adoptionPending ||
+      this.runningProcess !== null ||
+      this.adopted !== null
+    );
+  }
+
+  static getAdoptedPid(): number | null {
+    return this.adopted ? this.adopted.pid : null;
+  }
+
+  /**
+   * Picks up a Minecraft process that a previous launcher session left
+   * running. The recorded PID is only trusted when its current command line
+   * carries the session marker baked into the JVM arguments at launch.
+   */
+  static async adoptRunningGame(
+    onExit: (code: number | null) => void,
+  ): Promise<{ pid: number } | null> {
+    if (this.isGameRunning()) return null;
+    const record = readGameSession();
+    if (!record) return null;
+
+    // While the recorded PID is alive but not yet verified, report the game
+    // as running so a second launch or a pack mutation cannot start against
+    // files the unverified process may still hold.
+    this.adoptionPending = true;
+    try {
+      for (let attempt = 1; ; attempt++) {
+        let verdict: GameSessionVerdict = "unknown";
+        try {
+          verdict = await classifyGameSession(record, this._processProbe);
+        } catch {
+          // Never surface the error: probe failures can carry the command line.
+          verdict = "unknown";
+        }
+        if (verdict === "dead" || verdict === "mismatch") {
+          try {
+            clearGameSession(record.sessionId);
+          } catch {}
+          return null;
+        }
+        if (verdict === "adoptable") break;
+        // "unknown": the process is alive but its command line could not be
+        // read (slow or failed PowerShell query). Retry a few times, then give
+        // up for this start but keep the record for the next one.
+        if (attempt >= this._adoptionAttempts) return null;
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, this._adoptionRetryMs),
+        );
+      }
+    } finally {
+      this.adoptionPending = false;
+    }
+    if (this.isGameRunning()) return null;
+
+    const pid = record.pid;
+    let reported = false;
+    const timer = setInterval(() => {
+      let alive = true;
+      try {
+        alive = this._processProbe.isAlive(pid);
+      } catch {
+        alive = false;
+      }
+      if (alive || reported) return;
+      reported = true;
+      clearInterval(timer);
+      this.adopted = null;
+      try {
+        clearGameSession(record.sessionId);
+      } catch {}
+      onExit(null);
+    }, this._adoptedPollMs);
+    timer.unref?.();
+    this.adopted = { pid, sessionId: record.sessionId, timer };
+    return { pid };
+  }
+
+  static isAdoptionPending(): boolean {
+    return this.adoptionPending;
   }
 
   static async launchGame(
@@ -85,6 +188,11 @@ export class GameRunner {
     onExit: (code: number | null) => void,
     releaseOverride?: ReleaseDescriptor,
   ): Promise<boolean> {
+    if (this.adoptionPending) {
+      throw new Error(
+        "Still checking whether Minecraft is running from a previous launcher session. Try again in a moment.",
+      );
+    }
     if (this.isGameRunning()) {
       throw new Error("Minecraft is already running!");
     }
@@ -348,6 +456,7 @@ export class GameRunner {
         );
       }
 
+      const sessionId = newGameSessionId();
       const jvmArgs = buildLaunchArguments({
         gameDir,
         ramGb,
@@ -361,13 +470,19 @@ export class GameRunner {
         mainClass,
         classpathString,
         autoConnectServer,
+        sessionId,
       });
 
       log("INFO", `Starting Minecraft client via ${mainClass}...`);
 
+      // Detached so the game outlives the launcher; on Windows a non-detached
+      // child is placed in a job object that closes with its parent. Verified
+      // on a side-loaded Store (MSIX) install on 2026-10-14: the game survives
+      // the launcher quitting and is adopted again on the next start.
       const proc = spawn(javaExe, jvmArgs, {
         cwd: gameDir,
-        detached: false,
+        detached: true,
+        windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -426,6 +541,27 @@ export class GameRunner {
         }, 10);
       });
 
+      if (
+        typeof proc.pid === "number" &&
+        Number.isSafeInteger(proc.pid) &&
+        proc.pid > 0
+      ) {
+        try {
+          writeGameSession({
+            version: 1,
+            pid: proc.pid,
+            sessionId,
+            startedAt: new Date().toISOString(),
+            gameDir,
+          });
+        } catch (err: any) {
+          log(
+            "WARN",
+            `Could not record the running game for later reattachment: ${err?.message || err}`,
+          );
+        }
+      }
+
       const stdoutFramer = new ProcessLogFramer("INFO", onLog);
       const stderrFramer = new ProcessLogFramer("WARN", onLog);
 
@@ -457,6 +593,11 @@ export class GameRunner {
         stderrFramer.flush();
         this.runningProcess = null;
         this.exitPromise = null;
+        if (!this.releasedForShutdown) {
+          try {
+            clearGameSession(sessionId);
+          } catch {}
+        }
         log(
           code === 0 ? "INFO" : "ERROR",
           `Minecraft exited with code ${code}`,
@@ -483,6 +624,12 @@ export class GameRunner {
   }
 
   static async killGame(timeoutMs = 5000): Promise<void> {
+    const adopted = this.adopted;
+    if (adopted) {
+      await this.killAdoptedGame(adopted.pid, timeoutMs);
+      return;
+    }
+
     const proc = this.runningProcess;
     if (!proc || proc.killed) {
       return;
@@ -523,10 +670,77 @@ export class GameRunner {
     }
   }
 
+  // Exit reporting for an adopted game is left to the adoption poll timer.
+  private static async killAdoptedGame(
+    pid: number,
+    timeoutMs: number,
+  ): Promise<void> {
+    const probe = this._processProbe;
+    const waitForExit = async (ms: number): Promise<boolean> => {
+      const deadline = Date.now() + ms;
+      for (;;) {
+        let alive = true;
+        try {
+          alive = probe.isAlive(pid);
+        } catch {
+          alive = false;
+        }
+        if (!alive) return true;
+        if (Date.now() >= deadline) return false;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+    };
+
+    try {
+      probe.terminate(pid, "SIGTERM");
+    } catch {
+      // Process may already have terminated
+    }
+    if (await waitForExit(Math.min(timeoutMs, 2500))) return;
+
+    try {
+      probe.terminate(pid, "SIGKILL");
+    } catch {}
+    await waitForExit(Math.max(1000, timeoutMs - 2500));
+  }
+
+  /**
+   * Detaches the launcher from a running game as it shuts down. The session
+   * file is deliberately left in place: the game keeps running and the next
+   * launcher start adopts it.
+   */
+  static releaseForShutdown(): void {
+    this.releasedForShutdown = true;
+    const proc = this.runningProcess;
+    if (proc) {
+      try {
+        proc.unref();
+      } catch {}
+      try {
+        proc.stdout?.destroy();
+      } catch {}
+      try {
+        proc.stderr?.destroy();
+      } catch {}
+    }
+    if (this.adopted) {
+      clearInterval(this.adopted.timer);
+      this.adopted = null;
+    }
+  }
+
   static resetForTesting(): void {
     this.runningProcess = null;
     this.exitPromise = null;
     this.isStarting = false;
+    if (this.adopted) clearInterval(this.adopted.timer);
+    this.adopted = null;
+    this.releasedForShutdown = false;
+    this.adoptionPending = false;
+    this._processProbe = systemProcessProbe;
+    this._adoptedPollMs = 2000;
+    this._adoptionRetryMs = 5000;
+    this._adoptionAttempts = 3;
   }
 }
 
@@ -543,6 +757,7 @@ export function buildLaunchArguments(options: {
   mainClass: string;
   classpathString: string;
   autoConnectServer?: string;
+  sessionId?: string;
 }): string[] {
   const classification = classifyJavaArgs(options.customJavaArgs);
   if (classification.hasLaunchTargetOverride) {
@@ -563,6 +778,7 @@ export function buildLaunchArguments(options: {
     "-Dfabric.disableTelemetry=true",
     `-Djava.library.path=${path.join(options.gameDir, "natives")}`,
     `-Dminecraft.applet.TargetDirectory=${options.gameDir}`,
+    ...(options.sessionId ? [sessionMarkerArg(options.sessionId)] : []),
     ...options.customJavaArgs,
     "-cp",
     options.classpathString,

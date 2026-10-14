@@ -67,7 +67,7 @@ exit ${MAXIMIZE_EXIT.timedOut}
 `;
 }
 
-function powershellPath(): string {
+export function powershellPath(): string {
   const systemRoot = process.env.SystemRoot || "C:\\Windows";
   return path.join(
     systemRoot,
