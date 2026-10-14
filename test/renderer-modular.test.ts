@@ -53,6 +53,28 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     expect(html).toMatch(/<link\s+rel="stylesheet"\s+href="fonts\.css"\s*\/?>/);
   });
 
+  test("privacy and terms links open in the browser, not the app window", () => {
+    const html = fs.readFileSync(
+      path.join(__dirname, "../ui/index.html"),
+      "utf-8",
+    );
+    // will-navigate blocks same-window navigation, so a link only works when
+    // target="_blank" routes it through the window-open handler.
+    for (const url of [
+      "https://dev.lampas.town/privacy",
+      "https://dev.lampas.town/terms",
+    ]) {
+      const anchors = html.match(
+        new RegExp(`<a\\s[^>]*href="${url}"[^>]*>`, "g"),
+      );
+      expect(anchors?.length ?? 0).toBeGreaterThan(0);
+      for (const anchor of anchors ?? []) {
+        expect(anchor).toContain('target="_blank"');
+        expect(anchor).toContain('rel="noopener noreferrer"');
+      }
+    }
+  });
+
   test("local fonts and OFL licenses are present in ui/assets/fonts/", () => {
     const fontsDir = path.join(__dirname, "../ui/assets/fonts");
     expect(fs.existsSync(fontsDir)).toBe(true);

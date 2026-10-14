@@ -2145,6 +2145,27 @@ input[type="range"] {
   user-select: text;
 }
 
+/* Privacy and terms: quiet text links that open in the browser. */
+.legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 13px;
+}
+#user-section .legal-links {
+  margin-top: 12px;
+  justify-content: center;
+}
+.legal-links a {
+  color: var(--ash);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.legal-links a:hover {
+  color: var(--bone);
+  text-decoration: underline;
+}
+
 .saved-indicator {
   font-size: 14px;
   color: var(--gilt);
