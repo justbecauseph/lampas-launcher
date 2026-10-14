@@ -32,6 +32,12 @@ const { GameDirectoryManager, writeStagingMarker } =
 const { GameRunner } = await import("../src/game-runner");
 const { OperationCoordinator } = await import("../src/operations");
 
+/** Restores an environment variable; assigning undefined stores "undefined". */
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 beforeEach(() => {
   process.env.LAMPAS_DEFAULT_GAME_DIR = path.join(
     testRoot,
@@ -1204,8 +1210,8 @@ describe("GameDirectoryManager.validateTarget on a Store install", () => {
     try {
       body({ roaming, packageCache });
     } finally {
-      process.env.APPDATA = saved.APPDATA;
-      process.env.LOCALAPPDATA = saved.LOCALAPPDATA;
+      restoreEnv("APPDATA", saved.APPDATA);
+      restoreEnv("LOCALAPPDATA", saved.LOCALAPPDATA);
       Object.defineProperty(process, "execPath", {
         value: saved.execPath,
         configurable: true,

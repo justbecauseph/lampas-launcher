@@ -30,6 +30,12 @@ const { CredentialStore } = await import("../src/credential-store");
 let caseDir: string;
 let caseSeq = 0;
 
+/** Restores an environment variable; assigning undefined stores "undefined". */
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 beforeEach(() => {
   caseDir = path.join(testRoot, `case-${++caseSeq}`);
   fs.mkdirSync(caseDir, { recursive: true });
@@ -246,7 +252,7 @@ describe("getStorePackageCacheDir", () => {
         path.join(caseDir, "Packages", pfn, "LocalCache"),
       );
     } finally {
-      process.env.LOCALAPPDATA = original;
+      restoreEnv("LOCALAPPDATA", original);
     }
   });
 
@@ -259,7 +265,7 @@ describe("getStorePackageCacheDir", () => {
         getStorePackageCacheDir("C:\\Apps\\Lampas Launcher.exe", true),
       ).toBeNull();
     } finally {
-      process.env.LOCALAPPDATA = original;
+      restoreEnv("LOCALAPPDATA", original);
     }
   });
 });
@@ -270,8 +276,8 @@ describe("getStoreRedirectedPath", () => {
     LOCALAPPDATA: process.env.LOCALAPPDATA,
   };
   const restore = () => {
-    process.env.APPDATA = original.APPDATA;
-    process.env.LOCALAPPDATA = original.LOCALAPPDATA;
+    restoreEnv("APPDATA", original.APPDATA);
+    restoreEnv("LOCALAPPDATA", original.LOCALAPPDATA);
   };
 
   test("maps %APPDATA% and %LOCALAPPDATA% folders into LocalCache", () => {
@@ -368,8 +374,8 @@ describe("ConfigManager on a Store install", () => {
         ),
       });
     } finally {
-      process.env.APPDATA = saved.APPDATA;
-      process.env.LOCALAPPDATA = saved.LOCALAPPDATA;
+      restoreEnv("APPDATA", saved.APPDATA);
+      restoreEnv("LOCALAPPDATA", saved.LOCALAPPDATA);
       Object.defineProperty(process, "execPath", {
         value: saved.execPath,
         configurable: true,
