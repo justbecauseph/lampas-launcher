@@ -93,14 +93,14 @@ fs.writeFileSync(
 );
 const names = fs
   .readdirSync(artifactDir)
-  .filter((name) => /\.(?:exe|AppImage|tar\.gz)$/.test(name))
+  .filter((name) => /\.(?:exe|appx|AppImage|tar\.gz)$/.test(name))
   .sort();
 if (!names.length)
   throw new Error("No distributable artifacts found for checksum generation");
 const lines: string[] = [];
 for (const name of [...names, `launcher-${platform}.cdx.json`]) {
   if (
-    /\.(?:exe|AppImage|tar\.gz)$/.test(name) &&
+    /\.(?:exe|appx|AppImage|tar\.gz)$/.test(name) &&
     !name.includes(`-${pkg.version}-`) &&
     name !== `LampasLauncher-Setup-${pkg.version}.exe`
   )
