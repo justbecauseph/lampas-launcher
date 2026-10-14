@@ -66,9 +66,14 @@ function renderSuccessHtml(): string {
         if (remaining <= 0) {
           clearInterval(countdownInterval);
           window.close();
+          // Browsers only let a script close tabs that a script opened. This tab
+          // came from shell.openExternal and a cross-origin redirect, so
+          // window.close() is usually a no-op; tell the user to close it.
+          setTimeout(() => {
+            if (timerEl) timerEl.innerText = "You can close this tab now.";
+          }, 250);
         }
       }, 1000);
-      setTimeout(() => window.close(), 5000);
     </script>
   </body>
 </html>`;
