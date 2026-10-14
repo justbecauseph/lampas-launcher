@@ -13,7 +13,12 @@ const ipcMain = electron?.ipcMain ?? electron?.default?.ipcMain;
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizePortalUrl, validateWebUrl } from "./config";
+import {
+  ConfigManager,
+  getUserDataDir,
+  normalizePortalUrl,
+  validateWebUrl,
+} from "./config";
 import { LauncherLogger } from "./logger";
 import type { KnownLocationId, UpdateSettingsDto } from "./types";
 
@@ -1552,7 +1557,47 @@ export const IpcSchemas = {
 // Error Sanitization & Secure Registration Wrappers
 // ═══════════════════════════════════════════════════
 
-export function scrubErrorText(text: string): string {
+const PRESERVED_PATH_MARKER = "\u0001";
+const PRESERVED_PATH_RESTORE = /\u0001P(\d+)\u0001/g;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Builds a pattern matching a whole path (prefix plus any remainder) that
+ * lies under one of the given absolute directories.  Prefixes are compared
+ * after path.resolve, accept either separator, and ignore case on win32.
+ */
+function buildPreservedPathPattern(prefixes: readonly string[]): RegExp | null {
+  const alternatives: string[] = [];
+  for (const raw of prefixes) {
+    if (typeof raw !== "string" || raw.trim() === "" || !path.isAbsolute(raw)) {
+      continue;
+    }
+    const resolved = path.resolve(raw);
+    // A filesystem root would exempt every path on the volume.
+    if (path.parse(resolved).root === resolved) continue;
+    alternatives.push(
+      resolved.split(/[\\/]/).map(escapeRegExp).join("[\\\\/]"),
+    );
+  }
+  if (alternatives.length === 0) return null;
+  return new RegExp(
+    `(?<![A-Za-z0-9_.\\\\/~-])(?:${alternatives.join("|")})(?:[\\\\/][^'"\\s;:,]*)?(?![^'"\\s;:,])`,
+    process.platform === "win32" ? "gi" : "g",
+  );
+}
+
+/**
+ * Removes absolute paths and credential-like values from an error message.
+ * Paths under `preservePrefixes` (launcher-owned directories) are kept so
+ * validation errors stay readable.
+ */
+export function scrubErrorText(
+  text: string,
+  preservePrefixes?: readonly string[],
+): string {
   let s = text;
   // 1. Strip stack trace lines (lines starting with whitespace followed by 'at ')
   s = s.replace(/\r?\n\s*at\s+.*$/s, "");
@@ -1562,6 +1607,23 @@ export function scrubErrorText(text: string): string {
     .replace(/[\r\n]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  // 2b. Park launcher-owned paths behind a marker the path scrubbers cannot
+  // match; any marker already present in the text is dropped first so it
+  // cannot be forged.
+  const preserved: string[] = [];
+  const preservePattern = preservePrefixes?.length
+    ? buildPreservedPathPattern(preservePrefixes)
+    : null;
+  if (preservePattern) {
+    s = s.replaceAll(PRESERVED_PATH_MARKER, "");
+    s = s.replace(preservePattern, (match) => {
+      // A ".." segment could point outside the launcher-owned directory, so
+      // leave such a match for the path scrubbers below.
+      if (/(?:^|[\\/])\.\.(?=[\\/]|$)/.test(match)) return match;
+      preserved.push(match);
+      return `${PRESERVED_PATH_MARKER}P${preserved.length - 1}${PRESERVED_PATH_MARKER}`;
+    });
+  }
   // 3. Scrub Windows drive paths and UNC paths
   s = s.replace(/[a-zA-Z]:[\\/][^'"\s;:,]+/g, "<path>");
   s = s.replace(/\\\\[^'"\s;:,]+/g, "<path>");
@@ -1576,12 +1638,32 @@ export function scrubErrorText(text: string): string {
     /(?<=^|[\s'"`;:])(?:eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+|[a-fA-F0-9]{32,}|[a-zA-Z0-9+/]{32,}={0,2})(?=$|[\s'"`;:])/g,
     "<redacted>",
   );
+  if (preserved.length > 0) {
+    s = s.replace(
+      PRESERVED_PATH_RESTORE,
+      (marker, index: string) => preserved[Number(index)] ?? marker,
+    );
+  }
   return s.trim();
 }
 
 export function boundErrorMessage(msg: string, maxLen = 120): string {
   if (msg.length <= maxLen) return msg;
   return msg.slice(0, maxLen - 3) + "...";
+}
+
+/**
+ * Directories the launcher owns, whose paths may appear in error messages:
+ * the configured game directory and the launcher user-data directory.  Any
+ * failure to resolve them (for example no Electron app in tests) yields none,
+ * so every path is scrubbed.
+ */
+function launcherOwnedPathPrefixes(): string[] {
+  try {
+    return [ConfigManager.get().gameDir, getUserDataDir()];
+  } catch {
+    return [];
+  }
 }
 
 export function sanitizeIpcError(err: any): Error {
@@ -1604,7 +1686,10 @@ export function sanitizeIpcError(err: any): Error {
   ) {
     const rawMsg =
       typeof err?.message === "string" ? err.message : "Validation error.";
-    const scrubbed = scrubErrorText(LauncherLogger.sanitize(rawMsg));
+    const scrubbed = scrubErrorText(
+      LauncherLogger.sanitize(rawMsg),
+      launcherOwnedPathPrefixes(),
+    );
     return new Error(boundErrorMessage(scrubbed, 120));
   }
 

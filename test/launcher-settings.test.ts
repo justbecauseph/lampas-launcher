@@ -1,10 +1,12 @@
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
   expect,
   mock,
+  spyOn,
   test,
 } from "bun:test";
 import * as fs from "node:fs";
@@ -25,6 +27,7 @@ const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager, ShaderPackManager } =
   await import("../src/client-mods");
 const { parseJavaArgs } = await import("../src/game-runner");
+const { LauncherLogger } = await import("../src/logger");
 
 beforeEach(() => {
   PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
@@ -242,5 +245,231 @@ describe("launcher settings", () => {
 
     ConfigManager.resetForTesting();
     expect(ConfigManager.get().noSync).toBe(false);
+  });
+});
+
+describe("config.json shape validation on load", () => {
+  const addedAt = "2025-01-02T03:04:05.000Z";
+  let warnSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    warnSpy = spyOn(LauncherLogger, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  /** Writes `raw` as the whole config.json, then loads it fresh. */
+  function loadFromDisk(raw: unknown) {
+    const configPath = ConfigManager.getConfigPath();
+    fs.writeFileSync(
+      configPath,
+      typeof raw === "string" ? raw : JSON.stringify(raw),
+    );
+    ConfigManager.resetForTesting();
+    return ConfigManager.get();
+  }
+
+  function ignoredSettingsWarnings(): string[] {
+    return warnSpy.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .filter((message: string) =>
+        message.startsWith("[Config] Ignored invalid settings:"),
+      );
+  }
+
+  test("drops a local mod with a non-string filename and keeps valid siblings", () => {
+    const config = loadFromDisk({
+      customClientMods: [
+        { filename: 123, enabled: true, addedAt, size: 5 },
+        { filename: "good.jar", enabled: true, addedAt, size: 10 },
+        { filename: "../escape.jar", enabled: true, addedAt, size: 1 },
+        { filename: "readme.txt", enabled: true, addedAt, size: 1 },
+        "not-an-object",
+        null,
+        { filename: "Other.JAR", enabled: 0, addedAt: 7, size: -3 },
+      ],
+    });
+
+    expect(config.customClientMods).toEqual([
+      { filename: "good.jar", enabled: true, addedAt, size: 10 },
+      { filename: "Other.JAR", enabled: false, addedAt: "", size: 0 },
+    ]);
+  });
+
+  test("drops shader packs that are malformed or not .zip files", () => {
+    const config = loadFromDisk({
+      customShaderPacks: [
+        { filename: ["Pack.zip"], addedAt, size: 5 },
+        { filename: "Pack.zip", addedAt, size: 20 },
+        { filename: "nested/Pack.zip", addedAt, size: 20 },
+        { filename: "Pack.jar", addedAt, size: 20 },
+        { filename: "Loose.zip", addedAt: null, size: "big" },
+      ],
+    });
+
+    expect(config.customShaderPacks).toEqual([
+      { filename: "Pack.zip", addedAt, size: 20 },
+      { filename: "Loose.zip", addedAt: "", size: 0 },
+    ]);
+  });
+
+  test("replaces non-array mod lists with empty lists and keeps only string items", () => {
+    const notArrays = loadFromDisk({
+      disabledClientMods: "foo",
+      customClientMods: { filename: "a.jar" },
+      customShaderPacks: 7,
+    });
+    expect(notArrays.disabledClientMods).toEqual([]);
+    expect(notArrays.customClientMods).toEqual([]);
+    expect(notArrays.customShaderPacks).toEqual([]);
+
+    const mixed = loadFromDisk({
+      disabledClientMods: ["a.jar", 5, null, "b.jar", { x: 1 }],
+    });
+    expect(mixed.disabledClientMods).toEqual(["a.jar", "b.jar"]);
+  });
+
+  test("falls back to the default 4 GB when allocatedRamGb is not an integer from 2 to 64", () => {
+    for (const bad of [1, 65, 0, -4, 8.5, "lots", null, true, [8]]) {
+      expect(loadFromDisk({ allocatedRamGb: bad }).allocatedRamGb).toBe(4);
+    }
+    expect(loadFromDisk({ allocatedRamGb: 2 }).allocatedRamGb).toBe(2);
+    expect(loadFromDisk({ allocatedRamGb: 64 }).allocatedRamGb).toBe(64);
+  });
+
+  test("falls back to the stable channel when selectedChannel is not stable, beta, or dev", () => {
+    expect(loadFromDisk({ selectedChannel: "nightly" }).selectedChannel).toBe(
+      "stable",
+    );
+    expect(loadFromDisk({ selectedChannel: 3 }).selectedChannel).toBe("stable");
+    expect(loadFromDisk({ selectedChannel: "beta" }).selectedChannel).toBe(
+      "beta",
+    );
+    expect(loadFromDisk({ selectedChannel: "dev" }).selectedChannel).toBe(
+      "dev",
+    );
+  });
+
+  test("ignores wrongly typed scalar settings so the defaults apply", () => {
+    const defaultGameDir = path.join(testRoot, "default-for-bad-types");
+    process.env.LAMPAS_DEFAULT_GAME_DIR = defaultGameDir;
+    try {
+      const config = loadFromDisk({
+        portalUrl: "",
+        gameDir: 42,
+        javaArgs: 42,
+        javaPath: { path: "java" },
+        noSync: "yes",
+        externalImages: "no",
+      });
+      expect(config.portalUrl).toBe("https://dev.lampas.town");
+      expect(config.gameDir).toBe(defaultGameDir);
+      expect(config.javaArgs).toBe("");
+      expect(config.javaPath).toBeUndefined();
+      expect(config.noSync).toBe(false);
+      expect(config.externalImages).toBe(true);
+    } finally {
+      delete process.env.LAMPAS_DEFAULT_GAME_DIR;
+    }
+  });
+
+  test("does not carry unknown keys onto the loaded config", () => {
+    // Raw JSON, because an object literal's __proto__ would not serialize.
+    const config = loadFromDisk(
+      '{"allocatedRamGb":6,"somethingElse":"x","__proto__":{"polluted":true}}',
+    ) as Record<string, unknown>;
+
+    expect(config.allocatedRamGb).toBe(6);
+    expect("somethingElse" in config).toBe(false);
+    expect(Object.hasOwn(config, "__proto__")).toBe(false);
+    expect(config.polluted).toBeUndefined();
+  });
+
+  test("a non-object config.json loads as the defaults", () => {
+    for (const raw of ["[1, 2]", '"text"', "null", "42"]) {
+      const config = loadFromDisk(raw);
+      expect(config.selectedChannel).toBe("stable");
+      expect(config.allocatedRamGb).toBe(4);
+      expect(config.customClientMods).toEqual([]);
+    }
+  });
+
+  test("a non-boolean gameDirConfigured is treated as missing by the legacy migration", () => {
+    const defaultGameDir = path.join(testRoot, "no-install-here");
+    process.env.LAMPAS_DEFAULT_GAME_DIR = defaultGameDir;
+    try {
+      // A chosen game folder marks an old config as configured.
+      expect(
+        loadFromDisk({
+          gameDirConfigured: "yes",
+          gameDir: path.join(testRoot, "chosen"),
+        }).gameDirConfigured,
+      ).toBe(true);
+      // No chosen folder and no installation: not configured.
+      expect(loadFromDisk({ gameDirConfigured: "yes" }).gameDirConfigured).toBe(
+        false,
+      );
+      // A real boolean is kept as written.
+      expect(
+        loadFromDisk({ gameDirConfigured: false, gameDir: "C:\\chosen" })
+          .gameDirConfigured,
+      ).toBe(false);
+    } finally {
+      delete process.env.LAMPAS_DEFAULT_GAME_DIR;
+    }
+  });
+
+  test("a valid config.json loads unchanged without a warning", () => {
+    const valid = {
+      portalUrl: "https://dev.lampas.town",
+      selectedChannel: "beta",
+      allocatedRamGb: 12,
+      gameDir: path.join(testRoot, "valid-game"),
+      gameDirConfigured: true,
+      gameDirPreexistingEntries: ["saves", "options.txt"],
+      javaPath: "C:\\Java\\bin\\javaw.exe",
+      javaArgs: "-XX:+UseG1GC",
+      disabledClientMods: ["a.jar", "b.jar"],
+      customClientMods: [
+        { filename: "mine.jar", enabled: false, addedAt, size: 1234 },
+      ],
+      customShaderPacks: [{ filename: "Shaders.zip", addedAt, size: 99 }],
+      noSync: true,
+      externalImages: false,
+    };
+
+    expect(loadFromDisk(valid)).toEqual(valid);
+    expect(ignoredSettingsWarnings()).toEqual([]);
+  });
+
+  test("logs one warning naming the ignored keys and never their values", () => {
+    loadFromDisk({
+      allocatedRamGb: "secret-looking-value",
+      selectedChannel: "nightly-value",
+      mysteryKey: "mystery-value",
+      customClientMods: [{ filename: 123 }],
+      javaArgs: "-Xmx1G",
+    });
+
+    const warnings = ignoredSettingsWarnings();
+    expect(warnings).toHaveLength(1);
+    for (const name of [
+      "allocatedRamGb",
+      "selectedChannel",
+      "mysteryKey",
+      "customClientMods",
+    ]) {
+      expect(warnings[0]).toContain(name);
+    }
+    expect(warnings[0]).not.toContain("javaArgs");
+    for (const value of [
+      "secret-looking-value",
+      "nightly-value",
+      "mystery-value",
+    ]) {
+      expect(warnings[0]).not.toContain(value);
+    }
   });
 });

@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   mock,
+  spyOn,
   test,
 } from "bun:test";
 import * as crypto from "node:crypto";
@@ -27,6 +28,9 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
+const { app: mockedApp } = (await import("electron")) as {
+  app: { isPackaged?: boolean };
+};
 const { LauncherLogger } = await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
@@ -538,5 +542,67 @@ describe("LauncherSync client sync integration", () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  describe("offline metadata fallback", () => {
+    const manifestProbes = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.filter(
+        ([target]) =>
+          typeof target === "string" &&
+          /[\\/]manifest[\\/](release|client-manifest)\.json$/.test(target),
+      );
+
+    test("packaged builds do not consult local manifests when the Portal is unavailable", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => new Response("Service Unavailable", { status: 503 }),
+      });
+      ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+        token: "mock-token",
+      });
+
+      // PortalPolicy also reads app.isPackaged and would reject the loopback
+      // fixture; pin it to development so only the sync fallback sees a
+      // packaged build.
+      PortalPolicy.setProductionOverride(false);
+      const previous = mockedApp.isPackaged;
+      mockedApp.isPackaged = true;
+      const existsSpy = spyOn(fs, "existsSync");
+      const readSpy = spyOn(fs, "readFileSync");
+      try {
+        await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
+          /Portal unavailable \(.*\) and no local manifest found\./,
+        );
+        expect(manifestProbes(existsSpy)).toHaveLength(0);
+        expect(manifestProbes(readSpy)).toHaveLength(0);
+      } finally {
+        existsSpy.mockRestore();
+        readSpy.mockRestore();
+        mockedApp.isPackaged = previous;
+        PortalPolicy.setProductionOverride(null);
+        server.stop(true);
+      }
+    });
+
+    test("unpackaged builds still look for local manifests when the Portal is unavailable", async () => {
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => new Response("Service Unavailable", { status: 503 }),
+      });
+      ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+        token: "mock-token",
+      });
+
+      const existsSpy = spyOn(fs, "existsSync");
+      try {
+        await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
+          /Portal unavailable/,
+        );
+        expect(manifestProbes(existsSpy).length).toBeGreaterThan(0);
+      } finally {
+        existsSpy.mockRestore();
+        server.stop(true);
+      }
+    });
   });
 });

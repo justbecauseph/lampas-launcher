@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getServerStatusView } from "../ui/server-status-view.js";
+import { getServerStatusView } from "../ui/src/views/server-status-view";
 
 describe("server status UI view model", () => {
   test("shows online count and first eight players with an overflow label", () => {

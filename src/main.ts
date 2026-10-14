@@ -554,25 +554,13 @@ app.whenReady().then(async () => {
         return validUrl;
       }
 
-      // 2. Local path handling: strictly constrain to approved known launcher locations with type validation
+      // 2. Local path handling: only known launcher location identifiers are
+      // accepted. Arbitrary renderer-supplied paths are refused outright so this
+      // handler never probes or creates directories on their behalf.
       if (knownLocationIds.includes(targetPath as KnownLocationId)) {
         const resolved = resolveAndValidateKnownLocation(targetPath);
         await shell.openPath(resolved);
         return resolved;
-      }
-
-      // Check if path resolves identically to one of the authorized known locations
-      for (const id of knownLocationIds) {
-        try {
-          const resolved = resolveAndValidateKnownLocation(id);
-          const resolvedTrimmed = fs.existsSync(targetPath)
-            ? fs.realpathSync(targetPath)
-            : path.resolve(targetPath);
-          if (resolvedTrimmed === resolved) {
-            await shell.openPath(resolved);
-            return resolved;
-          }
-        } catch {}
       }
 
       throw new IpcValidationError(

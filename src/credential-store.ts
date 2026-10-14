@@ -26,7 +26,7 @@ export interface StoredCredentialRecord {
 }
 
 export type StorageBackendType =
-  "windows_dpapi" | "linux_keyring" | "session_only";
+  "windows_dpapi" | "macos_keychain" | "linux_keyring" | "session_only";
 
 export interface SaveCredentialsResult {
   success: boolean;
@@ -146,8 +146,12 @@ export class CredentialStore {
         return "session_only";
       }
 
-      // Other OS (macOS keychain)
-      return "windows_dpapi";
+      if (process.platform === "darwin") {
+        return "macos_keychain";
+      }
+
+      // Unknown platforms must not persist secrets.
+      return "session_only";
     } catch {
       return "session_only";
     }

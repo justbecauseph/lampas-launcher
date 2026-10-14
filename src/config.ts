@@ -137,6 +137,211 @@ function formatConfigValue(key: string, value: any): string {
   return String(value);
 }
 
+const CHANNELS: ReadonlyArray<LauncherConfig["selectedChannel"]> = [
+  "stable",
+  "beta",
+  "dev",
+];
+
+/** Credential keys. SessionManager owns them; config.json never supplies them. */
+const SECRET_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  "token",
+  "refreshToken",
+  "minecraftAccessToken",
+  "sessionPortalUrl",
+]);
+
+/** Every LauncherConfig key that may be read from config.json. */
+type PersistedConfigKey = Exclude<
+  keyof LauncherConfig,
+  "token" | "refreshToken" | "minecraftAccessToken" | "sessionPortalUrl"
+>;
+
+const KNOWN_CONFIG_KEY_LIST = [
+  "portalUrl",
+  "selectedChannel",
+  "allocatedRamGb",
+  "gameDir",
+  "gameDirConfigured",
+  "gameDirPreexistingEntries",
+  "javaPath",
+  "javaArgs",
+  "disabledClientMods",
+  "customClientMods",
+  "customShaderPacks",
+  "noSync",
+  "externalImages",
+] as const satisfies readonly PersistedConfigKey[];
+
+// Compile-time check: a key added to LauncherConfig must also be listed above,
+// otherwise sanitizeLoadedConfig would silently drop it on load.
+type MissingKnownConfigKey = Exclude<
+  PersistedConfigKey,
+  (typeof KNOWN_CONFIG_KEY_LIST)[number]
+>;
+const knownConfigKeysAreExhaustive: [MissingKnownConfigKey] extends [never]
+  ? true
+  : never = true;
+void knownConfigKeysAreExhaustive;
+
+const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set(KNOWN_CONFIG_KEY_LIST);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Reads a managed-file entry ({ filename, addedAt, size, ... }) whose filename
+ * is a bare name with the given extension. Returns null for anything else.
+ */
+function readManagedFileEntry(
+  value: unknown,
+  extension: string,
+): { filename: string; addedAt: string; size: number } | null {
+  if (!isPlainObject(value)) return null;
+  const { filename, addedAt, size } = value;
+  if (
+    typeof filename !== "string" ||
+    filename !== path.basename(filename) ||
+    path.extname(filename).toLowerCase() !== extension
+  ) {
+    return null;
+  }
+  return {
+    filename,
+    addedAt: typeof addedAt === "string" ? addedAt : "",
+    size:
+      typeof size === "number" && Number.isFinite(size) && size >= 0 ? size : 0,
+  };
+}
+
+/**
+ * Reduces the parsed contents of config.json to the settings the launcher
+ * understands, with the right types. Invalid values are left out so the
+ * defaults apply, and malformed list entries are dropped one by one.
+ * Credentials never come from this file (SessionManager owns them), so the
+ * secret keys are not copied. `dropped` names the keys that were ignored,
+ * never their values.
+ */
+function sanitizeLoadedConfig(parsed: unknown): {
+  config: Partial<LauncherConfig>;
+  dropped: string[];
+} {
+  const config: Partial<LauncherConfig> = {};
+  const dropped = new Set<string>();
+
+  if (!isPlainObject(parsed)) {
+    dropped.add("(root)");
+    return { config, dropped: [...dropped] };
+  }
+
+  for (const key of Object.keys(parsed)) {
+    if (!KNOWN_CONFIG_KEYS.has(key) && !SECRET_CONFIG_KEYS.has(key)) {
+      // Key names come from a hand-editable file; keep the log line printable.
+      dropped.add(key.replace(/[^\x20-\x7e]/g, "?").slice(0, 64));
+    }
+  }
+
+  const has = (key: string): boolean => Object.hasOwn(parsed, key);
+
+  if (has("portalUrl")) {
+    const v = parsed.portalUrl;
+    if (typeof v === "string" && v.length > 0) config.portalUrl = v;
+    else dropped.add("portalUrl");
+  }
+  if (has("selectedChannel")) {
+    const v = parsed.selectedChannel;
+    if (CHANNELS.includes(v as LauncherConfig["selectedChannel"])) {
+      config.selectedChannel = v as LauncherConfig["selectedChannel"];
+    } else dropped.add("selectedChannel");
+  }
+  if (has("allocatedRamGb")) {
+    const v = parsed.allocatedRamGb;
+    if (typeof v === "number" && Number.isInteger(v) && v >= 2 && v <= 64) {
+      config.allocatedRamGb = v;
+    } else dropped.add("allocatedRamGb");
+  }
+  for (const key of ["gameDir", "javaPath", "javaArgs"] as const) {
+    if (!has(key)) continue;
+    const v = parsed[key];
+    if (typeof v === "string") config[key] = v;
+    else dropped.add(key);
+  }
+  for (const key of [
+    "gameDirConfigured",
+    "noSync",
+    "externalImages",
+  ] as const) {
+    if (!has(key)) continue;
+    const v = parsed[key];
+    if (typeof v === "boolean") config[key] = v;
+    else dropped.add(key);
+  }
+
+  if (has("disabledClientMods")) {
+    const v = parsed.disabledClientMods;
+    if (Array.isArray(v)) {
+      config.disabledClientMods = v.filter(
+        (item): item is string => typeof item === "string",
+      );
+      if (config.disabledClientMods.length !== v.length) {
+        dropped.add("disabledClientMods");
+      }
+    } else {
+      config.disabledClientMods = [];
+      dropped.add("disabledClientMods");
+    }
+  }
+
+  if (has("customClientMods")) {
+    const v = parsed.customClientMods;
+    const mods: NonNullable<LauncherConfig["customClientMods"]> = [];
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const entry = readManagedFileEntry(item, ".jar");
+        if (entry) {
+          mods.push({
+            ...entry,
+            enabled: Boolean((item as Record<string, unknown>).enabled),
+          });
+        }
+      }
+    }
+    config.customClientMods = mods;
+    if (!Array.isArray(v) || mods.length !== v.length) {
+      dropped.add("customClientMods");
+    }
+  }
+
+  if (has("customShaderPacks")) {
+    const v = parsed.customShaderPacks;
+    const packs: NonNullable<LauncherConfig["customShaderPacks"]> = [];
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        const entry = readManagedFileEntry(item, ".zip");
+        if (entry) packs.push(entry);
+      }
+    }
+    config.customShaderPacks = packs;
+    if (!Array.isArray(v) || packs.length !== v.length) {
+      dropped.add("customShaderPacks");
+    }
+  }
+
+  if (has("gameDirPreexistingEntries")) {
+    const v = parsed.gameDirPreexistingEntries;
+    if (Array.isArray(v)) {
+      const entries = v.filter(
+        (item): item is string => typeof item === "string",
+      );
+      config.gameDirPreexistingEntries = entries;
+      if (entries.length !== v.length) dropped.add("gameDirPreexistingEntries");
+    } else dropped.add("gameDirPreexistingEntries");
+  }
+
+  return { config, dropped: [...dropped] };
+}
+
 export class ConfigManager {
   private static configPath: string;
   private static cachedConfig: LauncherConfig | null = null;
@@ -193,12 +398,16 @@ export class ConfigManager {
     if (fs.existsSync(this.configPath)) {
       try {
         const data = fs.readFileSync(this.configPath, "utf-8");
-        const parsed = JSON.parse(data);
+        const { config: parsed, dropped } = sanitizeLoadedConfig(
+          JSON.parse(data),
+        );
+        if (dropped.length > 0) {
+          LauncherLogger.warn(
+            `[Config] Ignored invalid settings: ${dropped.join(", ")}`,
+          );
+        }
+        // Secrets are never read from config.json; sanitizeLoadedConfig skips them.
         loaded = { ...DEFAULT_CONFIG, ...parsed };
-        delete (loaded as any).token;
-        delete (loaded as any).refreshToken;
-        delete (loaded as any).minecraftAccessToken;
-        delete (loaded as any).sessionPortalUrl;
 
         // Legacy migration: automatically regard existing configuration or existing installation as configured
         if (parsed.gameDirConfigured === undefined) {

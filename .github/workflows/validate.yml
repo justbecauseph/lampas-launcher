@@ -34,6 +34,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Audit dependencies
+        run: bun audit
+
+      - name: Check formatting
+        run: bun run format:check
+
       - name: Ensure Electron binary installed
         run: node node_modules/electron/install.js
 

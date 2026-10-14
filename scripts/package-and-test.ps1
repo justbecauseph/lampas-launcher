@@ -1,6 +1,11 @@
 # Packaging and local testing script for Windows Store (AppX/MSIX)
 $ErrorActionPreference = "Stop"
 
+if ([string]::IsNullOrEmpty($env:LAMPAS_DEVCERT_PASSWORD)) {
+    Write-Error "LAMPAS_DEVCERT_PASSWORD is not set. Set it to the devcert.pfx password before running this script."
+    exit 1
+}
+
 Write-Host "Building AppX package..." -ForegroundColor Cyan
 bun run package:appx
 
@@ -15,7 +20,7 @@ if (-not (Test-Path "devcert.pfx")) {
 }
 
 Write-Host "Signing AppX for local testing..." -ForegroundColor Cyan
-& $signtool sign /fd SHA256 /a /f devcert.pfx /p devpass123! $appx
+& $signtool sign /fd SHA256 /a /f devcert.pfx /p $env:LAMPAS_DEVCERT_PASSWORD $appx
 
 Write-Host "Installing/Updating AppX package..." -ForegroundColor Cyan
 Add-AppxPackage -Path $appx

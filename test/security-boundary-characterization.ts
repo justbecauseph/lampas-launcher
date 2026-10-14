@@ -1475,16 +1475,21 @@ try {
         );
       }
 
-      // utils:openPath(normalLogFile)
+      // utils:openPath(normalLogFile): an absolute path is refused even when it
+      // is the launcher log itself. Only location identifiers are accepted, so
+      // the handler never probes or creates directories for renderer paths.
       openedPaths.length = 0;
-      const res4 = await pathHandler({}, normalLogFile);
-      if (
-        openedPaths.length !== 1 ||
-        openedPaths[0] !== expectedCanonical ||
-        res4 !== expectedCanonical
-      ) {
+      let absolutePathRejected = false;
+      try {
+        await pathHandler({}, normalLogFile);
+      } catch (err: any) {
+        absolutePathRejected = String(err?.message || err).includes(
+          "Refusing to open unapproved path",
+        );
+      }
+      if (!absolutePathRejected || openedPaths.length !== 0) {
         throw new Error(
-          `Expected utils:openPath(${normalLogFile}) to open ${expectedCanonical}`,
+          `Expected utils:openPath(${normalLogFile}) to be refused without opening anything`,
         );
       }
       openedPaths.length = 0;

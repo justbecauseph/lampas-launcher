@@ -20,6 +20,8 @@ Keep backups of worlds and other files you care about. Mods and a Java installat
 
 If the launcher detects damaged files, invalid pack information or an interrupted repair, it may block launching until the problem is resolved. Run **Repair** after fixing the reported cause. Repair checks the managed game files and runtime before clearing an integrity block; a quick sync is not a full integrity check.
 
+A block caused by the Portal refusing access (for example a revoked release or an account that is no longer allowed on a channel) is recorded per game folder and stays in place after signing out or switching accounts. Run **Repair** once the account and channel are allowed again; a successful full repair clears it.
+
 If a directory move needs recovery, keep both the original and destination folders until recovery is resolved. Do not delete recovery records or install an older launcher just to bypass a security error. Ask the maintainers for help if the launcher cannot recover safely.
 
 ## Report a security problem

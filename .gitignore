@@ -9,3 +9,6 @@ PROGRESS.md
 # Development certificate
 devcert.pfx
 devcert.cer
+
+# Local audit/review write-ups
+AUDIT.md

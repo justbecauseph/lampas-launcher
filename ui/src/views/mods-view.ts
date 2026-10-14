@@ -69,8 +69,7 @@ function escapeHtml(value?: string | number): string {
 }
 
 export function initModsView(options: ModsViewOptions): () => void {
-  const { showToast, onModsChanged, getGameDir, switchToTab, externalImages } =
-    options;
+  const { showToast, onModsChanged, switchToTab, externalImages } = options;
 
   const modsGrid = document.getElementById("mods-grid") as HTMLElement | null;
   const modsSearchInput = document.getElementById(
@@ -608,20 +607,8 @@ export function initModsView(options: ModsViewOptions): () => void {
   // Open Pack Folder Button
   if (btnModsOpenDir) {
     btnModsOpenDir.onclick = async () => {
-      if (window.lampas?.utils?.openKnownLocation) {
-        await window.lampas.utils.openKnownLocation("modsDir");
-        return;
-      }
-      let dir = getGameDir?.();
-      if (!dir && window.lampas?.config?.get) {
-        try {
-          const cfg = await window.lampas.config.get();
-          dir = cfg?.gameDir;
-        } catch {}
-      }
-      if (dir && window.lampas?.utils?.openPath) {
-        await window.lampas.utils.openPath(dir);
-      }
+      // Main only opens known location identifiers, never raw paths.
+      await window.lampas.utils.openKnownLocation("modsDir");
     };
   }
 

@@ -52,6 +52,18 @@ export interface TransferOutcome {
 
 export const MAX_SUPPORTED_PROTOCOL = 3;
 
+/**
+ * The offline metadata fallback reads manifests from beside the application
+ * bundle (`resources/`, next to app.asar).  That directory is not covered by
+ * ASAR integrity validation, so anyone who can write to the install folder
+ * could plant a manifest there.  Only unpackaged development builds may use
+ * it.  A missing `app` or an undefined `isPackaged` (test mocks) counts as
+ * unpackaged.
+ */
+function isPackagedBuild(): boolean {
+  return app?.isPackaged === true;
+}
+
 function metadataUrl(
   portalUrl: string,
   value: string,
@@ -381,7 +393,9 @@ export class LauncherSync {
         __dirname,
         "../../manifest/release.json",
       );
+      // Packaged builds fail closed without touching the filesystem.
       if (
+        isPackagedBuild() ||
         !fs.existsSync(localManifestPath) ||
         !fs.existsSync(localReleasePath)
       ) {
@@ -1261,6 +1275,9 @@ export class LauncherSync {
   }
 
   private static loadLocalModCatalog(): any[] {
+    // Packaged builds never read the unprotected resources/ directory; see
+    // isPackagedBuild().
+    if (isPackagedBuild()) return [];
     const localManifestPath = path.join(
       __dirname,
       "../../manifest/client-manifest.json",

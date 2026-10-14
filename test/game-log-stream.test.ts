@@ -433,7 +433,7 @@ describe("Phase 2 — UI Renderer DOM & Queue Invariants", () => {
     });
   });
 
-  test("production DOM bounds: retains at most 1,000 lines AND at most 512 KB text bytes", () => {
+  test("console pruning model: at most 1,000 lines (matches console-view pruneLines) plus a 512 KB byte budget kept only in this model", () => {
     const MAX_DISPLAY_LINES = 1000;
     const MAX_DISPLAY_BYTES = 512 * 1024; // 512 KB
 
@@ -480,7 +480,9 @@ describe("Phase 2 — UI Renderer DOM & Queue Invariants", () => {
         logLineCount++;
       }
 
-      // Exact production pruning logic from ui/renderer.js
+      // Local model of the console's pruning. The 1,000-line cap matches
+      // `pruneLines` in ui/src/views/console-view.ts; the 512 KB byte budget
+      // came from the removed ui/renderer.js and has no counterpart there.
       while (
         (consoleOutput.childElementCount > MAX_DISPLAY_LINES ||
           retainedDisplayBytes > MAX_DISPLAY_BYTES) &&

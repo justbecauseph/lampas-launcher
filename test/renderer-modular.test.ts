@@ -356,8 +356,8 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
           set: async (cfg: any) => cfg,
         },
         utils: {
-          openPath: async (p: string) => {
-            openedPath = p;
+          openKnownLocation: async (location: string) => {
+            openedPath = location;
           },
         },
         sync: {
@@ -407,12 +407,10 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
         "C:/Users/markj/AppData/Roaming/.minecraft-lampas",
       );
 
-      // Verify Open Folder button works
+      // Verify Open Folder button asks main for the known location, not a raw path
       expect(typeof openDirBtn.onclick).toBe("function");
       await openDirBtn.onclick();
-      expect(openedPath).toBe(
-        "C:/Users/markj/AppData/Roaming/.minecraft-lampas",
-      );
+      expect(openedPath).toBe("gameDir");
 
       // Verify Move Installation button is wired
       expect(typeof moveDirBtn.onclick).toBe("function");
@@ -531,8 +529,8 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
           },
         },
         utils: {
-          openPath: async (p: string) => {
-            openedPath = p;
+          openKnownLocation: async (location: string) => {
+            openedPath = location;
           },
         },
         config: {
@@ -569,10 +567,10 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       await verifyPackBtn.onclick();
       expect(startCalled).toBe(true);
 
-      // 4. Test Open Pack Folder button
+      // 4. Test Open Pack Folder button asks main for the known location
       expect(typeof modsOpenDirBtn.onclick).toBe("function");
       await modsOpenDirBtn.onclick();
-      expect(openedPath).toBe("C:/LampasPack");
+      expect(openedPath).toBe("modsDir");
 
       dispose();
     } finally {

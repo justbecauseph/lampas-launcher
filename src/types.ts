@@ -339,7 +339,8 @@ export interface ClearCredentialsResult {
 }
 
 export interface AuthStorageStatusDto {
-  backend: "windows_dpapi" | "linux_keyring" | "session_only";
+  backend:
+    "windows_dpapi" | "linux_keyring" | "macos_keychain" | "session_only";
   sessionOnly: boolean;
   persistenceAvailable: boolean;
   sessionPersisted?: boolean;
