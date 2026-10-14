@@ -1,82 +1,60 @@
+/* Maraha type, bundled locally because the renderer CSP blocks remote fonts.
+   Display: IM Fell English. Body and UI: Alegreya Sans. Data: Geist Mono. */
 @font-face {
-  font-family: "IBM Plex Sans";
+  font-family: "IM Fell English";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("./assets/fonts/IBMPlexSans-Regular.woff2") format("woff2");
+  src: url("./assets/fonts/IMFellEnglish-Regular.woff2") format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Sans";
+  font-family: "IM Fell English";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/IMFellEnglish-Italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Alegreya Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/AlegreyaSans-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Alegreya Sans";
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url("./assets/fonts/IBMPlexSans-Medium.woff2") format("woff2");
+  src: url("./assets/fonts/AlegreyaSans-Medium.woff2") format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Sans";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url("./assets/fonts/IBMPlexSans-SemiBold.woff2") format("woff2");
-}
-@font-face {
-  font-family: "IBM Plex Sans";
+  font-family: "Alegreya Sans";
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url("./assets/fonts/IBMPlexSans-Bold.woff2") format("woff2");
+  src: url("./assets/fonts/AlegreyaSans-Bold.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: "IBM Plex Mono";
+  font-family: "Geist Mono";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("./assets/fonts/IBMPlexMono-Regular.woff2") format("woff2");
+  src: url("./assets/fonts/GeistMono-Regular.woff2") format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Mono";
+  font-family: "Geist Mono";
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url("./assets/fonts/IBMPlexMono-Medium.woff2") format("woff2");
+  src: url("./assets/fonts/GeistMono-Medium.woff2") format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Mono";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url("./assets/fonts/IBMPlexMono-SemiBold.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Rajdhani";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url("./assets/fonts/Rajdhani-SemiBold.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Rajdhani";
+  font-family: "Geist Mono";
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url("./assets/fonts/Rajdhani-Bold.woff2") format("woff2");
-}
-
-/* Console font: Iosevka Term (Nerd Font Mono build), subset to Latin,
-   punctuation, arrows and box drawing. */
-@font-face {
-  font-family: "Iosevka Term";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("./assets/fonts/IosevkaTerm-Regular.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Iosevka Term";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./assets/fonts/IosevkaTerm-Bold.woff2") format("woff2");
+  src: url("./assets/fonts/GeistMono-Bold.woff2") format("woff2");
 }

@@ -500,7 +500,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         moveModalProgressView.classList.remove("hidden");
 
       if (moveProgressPhase)
-        moveProgressPhase.innerText = "Preparing relocation...";
+        moveProgressPhase.innerText = "Preparing relocation…";
       if (moveProgressDetails)
         moveProgressDetails.innerText = "Scanning files...";
       if (moveProgressPercent) moveProgressPercent.innerText = "0%";
@@ -511,7 +511,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         (prog: DirectoryMoveProgress) => {
           if (moveProgressPhase) {
             const phaseLabels: Record<string, string> = {
-              preparing: "Preparing relocation...",
+              preparing: "Preparing relocation…",
               moving: "Copying files to staging...",
               verifying: "Verifying checksums and counts...",
               cleaning: "Cleaning source directory...",

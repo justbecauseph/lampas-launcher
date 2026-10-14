@@ -157,15 +157,14 @@ async function main() {
     const fontDir = path.join(rootDir, "ui/assets/fonts");
     const licensePath = path.join(fontDir, "LICENSE.txt");
     const expectedFonts = [
-      "IBMPlexMono-Regular.woff2",
-      "IBMPlexMono-Medium.woff2",
-      "IBMPlexMono-SemiBold.woff2",
-      "IBMPlexSans-Regular.woff2",
-      "IBMPlexSans-Medium.woff2",
-      "IBMPlexSans-SemiBold.woff2",
-      "IBMPlexSans-Bold.woff2",
-      "Rajdhani-SemiBold.woff2",
-      "Rajdhani-Bold.woff2",
+      "IMFellEnglish-Regular.woff2",
+      "IMFellEnglish-Italic.woff2",
+      "AlegreyaSans-Regular.woff2",
+      "AlegreyaSans-Medium.woff2",
+      "AlegreyaSans-Bold.woff2",
+      "GeistMono-Regular.woff2",
+      "GeistMono-Medium.woff2",
+      "GeistMono-Bold.woff2",
     ];
 
     const missingFonts = expectedFonts.filter(
@@ -180,7 +179,7 @@ async function main() {
       passed: missingFonts.length === 0 && licenseValid,
       details:
         missingFonts.length === 0 && licenseValid
-          ? `All 9 WOFF2 fonts present with valid SIL Open Font License 1.1`
+          ? `All ${expectedFonts.length} WOFF2 fonts present with valid SIL Open Font License 1.1`
           : `Missing fonts: ${missingFonts.join(", ") || "none"}, License valid: ${licenseValid}`,
     };
   });

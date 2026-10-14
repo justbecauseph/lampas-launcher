@@ -16,34 +16,20 @@
     <!-- Custom Titlebar -->
     <header class="titlebar flex items-center justify-between px-4">
       <div class="flex items-center gap-2 app-drag">
-        <img src="assets/lampas.png" alt="Lampas" class="logo-icon" />
-        <span class="font-extrabold tracking-tight text-xs text-white">
-          LAMPAS <span class="text-cyan-400">LAUNCHER</span>
-        </span>
-        <span id="titlebar-version-badge" class="badge text-slate-400 font-mono"
-          >v1.5.4</span
-        >
+        <span class="titlebar-name">Lampas Launcher</span>
+        <span id="titlebar-version-badge" class="badge">v1.5.4</span>
         <span id="titlebar-channel-badge" class="badge text-cyan-400"
           >STABLE</span
         >
-        <span
-          id="titlebar-nosync-badge"
-          class="badge text-amber-400 border-amber-500/40 bg-amber-950/40 hidden"
+        <span id="titlebar-nosync-badge" class="badge badge-mist hidden"
           >NO SYNC</span
         >
-        <div
-          id="titlebar-game-status"
-          class="badge flex items-center gap-1.5 text-slate-400"
-        >
+        <div id="titlebar-game-status" class="badge">
           <span
             id="titlebar-status-dot"
             class="status-dot status-dot-idle"
           ></span>
-          <span
-            id="titlebar-status-text"
-            class="font-mono text-[10px] font-bold"
-            >IDLE</span
-          >
+          <span id="titlebar-status-text">IDLE</span>
         </div>
       </div>
 
@@ -60,7 +46,7 @@
     <!-- Main Container -->
     <div class="flex flex-1 min-h-0 overflow-hidden">
       <!-- Left Navigation & User Sidebar -->
-      <aside class="sidebar flex flex-col justify-between p-4">
+      <aside class="sidebar flex flex-col justify-between">
         <div class="space-y-6">
           <!-- Navigation Tabs -->
           <nav class="space-y-1.5">
@@ -101,7 +87,7 @@
                   d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
                 />
               </svg>
-              <span>Client Mods</span>
+              <span>Client mods</span>
             </button>
 
             <button id="nav-console" class="nav-item">
@@ -118,7 +104,7 @@
                   d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                 />
               </svg>
-              <span>Console & Logs</span>
+              <span>Console & logs</span>
             </button>
 
             <button id="nav-settings" class="nav-item">
@@ -147,7 +133,7 @@
         </div>
 
         <!-- User Profile Card -->
-        <div id="user-section" class="border-t border-slate-900 pt-4">
+        <div id="user-section" class="border-t pt-4">
           <!-- Launcher update notice (hidden until a newer release exists) -->
           <div id="update-card" class="update-card hidden" role="status">
             <div class="update-card-text">
@@ -169,29 +155,19 @@
           </div>
 
           <!-- Logged in state -->
-          <div
-            id="user-card"
-            class="hidden flex items-center justify-between bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800"
-          >
+          <div id="user-card" class="user-card hidden">
             <div class="flex items-center gap-2.5 min-w-0">
               <div id="user-avatar" class="avatar">P</div>
-              <div class="flex flex-col min-w-0">
-                <span
-                  id="user-name"
-                  class="font-bold text-xs text-white truncate"
-                  >Player</span
-                >
-                <span
-                  id="user-role"
-                  class="text-[10px] text-cyan-400 font-mono font-semibold"
-                  >Verified</span
-                >
+              <div class="flex flex-col items-start gap-1 min-w-0">
+                <span id="user-name" class="user-name truncate">Player</span>
+                <span id="user-role" class="tag">Verified</span>
               </div>
             </div>
             <button
               id="btn-logout"
-              class="icon-btn text-slate-400 hover:text-rose-400"
-              title="Log Out"
+              class="icon-btn"
+              title="Log out"
+              aria-label="Log out"
             >
               <svg
                 class="w-4 h-4"
@@ -234,15 +210,139 @@
         <!-- TAB 1: PLAY SCREEN -->
         <section id="tab-play" class="tab-content play-screen">
           <div class="play-hero">
-            <div class="play-identity">
-              <img src="assets/lampas.png" alt="" class="play-hero-logo" />
-              <div class="min-w-0">
-                <h1 class="play-title">Lampas 2</h1>
-                <p class="play-subtitle">
-                  Survival SMP · Minecraft
-                  <span id="runtime-minecraft-version">26.2</span>
-                </p>
-              </div>
+            <!-- Sky over mist: stars above, lamplight and drifting Miasma below -->
+            <svg
+              class="hero-stars"
+              viewBox="0 0 1000 420"
+              preserveAspectRatio="xMidYMin slice"
+              aria-hidden="true"
+            >
+              <circle cx="0" cy="0" r="1.6" opacity="0.25" />
+              <circle cx="173" cy="89" r="0.9" opacity="0.62" />
+              <circle cx="346" cy="178" r="0.9" opacity="0.49" />
+              <circle cx="519" cy="267" r="0.9" opacity="0.36" />
+              <circle cx="692" cy="356" r="0.9" opacity="0.73" />
+              <circle cx="865" cy="25" r="0.9" opacity="0.6" />
+              <circle cx="38" cy="114" r="0.9" opacity="0.47" />
+              <circle cx="211" cy="203" r="1.6" opacity="0.34" />
+              <circle cx="384" cy="292" r="0.9" opacity="0.71" />
+              <circle cx="557" cy="381" r="0.9" opacity="0.58" />
+              <circle cx="730" cy="50" r="0.9" opacity="0.45" />
+              <circle cx="903" cy="139" r="0.9" opacity="0.32" />
+              <circle cx="76" cy="228" r="0.9" opacity="0.69" />
+              <circle cx="249" cy="317" r="0.9" opacity="0.56" />
+              <circle cx="422" cy="406" r="1.6" opacity="0.43" />
+              <circle cx="595" cy="75" r="0.9" opacity="0.3" />
+              <circle cx="768" cy="164" r="0.9" opacity="0.67" />
+              <circle cx="941" cy="253" r="0.9" opacity="0.54" />
+              <circle cx="114" cy="342" r="0.9" opacity="0.41" />
+              <circle cx="287" cy="11" r="0.9" opacity="0.28" />
+              <circle cx="460" cy="100" r="0.9" opacity="0.65" />
+              <circle cx="633" cy="189" r="1.6" opacity="0.52" />
+              <circle cx="806" cy="278" r="0.9" opacity="0.39" />
+              <circle cx="979" cy="367" r="0.9" opacity="0.26" />
+              <circle cx="152" cy="36" r="0.9" opacity="0.63" />
+              <circle cx="325" cy="125" r="0.9" opacity="0.5" />
+              <circle cx="498" cy="214" r="0.9" opacity="0.37" />
+              <circle cx="671" cy="303" r="0.9" opacity="0.74" />
+              <circle cx="844" cy="392" r="1.6" opacity="0.61" />
+              <circle cx="17" cy="61" r="0.9" opacity="0.48" />
+              <circle cx="190" cy="150" r="0.9" opacity="0.35" />
+              <circle cx="363" cy="239" r="0.9" opacity="0.72" />
+              <circle cx="536" cy="328" r="0.9" opacity="0.59" />
+              <circle cx="709" cy="417" r="0.9" opacity="0.46" />
+              <circle cx="882" cy="86" r="0.9" opacity="0.33" />
+              <circle cx="55" cy="175" r="1.6" opacity="0.7" />
+              <circle cx="228" cy="264" r="0.9" opacity="0.57" />
+              <circle cx="401" cy="353" r="0.9" opacity="0.44" />
+              <circle cx="574" cy="22" r="0.9" opacity="0.31" />
+              <circle cx="747" cy="111" r="0.9" opacity="0.68" />
+              <circle cx="920" cy="200" r="0.9" opacity="0.55" />
+              <circle cx="93" cy="289" r="0.9" opacity="0.42" />
+              <circle cx="266" cy="378" r="1.6" opacity="0.29" />
+              <circle cx="439" cy="47" r="0.9" opacity="0.66" />
+              <circle cx="612" cy="136" r="0.9" opacity="0.53" />
+              <circle cx="785" cy="225" r="0.9" opacity="0.4" />
+            </svg>
+            <div class="hero-glow" aria-hidden="true"></div>
+            <div class="hero-mist" aria-hidden="true">
+              <!-- Each band is drawn twice side by side so a -50% drift loops -->
+              <svg
+                class="mist-layer"
+                viewBox="0 0 2400 280"
+                preserveAspectRatio="none"
+                style="--mist-duration: 160s; opacity: 0.5"
+              >
+                <defs>
+                  <filter
+                    id="mist-blur-slow"
+                    x="-10%"
+                    y="-50%"
+                    width="120%"
+                    height="200%"
+                  >
+                    <feGaussianBlur stdDeviation="18" />
+                  </filter>
+                </defs>
+                <g filter="url(#mist-blur-slow)" fill="#5e6f5a">
+                  <ellipse cx="0" cy="120" rx="170" ry="46" />
+                  <ellipse cx="170" cy="138" rx="220" ry="64" />
+                  <ellipse cx="330" cy="120" rx="270" ry="46" />
+                  <ellipse cx="520" cy="138" rx="170" ry="64" />
+                  <ellipse cx="700" cy="120" rx="220" ry="46" />
+                  <ellipse cx="860" cy="138" rx="270" ry="64" />
+                  <ellipse cx="1050" cy="120" rx="170" ry="46" />
+                  <ellipse cx="1200" cy="120" rx="170" ry="46" />
+                  <ellipse cx="1370" cy="138" rx="220" ry="64" />
+                  <ellipse cx="1530" cy="120" rx="270" ry="46" />
+                  <ellipse cx="1720" cy="138" rx="170" ry="64" />
+                  <ellipse cx="1900" cy="120" rx="220" ry="46" />
+                  <ellipse cx="2060" cy="138" rx="270" ry="64" />
+                  <ellipse cx="2250" cy="120" rx="170" ry="46" />
+                </g>
+              </svg>
+              <svg
+                class="mist-layer"
+                viewBox="0 0 2400 280"
+                preserveAspectRatio="none"
+                style="--mist-duration: 95s; opacity: 0.32"
+              >
+                <defs>
+                  <filter
+                    id="mist-blur-fast"
+                    x="-10%"
+                    y="-50%"
+                    width="120%"
+                    height="200%"
+                  >
+                    <feGaussianBlur stdDeviation="18" />
+                  </filter>
+                </defs>
+                <g filter="url(#mist-blur-fast)" fill="#9daf95">
+                  <ellipse cx="80" cy="150" rx="170" ry="46" />
+                  <ellipse cx="280" cy="168" rx="220" ry="64" />
+                  <ellipse cx="460" cy="150" rx="270" ry="46" />
+                  <ellipse cx="640" cy="168" rx="170" ry="64" />
+                  <ellipse cx="820" cy="150" rx="220" ry="46" />
+                  <ellipse cx="1000" cy="168" rx="270" ry="64" />
+                  <ellipse cx="1160" cy="150" rx="170" ry="46" />
+                  <ellipse cx="1280" cy="150" rx="170" ry="46" />
+                  <ellipse cx="1480" cy="168" rx="220" ry="64" />
+                  <ellipse cx="1660" cy="150" rx="270" ry="46" />
+                  <ellipse cx="1840" cy="168" rx="170" ry="64" />
+                  <ellipse cx="2020" cy="150" rx="220" ry="46" />
+                  <ellipse cx="2200" cy="168" rx="270" ry="64" />
+                  <ellipse cx="2360" cy="150" rx="170" ry="46" />
+                </g>
+              </svg>
+            </div>
+
+            <div class="min-w-0">
+              <p class="eyebrow">
+                Survival SMP · Minecraft
+                <span id="runtime-minecraft-version">26.2</span>
+              </p>
+              <h1 class="play-title">Lampas <em>2</em></h1>
             </div>
 
             <!-- Live server presence (informational; never blocks Play) -->
@@ -281,7 +381,7 @@
               <div class="launch-actions">
                 <button id="btn-play" class="btn-play">
                   <span id="btn-play-spinner" class="spinner hidden"></span>
-                  <span id="btn-play-text">PLAY</span>
+                  <span id="btn-play-text">Play</span>
                 </button>
                 <button
                   id="btn-stop"
@@ -375,7 +475,7 @@
               </button>
             </span>
             <button id="btn-play-settings" class="link-btn" type="button">
-              Change in Settings
+              Change in settings
             </button>
           </footer>
         </section>
@@ -385,12 +485,10 @@
           id="tab-mods"
           class="tab-content hidden flex-col flex-1 min-h-0 space-y-4"
         >
-          <div class="flex items-center justify-between flex-shrink-0">
+          <div class="page-header">
             <div>
-              <h2 class="text-xl font-extrabold text-white tracking-tight">
-                Client Loadout
-              </h2>
-              <p class="text-xs text-slate-400 mt-1">
+              <h2 class="page-title">Client loadout</h2>
+              <p class="page-description">
                 Tune optional client mods and keep your own additions across
                 pack syncs.
               </p>
@@ -418,7 +516,7 @@
               </button>
               <button
                 id="btn-repair-pack"
-                class="btn-secondary text-cyan-400 hover:border-cyan-500/50"
+                class="btn-secondary"
                 title="Force check and repair all files, assets, and libraries"
               >
                 <svg
@@ -440,7 +538,7 @@
                     d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
                   />
                 </svg>
-                <span>Repair Pack</span>
+                <span>Repair pack</span>
               </button>
               <button id="btn-verify-pack" class="btn-secondary">
                 <svg
@@ -456,7 +554,7 @@
                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                   />
                 </svg>
-                <span>Verify Integrity</span>
+                <span>Verify integrity</span>
               </button>
               <button id="btn-mods-open-dir" class="btn-secondary">
                 <svg
@@ -472,31 +570,25 @@
                     d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
                   />
                 </svg>
-                <span>Open Pack Folder</span>
+                <span>Open pack folder</span>
               </button>
             </div>
           </div>
 
-          <div
-            class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 flex flex-col flex-1 min-h-0 space-y-4"
-          >
+          <div class="mods-panel flex flex-col flex-1 min-h-0">
             <!-- Interactive Mod Explorer & Catalog -->
-            <div class="flex-1 min-h-0 flex flex-col space-y-3 pt-1">
+            <div class="flex-1 min-h-0 flex flex-col space-y-3">
               <div class="flex items-center justify-between flex-shrink-0">
-                <h4
-                  class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2"
-                >
-                  <span>Installed Mods & Features</span>
-                  <span id="mods-filtered-count" class="badge text-cyan-400"
-                    >0</span
-                  >
+                <h4 class="eyebrow flex items-center gap-2">
+                  <span>Installed mods & features</span>
+                  <span id="mods-filtered-count" class="badge">0</span>
                 </h4>
                 <div class="w-64">
                   <input
                     id="mods-search-input"
                     type="text"
-                    placeholder="Search mods, categories..."
-                    class="w-full bg-slate-950/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                    placeholder="Search mods, categories…"
+                    class="input-field input-plain"
                   />
                 </div>
               </div>
@@ -509,13 +601,13 @@
                   All
                 </button>
                 <button class="mod-filter-pill" data-filter="custom">
-                  My Mods
+                  My mods
                 </button>
                 <button class="mod-filter-pill" data-filter="shader">
                   Shaders
                 </button>
                 <button class="mod-filter-pill" data-filter="client">
-                  Client-Only
+                  Client-only
                 </button>
                 <button class="mod-filter-pill" data-filter="disabled">
                   Disabled
@@ -525,7 +617,7 @@
                   Optimization
                 </button>
                 <button class="mod-filter-pill" data-filter="worldgen">
-                  World Gen
+                  World gen
                 </button>
                 <button class="mod-filter-pill" data-filter="decoration">
                   Decoration
@@ -549,13 +641,10 @@
                 <div class="flex items-center gap-3">
                   <div id="drop-mark" class="drop-mark">JAR</div>
                   <div>
-                    <div
-                      id="drop-title"
-                      class="text-xs font-bold text-slate-200"
-                    >
+                    <div id="drop-title" class="text-sm text-slate-200">
                       Drop client mod JARs here
                     </div>
-                    <div id="drop-hint" class="text-[11px] text-slate-500">
+                    <div id="drop-hint" class="text-xs text-slate-500">
                       Local additions stay yours and are never removed by
                       synchronization.
                     </div>
@@ -582,9 +671,7 @@
         >
           <div class="console-header">
             <div class="console-title-group">
-              <h2 class="text-xl font-extrabold text-white tracking-tight">
-                Console
-              </h2>
+              <h2 class="page-title">Console</h2>
               <div
                 id="console-game-status"
                 class="console-status console-status-idle"
@@ -659,14 +746,10 @@
           id="tab-settings"
           class="tab-content hidden flex-col flex-1 min-h-0 space-y-4"
         >
-          <div class="flex items-end justify-between flex-shrink-0">
+          <div class="page-header">
             <div>
-              <h2 class="text-xl font-extrabold text-white tracking-tight">
-                Settings
-              </h2>
-              <p class="text-xs text-slate-400 mt-1">
-                Changes save automatically.
-              </p>
+              <h2 class="page-title">Settings</h2>
+              <p class="page-description">Changes save automatically.</p>
             </div>
             <span
               id="settings-saved"
@@ -697,7 +780,7 @@
                   class="w-full"
                 />
                 <div
-                  class="range-labels text-xs font-mono text-slate-500"
+                  class="range-labels text-[11px] font-mono text-slate-500"
                   aria-hidden="true"
                 >
                   <span style="--range-position: 0%">2 GB</span>
@@ -721,7 +804,7 @@
                     id="setting-gamedir-input"
                     type="text"
                     readonly
-                    class="input-field text-slate-400"
+                    class="input-field"
                   />
                   <button
                     id="btn-settings-open-dir"
@@ -805,7 +888,7 @@
                   <label
                     for="setting-nosync"
                     class="settings-label cursor-pointer"
-                    >Skip pack updates (No Sync)</label
+                    >Skip pack updates (no sync)</label
                   >
                   <p class="settings-help">
                     Launch with the files already on disk. You may be unable to
@@ -872,35 +955,22 @@
     <!-- Modal: First-Run Directory Setup -->
     <div id="modal-initial-dir" class="modal-backdrop hidden">
       <div class="modal-dialog p-6 space-y-5">
-        <div class="space-y-1">
-          <div class="flex items-center gap-2">
-            <img
-              src="assets/lampas.png"
-              alt="Lampas"
-              class="logo-icon w-5 h-5"
-            />
-            <span class="badge text-cyan-400">INITIAL SETUP</span>
-          </div>
-          <h3 class="text-lg font-extrabold text-white tracking-tight mt-2">
-            Choose Minecraft Installation Location
-          </h3>
-          <p class="text-xs text-slate-400 leading-relaxed">
+        <div>
+          <p class="eyebrow">First-time setup</p>
+          <h3 class="modal-title">Choose where to install Minecraft</h3>
+          <p class="modal-text">
             Lampas will store Minecraft, mods, saves, resource packs and its
             runtime here.
           </p>
         </div>
 
         <div class="space-y-2">
-          <label
-            for="initial-gamedir-input"
-            class="text-xs font-bold text-slate-300"
-            >Target Folder</label
-          >
+          <label for="initial-gamedir-input" class="modal-label">Folder</label>
           <div class="flex items-center gap-2">
             <input
               id="initial-gamedir-input"
               type="text"
-              class="input-field text-slate-200 text-xs select-text font-mono flex-1"
+              class="input-field select-text flex-1"
             />
             <button
               id="btn-initial-browse"
@@ -910,21 +980,12 @@
               <span>Browse…</span>
             </button>
           </div>
-          <p
-            id="initial-dir-error"
-            class="hidden text-[11px] text-rose-400"
-          ></p>
+          <p id="initial-dir-error" class="modal-error hidden"></p>
         </div>
 
-        <div
-          class="flex items-center justify-end gap-3 pt-2 border-t border-slate-800/80"
-        >
-          <button
-            id="btn-initial-confirm"
-            class="btn-play py-2.5 px-6 min-w-0 text-xs"
-            type="button"
-          >
-            <span>Use This Location</span>
+        <div class="modal-actions">
+          <button id="btn-initial-confirm" class="btn-primary" type="button">
+            <span>Use this folder</span>
           </button>
         </div>
       </div>
@@ -934,69 +995,48 @@
     <div id="modal-move-dir" class="modal-backdrop hidden">
       <div class="modal-dialog p-6 space-y-5">
         <!-- Confirmation View -->
-        <div id="move-modal-confirm-view" class="space-y-4">
-          <div class="space-y-1">
-            <h3 class="text-lg font-extrabold text-white tracking-tight">
-              Move Minecraft Installation?
-            </h3>
-            <p class="text-xs text-slate-400 leading-relaxed">
+        <div id="move-modal-confirm-view" class="space-y-5">
+          <div>
+            <h3 class="modal-title">Move the Minecraft folder?</h3>
+            <p class="modal-text">
               This moves Minecraft, mods, worlds, screenshots, resource packs
               and launcher-managed runtime files.
             </p>
           </div>
 
-          <div
-            class="space-y-3 bg-slate-950/80 p-4 rounded-xl border border-slate-800 text-xs font-mono"
-          >
-            <div class="space-y-1">
-              <span
-                class="text-[10px] text-slate-500 uppercase font-bold tracking-wider"
-                >From:</span
-              >
+          <div class="path-box">
+            <div>
+              <span class="eyebrow">From</span>
               <div
                 id="move-source-path"
                 class="text-slate-300 truncate select-text"
               ></div>
             </div>
-            <div class="space-y-1 pt-2 border-t border-slate-900">
-              <span
-                class="text-[10px] text-cyan-500 uppercase font-bold tracking-wider"
-                >To:</span
-              >
+            <div>
+              <span class="eyebrow">To</span>
               <div
                 id="move-target-path"
-                class="text-cyan-400 font-bold truncate select-text"
+                class="text-white truncate select-text"
               ></div>
             </div>
           </div>
 
-          <div
-            class="flex items-center justify-end gap-3 pt-2 border-t border-slate-800/80"
-          >
+          <div class="modal-actions">
             <button id="btn-cancel-move" class="btn-secondary" type="button">
               Cancel
             </button>
-            <button
-              id="btn-confirm-move"
-              class="btn-play py-2.5 px-6 min-w-0 text-xs"
-              type="button"
-            >
-              <span>Move Installation</span>
+            <button id="btn-confirm-move" class="btn-primary" type="button">
+              <span>Move folder</span>
             </button>
           </div>
         </div>
 
         <!-- Progress View -->
         <div id="move-modal-progress-view" class="hidden space-y-4">
-          <div class="space-y-1">
-            <div class="flex items-center gap-2">
-              <span class="spinner"></span>
-              <h3 class="text-lg font-extrabold text-white tracking-tight">
-                Moving Minecraft Installation...
-              </h3>
-            </div>
-            <p id="move-progress-phase" class="text-xs text-cyan-400 font-mono">
-              Preparing relocation...
+          <div>
+            <h3 class="modal-title">Moving the Minecraft folder…</h3>
+            <p id="move-progress-phase" class="modal-text">
+              Preparing relocation…
             </p>
           </div>
 
@@ -1005,9 +1045,7 @@
               <span id="move-progress-details" class="text-slate-400 truncate"
                 >0 / 0 files (0 MB / 0 MB)</span
               >
-              <span id="move-progress-percent" class="text-cyan-400 font-bold"
-                >0%</span
-              >
+              <span id="move-progress-percent" class="text-white">0%</span>
             </div>
             <div class="progress-track">
               <div
@@ -1018,13 +1056,11 @@
             </div>
             <p
               id="move-progress-file"
-              class="text-[10px] text-slate-500 font-mono truncate min-h-[14px]"
+              class="text-[11px] text-slate-500 font-mono truncate min-h-[14px]"
             ></p>
           </div>
 
-          <div
-            class="rounded-xl bg-amber-950/30 border border-amber-900/50 p-3 text-[11px] text-amber-300"
-          >
+          <div class="notice">
             Please keep the launcher open until relocation and verification
             complete.
           </div>

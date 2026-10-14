@@ -58,15 +58,14 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     expect(fs.existsSync(fontsDir)).toBe(true);
 
     const expectedFonts = [
-      "IBMPlexSans-Regular.woff2",
-      "IBMPlexSans-Medium.woff2",
-      "IBMPlexSans-SemiBold.woff2",
-      "IBMPlexSans-Bold.woff2",
-      "IBMPlexMono-Regular.woff2",
-      "IBMPlexMono-Medium.woff2",
-      "IBMPlexMono-SemiBold.woff2",
-      "Rajdhani-SemiBold.woff2",
-      "Rajdhani-Bold.woff2",
+      "IMFellEnglish-Regular.woff2",
+      "IMFellEnglish-Italic.woff2",
+      "AlegreyaSans-Regular.woff2",
+      "AlegreyaSans-Medium.woff2",
+      "AlegreyaSans-Bold.woff2",
+      "GeistMono-Regular.woff2",
+      "GeistMono-Medium.woff2",
+      "GeistMono-Bold.woff2",
     ];
 
     for (const fontName of expectedFonts) {
@@ -86,13 +85,12 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       path.join(__dirname, "../ui/fonts.css"),
       "utf-8",
     );
-    expect(css).toMatch(/font-family:\s*["']IBM Plex Sans["']/);
-    expect(css).toMatch(/font-family:\s*["']IBM Plex Mono["']/);
-    expect(css).toMatch(/font-family:\s*["']Rajdhani["']/);
-    expect(css).toContain("IBMPlexSans-Regular.woff2");
-    expect(css).toContain("IBMPlexMono-Regular.woff2");
-    expect(css).toContain("Rajdhani-Bold.woff2");
-    expect(css).toContain("IosevkaTerm-Regular.woff2");
+    expect(css).toMatch(/font-family:\s*["']IM Fell English["']/);
+    expect(css).toMatch(/font-family:\s*["']Alegreya Sans["']/);
+    expect(css).toMatch(/font-family:\s*["']Geist Mono["']/);
+    expect(css).toContain("IMFellEnglish-Regular.woff2");
+    expect(css).toContain("AlegreyaSans-Regular.woff2");
+    expect(css).toContain("GeistMono-Regular.woff2");
   });
 
   test("mod-view template eliminates inline onerror attribute in favor of programmatic handling", () => {

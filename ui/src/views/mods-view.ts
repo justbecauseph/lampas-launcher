@@ -258,7 +258,7 @@ export function initModsView(options: ModsViewOptions): () => void {
           ? "No shader packs yet. Drop a .zip above to add one."
           : "No mods found matching your search and filter criteria.";
       modsGrid.innerHTML = `
-        <div class="col-span-2 py-12 text-center text-slate-500 text-xs">
+        <div class="col-span-2 empty-state">
           ${emptyText}
         </div>
       `;
@@ -270,10 +270,10 @@ export function initModsView(options: ModsViewOptions): () => void {
       .map((mod) => {
         const sideBadge =
           mod.side === "client"
-            ? '<span class="text-[9px] font-bold text-cyan-400 bg-cyan-950/80 border border-cyan-800/60 px-1.5 py-0.5 rounded-md">CLIENT ONLY</span>'
+            ? '<span class="tag">Client only</span>'
             : mod.side === "server"
-              ? '<span class="text-[9px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 rounded-md">SERVER ONLY</span>'
-              : '<span class="text-[9px] font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded-md">REQUIRED</span>';
+              ? '<span class="tag">Server only</span>'
+              : '<span class="tag">Required</span>';
 
         const fallbackChar = escapeHtml(
           (mod.name || mod.id || "M")[0].toUpperCase(),
@@ -286,10 +286,7 @@ export function initModsView(options: ModsViewOptions): () => void {
 
         const catsHtml = (mod.categories || [])
           .slice(0, 3)
-          .map(
-            (c) =>
-              `<span class="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded">#${escapeHtml(c)}</span>`,
-          )
+          .map((c) => `<span class="mod-category">#${escapeHtml(c)}</span>`)
           .join(" ");
 
         const linkBtn = mod.sourceUrl
@@ -304,7 +301,7 @@ export function initModsView(options: ModsViewOptions): () => void {
           : "";
         const localBadge =
           mod.source === "custom"
-            ? '<span class="local-mod-badge">LOCAL</span>'
+            ? '<span class="local-mod-badge">Local</span>'
             : "";
         const remove =
           mod.source === "custom"
@@ -317,13 +314,13 @@ export function initModsView(options: ModsViewOptions): () => void {
               ${iconHtml}
               <div class="min-w-0 flex-1">
                 <div class="flex items-center justify-between gap-1">
-                  <h5 class="font-bold text-xs text-white truncate" title="${modName}">${modName}</h5>
+                  <h5 class="mod-name truncate" title="${modName}">${modName}</h5>
                   <div class="flex items-center gap-1">${localBadge}${sideBadge}${toggle}</div>
                 </div>
-                <p class="text-[11px] text-slate-400 line-clamp-2 mt-1 leading-relaxed">${escapeHtml(mod.description || "Synchronized modpack component.")}</p>
+                <p class="mod-description line-clamp-2">${escapeHtml(mod.description || "Synchronized modpack component.")}</p>
               </div>
             </div>
-            <div class="flex items-center justify-between pt-1 border-t border-slate-900/80 text-[10px] text-slate-500 font-mono">
+            <div class="mod-meta">
               <div class="flex items-center gap-1 overflow-hidden">
                 ${catsHtml}
               </div>

@@ -59,17 +59,14 @@ export function initAuthView(options: AuthViewOptions): {
       if (userName) userName.innerText = displayName;
       if (userRole) {
         if (user.isAdmin) {
-          userRole.innerText = "ADMINISTRATOR";
-          userRole.className =
-            "badge text-rose-400 border-rose-500/30 bg-rose-950/30";
+          userRole.innerText = "Administrator";
+          userRole.className = "tag tag-accent";
         } else if (user.isTech) {
-          userRole.innerText = "TECH TEAM";
-          userRole.className =
-            "badge text-amber-400 border-amber-500/30 bg-amber-950/30";
+          userRole.innerText = "Tech team";
+          userRole.className = "tag tag-accent";
         } else {
-          userRole.innerText = "MEMBER";
-          userRole.className =
-            "badge text-cyan-400 border-cyan-500/30 bg-cyan-950/30";
+          userRole.innerText = "Member";
+          userRole.className = "tag";
         }
       }
       if (userAvatar) {

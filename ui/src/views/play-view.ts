@@ -23,11 +23,11 @@ export interface PlayViewOptions {
 }
 
 const PROGRESS_LABELS: Partial<Record<SyncProgress["status"], string>> = {
-  checking: "CHECKING FOR UPDATES…",
-  downloading: "DOWNLOADING…",
-  verifying: "VERIFYING FILES…",
-  staging: "INSTALLING…",
-  repairing: "REPAIRING…",
+  checking: "Checking for updates…",
+  downloading: "Downloading…",
+  verifying: "Verifying files…",
+  staging: "Installing…",
+  repairing: "Repairing…",
 };
 
 function formatMegabytes(bytes: number): string {
@@ -100,9 +100,9 @@ export function initPlayView(options: PlayViewOptions): {
   /** Sets the idle/running label for the current login state. */
   function refreshPlayButton(): void {
     if (status === "running") {
-      setPlayLabel("PLAYING", false);
+      setPlayLabel("Playing", false);
     } else if (status === "idle") {
-      setPlayLabel(getUser() ? "PLAY" : "LOG IN TO PLAY", false);
+      setPlayLabel(getUser() ? "Play" : "Log in to play", false);
     }
   }
 
@@ -186,7 +186,7 @@ export function initPlayView(options: PlayViewOptions): {
 
   async function runNoSyncLaunch(): Promise<void> {
     setGameStatus("launching");
-    setPlayLabel("STARTING…", true);
+    setPlayLabel("Starting…", true);
     appendLog(
       "INFO",
       "No-sync mode enabled: Skipping modpack synchronization.",
@@ -216,7 +216,7 @@ export function initPlayView(options: PlayViewOptions): {
 
   async function runSyncedLaunch(isRepair: boolean): Promise<void> {
     setGameStatus("syncing");
-    setPlayLabel(isRepair ? "REPAIRING…" : "CHECKING FOR UPDATES…", true);
+    setPlayLabel(isRepair ? "Repairing…" : "Checking for updates…", true);
     setProgress(
       isRepair ? "Verifying every game file…" : "Checking for pack updates…",
       0,
@@ -246,7 +246,7 @@ export function initPlayView(options: PlayViewOptions): {
       if (syncResult.runtime) updateRuntimeSpecsUI(syncResult.runtime);
 
       setGameStatus("launching");
-      setPlayLabel("STARTING…", true);
+      setPlayLabel("Starting…", true);
       setProgress("Starting Minecraft…", 100);
 
       appendLog(
