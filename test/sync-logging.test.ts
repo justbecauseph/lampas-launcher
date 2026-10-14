@@ -312,7 +312,7 @@ describe("Launcher sync and mod management logging", () => {
   });
 
   test("logs any configuration property changes and redacts sensitive tokens", async () => {
-    ConfigManager.set({ allocatedRamGb: 8 });
+    ConfigManager.set({ allocatedRamGb: 6 });
     await LauncherLogger.flush();
     let logContent = fs.readFileSync(LauncherLogger.getLogPath(), "utf-8");
     expect(logContent).toContain("[Config] allocatedRamGb changed");

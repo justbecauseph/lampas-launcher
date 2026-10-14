@@ -1991,6 +1991,11 @@ input[type="range"] {
   padding-top: 16px;
   border-top: 1px solid var(--hairline);
 }
+.modal-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ash);
+}
 .modal-error {
   font-size: 13px;
   color: var(--miasma);

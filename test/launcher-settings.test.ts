@@ -331,9 +331,9 @@ describe("config.json shape validation on load", () => {
     expect(mixed.disabledClientMods).toEqual(["a.jar", "b.jar"]);
   });
 
-  test("falls back to the default 4 GB when allocatedRamGb is not an integer from 2 to 64", () => {
+  test("falls back to the default 8 GB when allocatedRamGb is not an integer from 2 to 64", () => {
     for (const bad of [1, 65, 0, -4, 8.5, "lots", null, true, [8]]) {
-      expect(loadFromDisk({ allocatedRamGb: bad }).allocatedRamGb).toBe(4);
+      expect(loadFromDisk({ allocatedRamGb: bad }).allocatedRamGb).toBe(8);
     }
     expect(loadFromDisk({ allocatedRamGb: 2 }).allocatedRamGb).toBe(2);
     expect(loadFromDisk({ allocatedRamGb: 64 }).allocatedRamGb).toBe(64);
@@ -391,7 +391,7 @@ describe("config.json shape validation on load", () => {
     for (const raw of ["[1, 2]", '"text"', "null", "42"]) {
       const config = loadFromDisk(raw);
       expect(config.selectedChannel).toBe("stable");
-      expect(config.allocatedRamGb).toBe(4);
+      expect(config.allocatedRamGb).toBe(8);
       expect(config.customClientMods).toEqual([]);
     }
   });

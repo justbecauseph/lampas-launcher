@@ -21,6 +21,13 @@ export function getDefaultGameDir(): string {
   return getLegacyDefaultGameDir();
 }
 
+/** Whether the default game folder is the Store package's own storage. */
+export function isDefaultGameDirAppStorage(): boolean {
+  return (
+    !process.env.LAMPAS_DEFAULT_GAME_DIR && getStorePackageCacheDir() !== null
+  );
+}
+
 /** The %APPDATA% default every build used before Store builds got their own. */
 export function getLegacyDefaultGameDir(): string {
   return path.join(
@@ -60,6 +67,68 @@ export function getStorePackageCacheDir(
     : null;
 }
 
+/**
+ * Where a Store (MSIX) install's writes under `dir` really land. Windows
+ * redirects folders the package creates under %APPDATA% or %LOCALAPPDATA% to
+ * LocalCache\Roaming or LocalCache\Local, and processes outside the package,
+ * such as the game's Java, still see the real, empty location. Null for other
+ * builds and for paths outside those two folders.
+ */
+export function getStoreRedirectedPath(
+  dir: string,
+  packageCache: string | null = getStorePackageCacheDir(),
+): string | null {
+  if (!packageCache) return null;
+  const resolved = path.resolve(dir);
+  // The path below `base`, "" for `base` itself, or null when outside it.
+  const relativeTo = (base: string): string | null => {
+    const rel = path.relative(path.resolve(base), resolved);
+    if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel))
+      return null;
+    return rel;
+  };
+  if (relativeTo(path.dirname(packageCache)) !== null) return null;
+  const roots: Array<[string | undefined, string]> = [
+    [process.env.APPDATA, "Roaming"],
+    [process.env.LOCALAPPDATA, "Local"],
+  ];
+  for (const [base, redirectedRoot] of roots) {
+    const rel = base ? relativeTo(base) : null;
+    if (rel) return path.join(packageCache, redirectedRoot, rel);
+  }
+  return null;
+}
+
+/**
+ * The redirected copy of `gameDir` when a Store install's game files live
+ * there, otherwise `gameDir` unchanged.
+ */
+export function resolveStoreGameDir(gameDir: string): string {
+  const redirected = getStoreRedirectedPath(gameDir);
+  return redirected && fs.existsSync(path.join(redirected, ".lampas"))
+    ? redirected
+    : gameDir;
+}
+
+/**
+ * The path another program, such as Notepad or Explorer, must open to see
+ * what the launcher sees at `p`: the package's private copy when Windows
+ * redirected it there, otherwise `p` unchanged.
+ */
+export function toExternalPath(p: string): string {
+  const redirected = getStoreRedirectedPath(p);
+  return redirected && fs.existsSync(redirected) ? redirected : p;
+}
+
+/** Folders the launcher created itself, which Remove game files empties whole. */
+export function getLauncherDefaultGameDirs(): string[] {
+  const legacy = getLegacyDefaultGameDir();
+  const dirs = [getDefaultGameDir(), legacy];
+  const redirectedLegacy = getStoreRedirectedPath(legacy);
+  if (redirectedLegacy) dirs.push(redirectedLegacy);
+  return dirs;
+}
+
 export function getUserDataDir(): string {
   return app
     ? app.getPath("userData")
@@ -69,7 +138,7 @@ export function getUserDataDir(): string {
 const DEFAULT_CONFIG: LauncherConfig = {
   portalUrl: "https://dev.lampas.town",
   selectedChannel: "stable",
-  allocatedRamGb: 4,
+  allocatedRamGb: 8,
   gameDir: "",
   gameDirConfigured: false,
   javaArgs: "",
@@ -460,9 +529,30 @@ export class ConfigManager {
       loaded.gameDir = defaultGameDir;
     }
 
+    // A Store install that recreated its %APPDATA% game folder wrote the
+    // files to the package's private copy. Use that copy's real path so the
+    // game, which runs outside the package, can find them.
+    const redirectedGameDir = resolveStoreGameDir(loaded.gameDir);
+    const gameDirRedirected = redirectedGameDir !== loaded.gameDir;
+    if (gameDirRedirected) {
+      LauncherLogger.warn(
+        `[Config] Windows redirected the game folder ${loaded.gameDir} to ${redirectedGameDir}; using that path.`,
+      );
+      loaded.gameDir = redirectedGameDir;
+    }
+
     loaded.noSync = Boolean(loaded.noSync);
     loaded.externalImages = Boolean(loaded.externalImages);
     this.cachedConfig = loaded;
+    if (gameDirRedirected) {
+      try {
+        this.set({ gameDir: redirectedGameDir });
+      } catch (err: any) {
+        LauncherLogger.warn(
+          `[Config] Could not save the redirected game folder: ${err?.message || err}`,
+        );
+      }
+    }
     return this.cachedConfig;
   }
 

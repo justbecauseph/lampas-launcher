@@ -17,8 +17,14 @@ const {
   listPreexistingEntries,
   GameFilesRemovalError,
 } = await import("../src/game-files-removal");
-const { ConfigManager, PortalPolicy, getStorePackageCacheDir } =
-  await import("../src/config");
+const {
+  ConfigManager,
+  PortalPolicy,
+  getStorePackageCacheDir,
+  getStoreRedirectedPath,
+  resolveStoreGameDir,
+  toExternalPath,
+} = await import("../src/config");
 
 let caseDir: string;
 let caseSeq = 0;
@@ -254,6 +260,162 @@ describe("getStorePackageCacheDir", () => {
   });
 });
 
+describe("getStoreRedirectedPath", () => {
+  const original = {
+    APPDATA: process.env.APPDATA,
+    LOCALAPPDATA: process.env.LOCALAPPDATA,
+  };
+  const restore = () => {
+    process.env.APPDATA = original.APPDATA;
+    process.env.LOCALAPPDATA = original.LOCALAPPDATA;
+  };
+
+  test("maps %APPDATA% and %LOCALAPPDATA% folders into LocalCache", () => {
+    const cache = path.join(caseDir, "Local", "Packages", "pkg", "LocalCache");
+    process.env.APPDATA = path.join(caseDir, "Roaming");
+    process.env.LOCALAPPDATA = path.join(caseDir, "Local");
+    try {
+      expect(
+        getStoreRedirectedPath(
+          path.join(caseDir, "Roaming", ".minecraft-lampas"),
+          cache,
+        ),
+      ).toBe(path.join(cache, "Roaming", ".minecraft-lampas"));
+      expect(
+        getStoreRedirectedPath(
+          path.join(caseDir, "Local", "Games", "x"),
+          cache,
+        ),
+      ).toBe(path.join(cache, "Local", "Games", "x"));
+      // A name that starts with ".." is still inside %APPDATA%.
+      expect(
+        getStoreRedirectedPath(
+          path.join(caseDir, "Roaming", "..lampas"),
+          cache,
+        ),
+      ).toBe(path.join(cache, "Roaming", "..lampas"));
+    } finally {
+      restore();
+    }
+  });
+
+  test("leaves the package's own folder, other folders and non-Store builds alone", () => {
+    const cache = path.join(caseDir, "Local", "Packages", "pkg", "LocalCache");
+    process.env.APPDATA = path.join(caseDir, "Roaming");
+    process.env.LOCALAPPDATA = path.join(caseDir, "Local");
+    try {
+      expect(
+        getStoreRedirectedPath(path.join(cache, ".minecraft-lampas"), cache),
+      ).toBeNull();
+      expect(getStoreRedirectedPath(path.dirname(cache), cache)).toBeNull();
+      expect(
+        getStoreRedirectedPath(path.join(caseDir, "Games", "lampas"), cache),
+      ).toBeNull();
+      expect(getStoreRedirectedPath(process.env.APPDATA, cache)).toBeNull();
+      expect(
+        getStoreRedirectedPath(
+          path.join(caseDir, "Roaming", ".minecraft-lampas"),
+          null,
+        ),
+      ).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("ConfigManager on a Store install", () => {
+  const pfn = "59450PUPProgGuild.LampasLauncher_bdagfy06snw12";
+  const storeExecPath =
+    "C:\\Program Files\\WindowsApps\\59450PUPProgGuild.LampasLauncher_1.5.4.0_x64__bdagfy06snw12\\app\\Lampas Launcher.exe";
+
+  /** Runs `body` as a Store build whose %APPDATA% and %LOCALAPPDATA% sit in caseDir. */
+  function asStoreInstall(
+    body: (paths: { configured: string; redirected: string }) => void,
+  ): void {
+    const saved = {
+      APPDATA: process.env.APPDATA,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      execPath: process.execPath,
+      windowsStore: (process as { windowsStore?: boolean }).windowsStore,
+    };
+    const roaming = path.join(caseDir, "Roaming");
+    const local = path.join(caseDir, "Local");
+    fs.mkdirSync(path.join(local, "Packages", pfn), { recursive: true });
+    process.env.APPDATA = roaming;
+    process.env.LOCALAPPDATA = local;
+    Object.defineProperty(process, "execPath", {
+      value: storeExecPath,
+      configurable: true,
+      writable: true,
+    });
+    (process as { windowsStore?: boolean }).windowsStore = true;
+    try {
+      PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
+      body({
+        configured: path.join(roaming, ".minecraft-lampas"),
+        redirected: path.join(
+          local,
+          "Packages",
+          pfn,
+          "LocalCache",
+          "Roaming",
+          ".minecraft-lampas",
+        ),
+      });
+    } finally {
+      process.env.APPDATA = saved.APPDATA;
+      process.env.LOCALAPPDATA = saved.LOCALAPPDATA;
+      Object.defineProperty(process, "execPath", {
+        value: saved.execPath,
+        configurable: true,
+        writable: true,
+      });
+      (process as { windowsStore?: boolean }).windowsStore = saved.windowsStore;
+      ConfigManager.resetForTesting();
+    }
+  }
+
+  test("switches to and saves the redirected copy of an %APPDATA% game folder that holds the install", () => {
+    asStoreInstall(({ configured, redirected }) => {
+      makeInstall(redirected);
+      ConfigManager.resetForTesting();
+      ConfigManager.set({ gameDir: configured, gameDirConfigured: true });
+      ConfigManager.resetForTesting();
+
+      expect(ConfigManager.get().gameDir).toBe(redirected);
+      expect(resolveStoreGameDir(configured)).toBe(redirected);
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(userDataDir, "config.json"), "utf-8"),
+      );
+      expect(saved.gameDir).toBe(redirected);
+    });
+  });
+
+  test("keeps the configured folder when the redirected copy holds no install", () => {
+    asStoreInstall(({ configured, redirected }) => {
+      fs.mkdirSync(path.join(redirected, "logs"), { recursive: true });
+      ConfigManager.resetForTesting();
+      ConfigManager.set({ gameDir: configured, gameDirConfigured: true });
+      ConfigManager.resetForTesting();
+
+      expect(ConfigManager.get().gameDir).toBe(configured);
+      expect(resolveStoreGameDir(configured)).toBe(configured);
+    });
+  });
+
+  test("gives other programs the private copy's path when Windows redirected a file", () => {
+    asStoreInstall(({ configured, redirected }) => {
+      const log = path.join(configured, "logs", "launcher.log");
+      const redirectedLog = path.join(redirected, "logs", "launcher.log");
+      expect(toExternalPath(log)).toBe(log);
+
+      write(redirectedLog);
+      expect(toExternalPath(log)).toBe(redirectedLog);
+    });
+  });
+});
+
 describe("ConfigManager.resetToDefaults", () => {
   test("restores defaults so first-run setup shows again", () => {
     PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
@@ -268,7 +430,7 @@ describe("ConfigManager.resetToDefaults", () => {
 
     const config = ConfigManager.get();
     expect(config.gameDirConfigured).toBe(false);
-    expect(config.allocatedRamGb).toBe(4);
+    expect(config.allocatedRamGb).toBe(8);
     expect(config.gameDir).not.toBe(path.join(caseDir, "custom"));
   });
 });

@@ -368,6 +368,17 @@ export class TransferIntegrityError extends Error {
   }
 }
 
+/**
+ * The body was shorter or longer than the expected size. Downloads retry it,
+ * since CDNs occasionally answer 200 with an empty or truncated body.
+ */
+export class TransferSizeMismatchError extends TransferIntegrityError {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransferSizeMismatchError";
+  }
+}
+
 function normalizeExpectedDigest(options: VerifiedTransferOptions): string {
   const algorithm = options.algorithm || "sha256";
   const expected = options.expectedHash?.trim().toLowerCase();
@@ -434,6 +445,17 @@ async function streamVerified(
         callback(new TransferLimitError("artifact", maxBytes, nextSize));
         return;
       }
+      if (
+        options.expectedSize !== undefined &&
+        nextSize > options.expectedSize
+      ) {
+        callback(
+          new TransferSizeMismatchError(
+            `Size mismatch: expected ${options.expectedSize} bytes, got more`,
+          ),
+        );
+        return;
+      }
       size = nextSize;
       hash.update(chunk);
       callback(null, chunk);
@@ -481,15 +503,15 @@ async function streamVerified(
     await pipeline(input, verifier, tempStream, {
       signal: options.signal,
     });
+    if (options.expectedSize !== undefined && size !== options.expectedSize) {
+      throw new TransferSizeMismatchError(
+        `Size mismatch: expected ${options.expectedSize} bytes, got ${size}`,
+      );
+    }
     const actualHash = hash.digest("hex");
     if (actualHash !== expectedHash) {
       throw new TransferIntegrityError(
         `${algorithm.toUpperCase()} mismatch: expected ${expectedHash}, got ${actualHash}`,
-      );
-    }
-    if (options.expectedSize !== undefined && size !== options.expectedSize) {
-      throw new Error(
-        `Size mismatch: expected ${options.expectedSize} bytes, got ${size}`,
       );
     }
     await replaceFile(tempPath, destination);
@@ -525,6 +547,7 @@ export async function downloadVerified(
 ): Promise<number> {
   const attempts = options.attempts || DEFAULT_TRANSFER_ATTEMPTS;
   let lastError: unknown;
+  let integrityError: TransferIntegrityError | undefined;
   const signal = options.signal;
 
   if (signal?.aborted) {
@@ -536,11 +559,13 @@ export async function downloadVerified(
   // artifacts use SHA-256.
   normalizeExpectedDigest(options);
 
+  let attemptsMade = 0;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (signal?.aborted) {
       throw signal.reason || new Error(`Download of ${url} was aborted.`);
     }
 
+    attemptsMade = attempt;
     const startTime = Date.now();
     const destName = path.basename(destination);
     const safeUrl = safeTransferLogUrl(url);
@@ -601,17 +626,21 @@ export async function downloadVerified(
           error.status < 500 &&
           error.status !== 429)
       ) {
+        if (integrityError) break;
         throw error;
       }
+      lastError = error;
+      if (error instanceof TransferIntegrityError) integrityError ??= error;
+      // Only a wrong-sized body is retried: CDNs occasionally answer 200 with
+      // an empty or truncated body. Wrong bytes of the right size fail at once.
       if (
-        error instanceof TransferIntegrityError ||
-        error instanceof TransferLimitError
+        error instanceof TransferLimitError ||
+        (error instanceof TransferIntegrityError &&
+          !(error instanceof TransferSizeMismatchError))
       ) {
-        lastError = error;
         break;
       }
       const durationMs = Date.now() - startTime;
-      lastError = error;
       LauncherLogger.log(
         "WARN",
         `[Download Retry] Failed ${destName} from ${safeUrl}: ${error?.message || error} (${durationMs}ms)`,
@@ -624,11 +653,12 @@ export async function downloadVerified(
     }
   }
 
+  // A transfer that ever returned wrong bytes stays classified as an
+  // integrity failure, even if a later attempt failed differently.
+  const cause = integrityError ?? lastError;
   throw new Error(
-    `Failed to download ${url} after ${attempts} attempts${describeLastError(lastError)}`,
-    {
-      cause: lastError,
-    },
+    `Failed to download ${url} after ${attemptsMade} attempt${attemptsMade === 1 ? "" : "s"}${describeLastError(cause)}`,
+    { cause },
   );
 }
 

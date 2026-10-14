@@ -65,6 +65,8 @@ export interface DirectoryStatus {
   gameDir: string;
   isConfigured: boolean;
   defaultGameDir: string;
+  /** The default is the Store package's own storage, which uninstall deletes. */
+  defaultIsAppStorage: boolean;
   exists: boolean;
   hasInstallation: boolean;
 }

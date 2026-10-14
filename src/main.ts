@@ -14,7 +14,9 @@ import {
   PortalPolicy,
   getUserDataDir,
   getDefaultGameDir,
-  getLegacyDefaultGameDir,
+  getLauncherDefaultGameDirs,
+  getStorePackageCacheDir,
+  toExternalPath,
 } from "./config";
 import {
   GameFilesRemovalError,
@@ -578,7 +580,9 @@ app.whenReady().then(async () => {
       );
     }
 
-    return canonicalTarget;
+    // The result goes to Explorer or Notepad, which run outside a Store
+    // package and can't see what Windows redirected into it.
+    return toExternalPath(canonicalTarget);
   }
 
   // IPC Handlers: Utils
@@ -867,7 +871,7 @@ app.whenReady().then(async () => {
       OperationCoordinator.assertCanMutate("remove game files");
       const plan = await planGameFilesRemoval(
         ConfigManager.get().gameDir,
-        [getDefaultGameDir(), getLegacyDefaultGameDir()],
+        getLauncherDefaultGameDirs(),
         ConfigManager.get().gameDirPreexistingEntries ?? [],
       );
       const size = formatBytesForDialog(plan.totalBytes);
@@ -910,7 +914,7 @@ app.whenReady().then(async () => {
         // only what was confirmed and is still eligible now.
         const fresh = await planGameFilesRemoval(
           ConfigManager.get().gameDir,
-          [getDefaultGameDir(), getLegacyDefaultGameDir()],
+          getLauncherDefaultGameDirs(),
           ConfigManager.get().gameDirPreexistingEntries ?? [],
         );
         if (
@@ -947,6 +951,17 @@ app.whenReady().then(async () => {
       const cleanup: Partial<LauncherConfig> = {};
       if (removed.has("mods")) cleanup.customClientMods = [];
       if (removed.has("shaderpacks")) cleanup.customShaderPacks = [];
+      // A Store install that recreated an %APPDATA% folder would have its
+      // writes redirected where the game can't see them, so it reinstalls
+      // into the package's own folder instead.
+      if (
+        result.folderRemoved &&
+        getStorePackageCacheDir() &&
+        path.resolve(plan.gameDir) !== path.resolve(getDefaultGameDir())
+      ) {
+        cleanup.gameDir = getDefaultGameDir();
+        cleanup.gameDirPreexistingEntries = [];
+      }
       const noSyncTurnedOff =
         result.failed.length === 0 && Boolean(ConfigManager.get().noSync);
       if (noSyncTurnedOff) cleanup.noSync = false;

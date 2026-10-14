@@ -13,7 +13,7 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
-const { downloadVerified, fetchJsonWithRetry } =
+const { downloadVerified, fetchJsonWithRetry, TransferIntegrityError } =
   await import("../src/file-transfer");
 const { PortalPolicy } = await import("../src/portal-policy");
 
@@ -105,7 +105,8 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
       .update(validPayload)
       .digest("hex");
 
-    const corruptedPayload = Buffer.from("corrupted-payload-from-bucket");
+    // Same size as the valid payload, different bytes.
+    const corruptedPayload = Buffer.from("corrupt-payload");
 
     const server = Bun.serve({
       port: 0,
@@ -161,6 +162,134 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
       const remainingFiles = fs.readdirSync(tempDir);
       expect(remainingFiles.some((f) => f.includes(".partial."))).toBe(false);
     } finally {
+      server.stop(true);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("downloadVerified() retries when the CDN answers 200 with an empty body", async () => {
+    const previousRetryBaseMs = process.env.LAMPAS_TRANSFER_RETRY_BASE_MS;
+    process.env.LAMPAS_TRANSFER_RETRY_BASE_MS = "1";
+    const payload = Buffer.from("minecraft-asset-object");
+    const sha1 = crypto.createHash("sha1").update(payload).digest("hex");
+    let requests = 0;
+
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requests++;
+        return new Response(requests === 1 ? new Uint8Array(0) : payload, {
+          status: 200,
+        });
+      },
+    });
+
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-empty-body-"),
+    );
+    const destination = path.join(tempDir, sha1);
+
+    try {
+      const bytes = await downloadVerified(
+        `http://127.0.0.1:${server.port}/${sha1}`,
+        destination,
+        {
+          algorithm: "sha1",
+          expectedHash: sha1,
+          expectedSize: payload.length,
+          attempts: 3,
+        },
+      );
+
+      expect(requests).toBe(2);
+      expect(bytes).toBe(payload.length);
+      expect(fs.readFileSync(destination).equals(payload)).toBe(true);
+    } finally {
+      if (previousRetryBaseMs === undefined)
+        delete process.env.LAMPAS_TRANSFER_RETRY_BASE_MS;
+      else process.env.LAMPAS_TRANSFER_RETRY_BASE_MS = previousRetryBaseMs;
+      server.stop(true);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("downloadVerified() fails at once on right-sized wrong bytes and reports one attempt", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requests++;
+        return new Response("wrong-bytes", { status: 200 });
+      },
+    });
+
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-attempts-"),
+    );
+
+    try {
+      await expect(
+        downloadVerified(
+          `http://127.0.0.1:${server.port}/obj`,
+          path.join(tempDir, "obj"),
+          {
+            algorithm: "sha1",
+            expectedHash: "0".repeat(40),
+            expectedSize: "wrong-bytes".length,
+            attempts: 3,
+          },
+        ),
+      ).rejects.toThrow(/after 1 attempt \(last error: SHA1 mismatch/);
+      expect(requests).toBe(1);
+    } finally {
+      server.stop(true);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("downloadVerified() keeps a wrong-sized body as the cause when later attempts fail differently", async () => {
+    const previousRetryBaseMs = process.env.LAMPAS_TRANSFER_RETRY_BASE_MS;
+    process.env.LAMPAS_TRANSFER_RETRY_BASE_MS = "1";
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requests++;
+        return requests === 1
+          ? new Response("truncated", { status: 200 })
+          : new Response("unavailable", { status: 503 });
+      },
+    });
+
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-integrity-cause-"),
+    );
+
+    try {
+      let caught: any;
+      try {
+        await downloadVerified(
+          `http://127.0.0.1:${server.port}/obj`,
+          path.join(tempDir, "obj"),
+          {
+            algorithm: "sha1",
+            expectedHash: "0".repeat(40),
+            expectedSize: 4096,
+            attempts: 3,
+          },
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(requests).toBe(3);
+      expect(caught?.message).toContain("after 3 attempts");
+      expect(caught?.cause).toBeInstanceOf(TransferIntegrityError);
+      expect(caught?.cause?.message).toContain("Size mismatch");
+    } finally {
+      if (previousRetryBaseMs === undefined)
+        delete process.env.LAMPAS_TRANSFER_RETRY_BASE_MS;
+      else process.env.LAMPAS_TRANSFER_RETRY_BASE_MS = previousRetryBaseMs;
       server.stop(true);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

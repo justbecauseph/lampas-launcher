@@ -463,7 +463,7 @@
           <footer class="play-footer">
             <span class="play-footer-item">
               <span class="play-footer-label">Memory</span>
-              <span id="ram-display">4 GB RAM</span>
+              <span id="ram-display" class="whitespace-nowrap">8 GB RAM</span>
             </span>
             <span class="play-footer-item min-w-0">
               <span class="play-footer-label">Folder</span>
@@ -785,7 +785,7 @@
                   <label for="ram-slider" class="settings-label"
                     >Memory (RAM)</label
                   >
-                  <span id="setting-ram-val" class="settings-value">4 GB</span>
+                  <span id="setting-ram-val" class="settings-value">8 GB</span>
                 </div>
                 <input
                   id="ram-slider"
@@ -793,7 +793,7 @@
                   min="2"
                   max="16"
                   step="1"
-                  value="4"
+                  value="8"
                   class="w-full"
                 />
                 <div
@@ -1032,6 +1032,12 @@
               <span>Browse…</span>
             </button>
           </div>
+          <p id="initial-dir-note" class="modal-note hidden">
+            This is the launcher's own storage in Windows, set up for you.
+            Uninstalling Lampas Launcher deletes it, including your worlds and
+            screenshots. To keep them after an uninstall, choose another folder
+            with Browse, such as one on another drive.
+          </p>
           <p id="initial-dir-error" class="modal-error hidden"></p>
         </div>
 

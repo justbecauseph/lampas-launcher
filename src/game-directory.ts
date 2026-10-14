@@ -5,7 +5,13 @@ import * as os from "node:os";
 import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { ConfigManager, getDefaultGameDir, getUserDataDir } from "./config";
+import {
+  ConfigManager,
+  getDefaultGameDir,
+  getStoreRedirectedPath,
+  getUserDataDir,
+  isDefaultGameDirAppStorage,
+} from "./config";
 import { GameRunner } from "./game-runner";
 import { LauncherLogger } from "./logger";
 import { writeAtomicFileSync } from "./file-transfer";
@@ -736,6 +742,7 @@ export class GameDirectoryManager {
       gameDir,
       isConfigured: !!config.gameDirConfigured,
       defaultGameDir: this.getDefaultPath(),
+      defaultIsAppStorage: isDefaultGameDirAppStorage(),
       exists,
       hasInstallation,
     };
@@ -905,6 +912,25 @@ export class GameDirectoryManager {
             "Current installation directory cannot be inside the target directory.",
         };
       }
+    }
+
+    // Store (MSIX) installs: Windows keeps folders the launcher creates under
+    // AppData private to the package, where Minecraft can't see them, and
+    // deletes them on uninstall. A move always recreates its target, so it
+    // can't go there. First-run setup may adopt a folder that already exists
+    // there for real, such as one left by a non-Store build.
+    const redirectedTarget = getStoreRedirectedPath(resolvedTarget);
+    if (
+      redirectedTarget &&
+      (currentPath !== undefined ||
+        !fs.existsSync(resolvedTarget) ||
+        fs.existsSync(redirectedTarget))
+    ) {
+      return {
+        valid: false,
+        reason:
+          "This folder is inside AppData. Windows keeps new folders there private to the Store launcher, so Minecraft can't use them. Choose a folder outside AppData, for example on another drive.",
+      };
     }
 
     // Check writability

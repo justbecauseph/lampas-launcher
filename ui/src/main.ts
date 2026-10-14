@@ -110,7 +110,7 @@ async function startApp(): Promise<void> {
   let activeConfig: RendererSettingsDto = {
     portalUrl: "https://dev.lampas.town",
     selectedChannel: "stable",
-    allocatedRamGb: 4,
+    allocatedRamGb: 8,
     gameDir: "",
     noSync: false,
     externalImages: true,

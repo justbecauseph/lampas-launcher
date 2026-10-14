@@ -2,7 +2,7 @@ import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { createHash } from "node:crypto";
-import { ConfigManager } from "./config";
+import { ConfigManager, resolveStoreGameDir } from "./config";
 import { normalizePortalUrl } from "./portal-policy";
 import { LauncherAuth } from "./auth";
 import { MinecraftBootstrap } from "./minecraft-bootstrap";
@@ -260,7 +260,7 @@ export class GameRunner {
           "Launch blocked by an unresolved synchronization failure. Run Repair before playing.",
         );
       }
-      const ramGb = activeConfig.allocatedRamGb || 4;
+      const ramGb = activeConfig.allocatedRamGb || 8;
       const rawUuid = uuid.replace(/-/g, "");
       const mcToken =
         activeUser.minecraftAccessToken || activeConfig.minecraftAccessToken;
@@ -419,20 +419,26 @@ export class GameRunner {
         `Preparing Standalone Minecraft + Fabric Environment (Java 25)...`,
       );
       log("INFO", `Game Directory: ${gameDir}`);
+      // A Store install that created this folder during the session wrote it
+      // to the package's private copy. The game runs outside the package and
+      // needs that copy's real path.
+      const launchDir = resolveStoreGameDir(gameDir);
+      if (launchDir !== gameDir)
+        log("INFO", `Game files are in the Store package's copy: ${launchDir}`);
       log(
         "INFO",
         `Authentication: ${isRealMsa ? "Microsoft Services" : "Lampas Protocol"}`,
       );
 
       // 1. Ensure OpenJDK 25 Runtime
-      const javaExe = await JavaRuntimeManager.ensureJava25(gameDir, (msg) =>
+      const javaExe = await JavaRuntimeManager.ensureJava25(launchDir, (msg) =>
         log("INFO", msg),
       );
 
       // 2. Bootstrap Mojang & Fabric Libraries & Assets
       const { classpath, mainClass, assetIndex } =
         await MinecraftBootstrap.prepareGameEnvironment(
-          gameDir,
+          launchDir,
           runtime,
           (msg) => log("INFO", msg),
         );
@@ -458,7 +464,7 @@ export class GameRunner {
 
       const sessionId = newGameSessionId();
       const jvmArgs = buildLaunchArguments({
-        gameDir,
+        gameDir: launchDir,
         ramGb,
         runtime,
         assetIndex,
@@ -480,7 +486,7 @@ export class GameRunner {
       // on a side-loaded Store (MSIX) install on 2026-10-14: the game survives
       // the launcher quitting and is adopted again on the next start.
       const proc = spawn(javaExe, jvmArgs, {
-        cwd: gameDir,
+        cwd: launchDir,
         detached: true,
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],

@@ -1173,3 +1173,96 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     expect(OperationCoordinator.isBlocked()).toBe(false);
   });
 });
+
+describe("GameDirectoryManager.validateTarget on a Store install", () => {
+  const pfn = "59450PUPProgGuild.LampasLauncher_bdagfy06snw12";
+
+  function asStoreInstall(
+    body: (dirs: { roaming: string; packageCache: string }) => void,
+  ): void {
+    const root = fs.mkdtempSync(path.join(testRoot, "store-"));
+    const roaming = path.join(root, "Roaming");
+    const local = path.join(root, "Local");
+    const packageCache = path.join(local, "Packages", pfn, "LocalCache");
+    fs.mkdirSync(packageCache, { recursive: true });
+    fs.mkdirSync(roaming, { recursive: true });
+    const saved = {
+      APPDATA: process.env.APPDATA,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      execPath: process.execPath,
+      windowsStore: (process as { windowsStore?: boolean }).windowsStore,
+    };
+    process.env.APPDATA = roaming;
+    process.env.LOCALAPPDATA = local;
+    Object.defineProperty(process, "execPath", {
+      value:
+        "C:\\Program Files\\WindowsApps\\59450PUPProgGuild.LampasLauncher_1.5.4.0_x64__bdagfy06snw12\\app\\Lampas Launcher.exe",
+      configurable: true,
+      writable: true,
+    });
+    (process as { windowsStore?: boolean }).windowsStore = true;
+    try {
+      body({ roaming, packageCache });
+    } finally {
+      process.env.APPDATA = saved.APPDATA;
+      process.env.LOCALAPPDATA = saved.LOCALAPPDATA;
+      Object.defineProperty(process, "execPath", {
+        value: saved.execPath,
+        configurable: true,
+        writable: true,
+      });
+      (process as { windowsStore?: boolean }).windowsStore = saved.windowsStore;
+    }
+  }
+
+  test("refuses to move into AppData, even to an existing folder", () => {
+    asStoreInstall(({ roaming, packageCache }) => {
+      const current = path.join(packageCache, ".minecraft-lampas");
+      const existing = path.join(roaming, "Existing");
+      fs.mkdirSync(existing);
+
+      for (const target of [path.join(roaming, "Lampas"), existing]) {
+        const result = GameDirectoryManager.validateTarget(target, current);
+        expect(result.valid).toBe(false);
+        expect(result.reason).toContain("inside AppData");
+      }
+    });
+  });
+
+  test("lets setup adopt a real AppData folder but not create one", () => {
+    asStoreInstall(({ roaming, packageCache }) => {
+      const real = path.join(roaming, ".minecraft-lampas");
+      fs.mkdirSync(real);
+      expect(GameDirectoryManager.validateTarget(real).valid).toBe(true);
+      expect(
+        GameDirectoryManager.validateTarget(path.join(roaming, "New")).valid,
+      ).toBe(false);
+
+      // A folder that exists only as the package's private copy.
+      const privateOnly = path.join(roaming, "PrivateOnly");
+      fs.mkdirSync(privateOnly);
+      fs.mkdirSync(path.join(packageCache, "Roaming", "PrivateOnly"), {
+        recursive: true,
+      });
+      expect(GameDirectoryManager.validateTarget(privateOnly).valid).toBe(
+        false,
+      );
+    });
+  });
+
+  test("allows the package's own folder and folders outside AppData", () => {
+    asStoreInstall(({ packageCache }) => {
+      expect(
+        GameDirectoryManager.validateTarget(
+          path.join(packageCache, ".minecraft-lampas"),
+        ).valid,
+      ).toBe(true);
+      expect(
+        GameDirectoryManager.validateTarget(
+          path.join(testRoot, "games", "lampas"),
+          path.join(packageCache, ".minecraft-lampas"),
+        ).valid,
+      ).toBe(true);
+    });
+  });
+});

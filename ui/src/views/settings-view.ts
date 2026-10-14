@@ -195,8 +195,18 @@ export function initSettingsView(options: SettingsViewOptions): {
     }, 1800);
   }
 
+  // The Store default folder, whose long package path means nothing to
+  // most people. Known once the directory status has loaded.
+  let appStorageDir: string | null = null;
+
   function updateGameDirUI(dir: string): void {
-    if (gamedirDisplay) gamedirDisplay.innerText = dir;
+    if (gamedirDisplay) {
+      const isAppStorage =
+        appStorageDir !== null &&
+        dir.toLowerCase() === appStorageDir.toLowerCase();
+      gamedirDisplay.innerText = isAppStorage ? "Launcher storage" : dir;
+      gamedirDisplay.title = dir;
+    }
     if (settingGamedirInput) {
       settingGamedirInput.value = dir;
       settingGamedirInput.innerText = dir;
@@ -245,10 +255,25 @@ export function initSettingsView(options: SettingsViewOptions): {
   }
 
   async function checkInitialGameDir(status: DirectoryStatus): Promise<void> {
+    appStorageDir = status.defaultIsAppStorage ? status.defaultGameDir : null;
+    if (currentConfig?.gameDir) updateGameDirUI(currentConfig.gameDir);
+
     if (!status.isConfigured && modalInitialDir) {
       modalInitialDir.classList.remove("hidden");
       if (initialGamedirInput)
         initialGamedirInput.value = status.defaultGameDir;
+
+      // Explain the app-storage default, which reads as an opaque path.
+      const initialDirNote = document.getElementById("initial-dir-note");
+      const updateInitialDirNote = () => {
+        const showNote =
+          status.defaultIsAppStorage &&
+          initialGamedirInput?.value.trim() === status.defaultGameDir;
+        initialDirNote?.classList.toggle("hidden", !showNote);
+      };
+      updateInitialDirNote();
+      if (initialGamedirInput)
+        initialGamedirInput.oninput = updateInitialDirNote;
 
       if (btnAcceptDefault) {
         btnAcceptDefault.onclick = async () => {
@@ -277,6 +302,7 @@ export function initSettingsView(options: SettingsViewOptions): {
           );
           if (!res.canceled && res.filePaths?.[0] && initialGamedirInput) {
             initialGamedirInput.value = res.filePaths[0];
+            updateInitialDirNote();
           }
         };
       }
@@ -317,7 +343,7 @@ export function initSettingsView(options: SettingsViewOptions): {
   async function initSettings(config: RendererSettingsDto): Promise<void> {
     currentConfig = config;
 
-    const ram = config.allocatedRamGb || 4;
+    const ram = config.allocatedRamGb || 8;
     if (ramSlider) ramSlider.value = String(ram);
     if (ramDisplay) ramDisplay.innerText = `${ram} GB RAM`;
     if (settingRamVal) settingRamVal.innerText = `${ram} GB`;
