@@ -1222,7 +1222,11 @@ describe("Phase 7 Regression Gate — Release Pipeline & CI Controls (SEC-12)", 
     expect(artifactGenerationIndex).toBeGreaterThanOrEqual(0);
     expect(artifactGenerationIndex).toBeLessThan(uploadIndex);
     expect(upload.with["if-no-files-found"]).toBe("error");
-    expect(upload.with["retention-days"]).toBe(7);
+    // 7 days, except tag-build Windows artifacts, which a manual Store
+    // publish may use later.
+    expect(upload.with["retention-days"]).toBe(
+      "${{ startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest' && 90 || 7 }}",
+    );
     expect(upload.with.path).toContain("release/*.cdx.json");
     expect(upload.with.path).toContain("release/SHA256SUMS-*.txt");
 
