@@ -149,8 +149,12 @@ jobs:
           payload="$RUNNER_TEMP/discord-release.json"
           # generate_release_notes stores GitHub's generated notes in the release body.
           gh release view "$TAG" --repo "$REPO" --json body --jq '.body // ""' > "$notes" || : > "$notes"
+          # Direct download links for the Windows installer and the Linux builds, taken from the published assets.
+          assets="$RUNNER_TEMP/release-assets.json"
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets' > "$assets" || echo '[]' > "$assets"
           jq -n \
             --rawfile notes "$notes" \
+            --slurpfile assets "$assets" \
             --arg tag "$TAG" \
             --arg url "$RELEASE_URL" \
             --arg store "$STORE_PUBLISH_ENABLED" \
@@ -162,13 +166,20 @@ jobs:
             | (if $store == "true"
                then "Microsoft Store: submission enabled. The AppX is sent to Partner Center after this release publishes."
                else "Microsoft Store: submission disabled for this release." end) as $store_line
+            | ($assets[0] // []) as $files
+            | ([
+                ($files[] | select(.name | test("^LampasLauncher-Setup-.*\\.exe$")) | "Windows installer: [" + .name + "](" + .url + ")"),
+                ($files[] | select(.name | test("-Linux\\.AppImage$")) | "Linux AppImage: [" + .name + "](" + .url + ")"),
+                ($files[] | select(.name | test("-Linux\\.tar\\.gz$")) | "Linux tar.gz: [" + .name + "](" + .url + ")")
+              ] | join("\n")) as $downloads
+            | (if $downloads == "" then "" else "**Downloads**\n" + $downloads + "\n\n" end) as $downloads_block
             | {
                 username: "Releases",
                 embeds: [{
                   title: ("Lampas Launcher " + $tag + " released"),
                   url: $url,
                   color: 3066959,
-                  description: ("Tag: " + $tag + "\n" + $store_line + "\n\n" + $body),
+                  description: ("Tag: " + $tag + "\n" + $store_line + "\n\n" + $downloads_block + $body),
                   footer: { text: "Lampas Launcher releases" },
                   timestamp: $timestamp
                 }]
