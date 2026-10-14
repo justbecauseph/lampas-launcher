@@ -51,12 +51,12 @@ graph LR
 
 ## 🕹️ Launcher Tour
 
-| Tab                | What it's for                                                                                                                        |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **🚀 Play**        | The main dashboard. See server status, who's online, pick your channel (`Stable`, `Beta`, `Dev`), and press the big **PLAY** button. |
-| **🧩 Client Mods** | Toggle official optional mods or drop your own `.jar` files here.                                                                    |
-| **📜 Console**     | Live logs while your game is running. If something goes wrong, you can search and copy errors here to send to staff.                 |
-| **⚙️ Settings**    | Allocate more RAM (slider), change or remove the game directory, set extra JVM arguments, or open your logs.                         |
+| Tab                | What it's for                                                                                                                                                           |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **🚀 Play**        | The main dashboard. See server status, who's online, pick your channel (`Stable`, `Beta`, `Dev`), and press the big **PLAY** button.                                    |
+| **🧩 Client Mods** | Toggle official optional mods or drop your own `.jar` files here.                                                                                                       |
+| **📜 Console**     | Live logs while your game is running. If something goes wrong, you can search and copy errors here to send to staff. Open the launcher or Minecraft log file from here. |
+| **⚙️ Settings**    | Allocate RAM (slider, 2–16 GB; new installs default to 8 GB), change the game folder, **Remove game files**, or set extra JVM arguments.                                |
 
 ---
 
@@ -66,6 +66,10 @@ graph LR
 
 Head over to the [Lampas Portal](https://dev.lampas.town) dashboard, link your Minecraft Java username to your account, and hit login again in the launcher!
 
+### 🆕 "It says Launcher update required!"
+
+The current pack needs a newer launcher. Store installs update through the Microsoft Store; other installs download the latest GitHub release. Launchers before 1.6.0 show a manifest error instead of this message for packs with seed files or keybind patches; updating fixes both.
+
 ### 💥 "My game crashed or won't start!"
 
 1. Click the **Repair** button on the Play tab. This checks every single file against the server and replaces anything that broke.
@@ -73,7 +77,11 @@ Head over to the [Lampas Portal](https://dev.lampas.town) dashboard, link your M
 
 ### 💾 "Will updating delete my worlds, screenshots, or keybinds?"
 
-**Nope!** Your `saves/`, `screenshots/`, `logs/`, `servers.dat`, and custom `options.txt` settings are strictly protected and will never be overwritten or deleted.
+**Nope!** Your `saves/`, `screenshots/` and `logs/` are never overwritten or deleted. If you have no `options.txt` or `servers.dat` yet, the launcher places the pack's starting copies; it never replaces ones you already have. The pack can rebind a specific key once (for example Xaero's map key to `,`): the launcher changes only that key's existing line in `options.txt`, one time, and you can rebind it afterwards. The launcher also keeps the required resource packs switched on in `options.txt`.
+
+### 🏪 "Where are my game files with the Microsoft Store version?"
+
+Microsoft Store installs keep game files in the app's own storage, which Windows deletes on uninstall. If Windows redirected a game folder under `%APPDATA%` or `%LOCALAPPDATA%` into that storage, the launcher uses the redirected copy when it holds an existing install. The launcher also does not let a Store install move its game folder into AppData.
 
 ### 🚪 "Does closing the launcher close Minecraft?"
 
@@ -101,7 +109,7 @@ If you want to build or tinker with the launcher code locally:
   - **Linux (x64):** Modern glibc distributions (AppImage & `.tar.gz`).
 - **Tooling Requirements:**
   - **Bun:** `v1.4.2` (pinned in CI)
-  - **Node.js:** `>=22.12.0` (Node 24 LTS recommended)
+  - **Node.js:** not pinned. CI runs the runner's preinstalled `node` for the Electron install script, the fuse check and the packaged workflow test.
   - **Electron:** `44.7.0`
   - **Vite:** `^6.2.0` (renderer bundler)
   - **TypeScript:** `^5.8.2`
@@ -117,34 +125,43 @@ bun install --frozen-lockfile
 # 2. Typecheck main/preload (tsconfig.json) and renderer (tsconfig.renderer.json)
 bun run typecheck
 
-# 3. Run full unit & integration test suite (554 tests across 52 files)
+# 3. Check formatting with Prettier (CI runs this)
+bun run format:check
+
+# 4. Run full unit & integration test suite
 bun test
 
-# 4. Run real Electron smoke test harness (verifies assets, fonts, preload, & execution)
+# 5. Run real Electron smoke test harness (verifies assets, fonts, preload, & execution)
 bun run smoke
 
-# 5. Run performance benchmark suite (warm sync, repair, move, logging, catalog search)
+# 6. Run performance benchmark suite (warm sync, repair, move, logging, catalog search)
 bun run benchmark
 
-# 6. Run in development mode (TypeScript watch + Vite HMR + Electron)
+# 7. Run in development mode (TypeScript watch + Vite HMR + Electron)
 bun run dev
 
-# 7. Production build (compiles main/preload CJS and bundles modular renderer)
+# 8. Production build (compiles main/preload CJS and bundles modular renderer)
 bun run build
 
-# 8. Package unpacked distribution directory (testing packaged paths without installers)
+# 9. Package unpacked distribution directory (testing packaged paths without installers)
 bun run package:dir
 
-# 9. Package production distribution artifacts
+# 10. Package production distribution artifacts
 bun run package:win    # Windows installer & portable exe
 bun run package:appx   # Windows Microsoft Store AppX (unsigned; the Store signs it)
+bun run package:msix   # Alias of package:appx
 bun run package:linux  # Linux AppImage & tar.gz
 bun run package:all    # Multi-platform distribution build
+bun run package:test   # Build the AppX, sign it with devcert.pfx and install it (Windows, pwsh)
 ```
+
+`scripts/package-and-test.ps1` builds the AppX, signs it with `devcert.pfx` from the repository root (gitignored) using the password in `LAMPAS_DEVCERT_PASSWORD`, and installs it with `Add-AppxPackage`. It looks for `signtool.exe` under `%LOCALAPPDATA%\electron-builder` and stops if `LAMPAS_DEVCERT_PASSWORD` is unset. The signing certificate must be trusted on the machine for the install to succeed.
 
 ### GitHub Actions Builds and Windows Signing
 
-Windows packages built by GitHub Actions are unsigned when signing certificate credentials are not configured. If credentials are configured, the build can still sign the packages. Windows may show a publisher warning for unsigned downloads.
+`validate.yml` runs on pushes and pull requests to `main` on Windows and Ubuntu: `bun audit`, `format:check`, typecheck, build, tests, `package:dir`, the fuse check, and the packaged smoke and packaged module workflow tests.
+
+Windows packages built by GitHub Actions are unsigned: the workflow passes no signing certificate to electron-builder. Windows may show a publisher warning. Microsoft signs the Store AppX during certification.
 
 Running the release workflow manually on a branch builds and uploads artifacts for that workflow run without publishing a GitHub Release. Pushing a version tag builds and publishes a release after validation. Signature verification should be restored when signing certificate custody is ready.
 
@@ -154,13 +171,14 @@ GitHub artifact attestations are generated for public repositories. This private
 
 The Windows build also produces an unsigned `LampasLauncher-<version>-Windows.appx`, which is checksummed with the other artifacts but not attached to the GitHub Release. After a version tag publishes the GitHub Release, the `store` job submits that AppX to the Microsoft Store (product ID `9P9WWSV7L7RS`) with the Microsoft Store Developer CLI. The Store signs the package during certification, which takes from a few hours to a few days.
 
+- Before tagging, check for a submission still in certification with `msstore submission status 9P9WWSV7L7RS` (after `msstore reconfigure …`). If one is pending, set the repository variable `ENABLE_STORE_PUBLISH` to `false` for this release so the `store` job does not run; turn it back on once certification finishes.
 - The job runs only when the repository variable `ENABLE_STORE_PUBLISH` is `true`, and it needs the secrets `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET` and `SELLER_ID`. The Entra application must have the **Manager** role under Partner Center → User management → Microsoft Entra applications.
 - `msstore publish` accepts only `.msix`, `.msixbundle` and `.msixupload` files, so the job uploads the AppX under an `.msix` name. Partner Center rejects MSIX uploads with a `MinVersion` of `10.0.17134.0` or lower, so `appx.minVersion` in `package.json` must stay at `10.0.17763.0` or higher.
 - The job replaces a pending submission that was created through the API, but it fails if a draft submission started in the Partner Center web UI exists. Submit or delete such drafts before tagging a release.
-- Every Store upload needs a higher package version than the last one. electron-builder maps `package.json` version `1.5.4` to package version `1.5.4.0`.
+- Every Store upload needs a higher package version than the last one. electron-builder maps `package.json` version `X.Y.Z` to package version `X.Y.Z.0` (for example `1.6.1` → `1.6.1.0`).
 - Store installs skip the launcher's GitHub update notice because the Store delivers updates.
-- The `release` job posts to Discord through the `DISCORD_WEBHOOK_URL` secret and the `store` job posts its submission result. A missing secret logs a warning, and a Discord error never fails either job.
-- `store-status.yml` runs every 6 hours. It compares the latest release with the Display Catalog and posts once per tag when that version is installable or its Partner Center submission fails. The one-time markers are Actions caches named `store-notified-<tag>-live` and `store-notified-<tag>-failed`, so run `workflow_dispatch` from the default branch.
+- The `release` job posts to Discord through the `DISCORD_WEBHOOK_URL` secret and the `store` job posts its submission result. All Discord posts use the username **Releases**. A missing secret logs a warning, and a Discord error never fails either job.
+- `store-status.yml` runs every 6 hours (`0 */6 * * *` UTC) on `ubuntu-latest`. The Partner Center status step runs only when the four Store secrets are set. It compares the latest release with the Display Catalog and posts once per tag when that version is installable or its Partner Center submission fails. The one-time markers are Actions caches named `store-notified-<tag>-live` and `store-notified-<tag>-failed`, so run `workflow_dispatch` from the default branch.
 
 ---
 

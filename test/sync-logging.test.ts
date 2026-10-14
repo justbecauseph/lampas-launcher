@@ -29,6 +29,7 @@ mock.module("electron", () => ({
 
 const { LauncherLogger } = await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
+const { CredentialStore } = await import("../src/credential-store");
 const { ClientModManager } = await import("../src/client-mods");
 const { LauncherSync } = await import("../src/sync");
 
@@ -44,6 +45,9 @@ beforeEach(async () => {
   LauncherLogger.init(path.join(userDataDir, "logs"));
   fs.rmSync(gameDir, { recursive: true, force: true });
   fs.mkdirSync(gameDir, { recursive: true });
+  // The sessions these tests sign in must not be saved to another test
+  // file's credential folder.
+  CredentialStore.resetForTesting();
   ConfigManager.resetForTesting();
   ConfigManager.set({
     portalUrl: "http://localhost:3000",
@@ -58,6 +62,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  ConfigManager.resetForTesting();
   PortalPolicy.resetForTesting();
   await LauncherLogger.close();
   LauncherLogger.resetForTesting();

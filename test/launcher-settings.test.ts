@@ -24,6 +24,7 @@ mock.module("electron", () => ({
 }));
 
 const { ConfigManager, PortalPolicy } = await import("../src/config");
+const { CredentialStore } = await import("../src/credential-store");
 const { ClientModManager, ShaderPackManager } =
   await import("../src/client-mods");
 const { parseJavaArgs } = await import("../src/game-runner");
@@ -31,6 +32,9 @@ const { LauncherLogger } = await import("../src/logger");
 
 beforeEach(() => {
   PortalPolicy.configureDevelopmentPolicy({ allowLoopback: true });
+  // Keep credentials in this file's user-data folder, so a session another
+  // test file saved is never restored into these configs.
+  CredentialStore.resetForTesting();
   ConfigManager.resetForTesting();
   ConfigManager.set({
     gameDir: path.join(testRoot, "game"),

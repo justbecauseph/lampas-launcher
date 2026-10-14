@@ -116,6 +116,11 @@ beforeEach(() => {
 
 afterAll(async () => {
   PortalPolicy?.resetForTesting();
+  // Later test files share this process; do not leave mock secure storage
+  // or this file's credential folder behind for them.
+  CredentialStore?.resetForTesting();
+  SessionManager?.resetForTesting();
+  ConfigManager?.resetForTesting();
   try {
     await LauncherLogger?.close();
   } catch {}

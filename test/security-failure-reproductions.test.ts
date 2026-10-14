@@ -174,6 +174,12 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  // Bun runs every test file in one process. Leaving the mock secure storage
+  // and this file's credential folder in place would make later files save
+  // and restore sessions here.
+  CredentialStore?.resetForTesting();
+  SessionManager?.resetForTesting();
+  ConfigManager?.resetForTesting();
   try {
     fs.rmSync(testRoot, { recursive: true, force: true });
   } catch {}

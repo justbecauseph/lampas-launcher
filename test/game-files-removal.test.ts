@@ -25,6 +25,7 @@ const {
   resolveStoreGameDir,
   toExternalPath,
 } = await import("../src/config");
+const { CredentialStore } = await import("../src/credential-store");
 
 let caseDir: string;
 let caseSeq = 0;
@@ -32,6 +33,9 @@ let caseSeq = 0;
 beforeEach(() => {
   caseDir = path.join(testRoot, `case-${++caseSeq}`);
   fs.mkdirSync(caseDir, { recursive: true });
+  // Keep credentials in this file's user-data folder, so a session another
+  // test file saved is never restored into these configs.
+  CredentialStore.resetForTesting();
 });
 
 afterAll(() => {
