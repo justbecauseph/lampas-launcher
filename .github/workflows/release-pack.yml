@@ -161,5 +161,8 @@ jobs:
         run: |
           $appx = Get-ChildItem release-artifacts -Filter *.appx | Select-Object -First 1
           if (-not $appx) { throw "No .appx artifact found" }
-          msstore publish $appx.FullName -id 9P9WWSV7L7RS
+          # msstore only accepts .msix/.msixbundle/.msixupload; AppX and MSIX share the package format.
+          $msix = Join-Path $env:RUNNER_TEMP ($appx.BaseName + ".msix")
+          Copy-Item $appx.FullName $msix
+          msstore publish $msix -id 9P9WWSV7L7RS
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
