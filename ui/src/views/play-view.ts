@@ -139,8 +139,10 @@ export function initPlayView(options: PlayViewOptions): {
     if (progressFill) progressFill.style.width = `${percent}%`;
   }
 
-  function showLaunchError(message: string): void {
+  function showLaunchError(message: string, canRepair = true): void {
     if (launchErrorMsg) launchErrorMsg.innerText = message;
+    // Repair can't fix a sign-in problem, so it isn't offered for one.
+    btnLaunchErrorRepair?.classList.toggle("hidden", !canRepair);
     launchError?.classList.remove("hidden");
   }
 
@@ -182,6 +184,23 @@ export function initPlayView(options: PlayViewOptions): {
   async function launchGame(): Promise<void> {
     await window.lampas.game.launch();
     setGameStatus("running");
+  }
+
+  async function checkLaunchReady(): Promise<boolean> {
+    if (!window.lampas.game?.checkReady) return true;
+    setGameStatus("launching");
+    setPlayLabel("Checking your account…", true);
+    try {
+      const readiness = await window.lampas.game.checkReady();
+      if (readiness.ready) return true;
+      setGameStatus("idle");
+      showLaunchError(readiness.message, false);
+      appendLog("ERROR", readiness.message);
+      return false;
+    } catch (err: any) {
+      handleLaunchFailure(err);
+      return false;
+    }
   }
 
   async function runNoSyncLaunch(): Promise<void> {
@@ -266,6 +285,10 @@ export function initPlayView(options: PlayViewOptions): {
 
     hideLaunchError();
     clearConsole();
+
+    // Check the account first, so a player who can't launch isn't made to
+    // download the pack.
+    if (!(await checkLaunchReady())) return;
 
     if (!isRepair && isNoSync?.()) {
       await runNoSyncLaunch();

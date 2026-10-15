@@ -396,6 +396,7 @@ export interface LampasApi {
   };
   game: {
     launch: () => Promise<boolean>;
+    checkReady: () => Promise<LaunchReadiness>;
     kill: () => Promise<void>;
     isRunning: () => Promise<boolean>;
     onLog: (callback: (entry: GameLogEntry) => void) => () => void;
@@ -450,3 +451,12 @@ export interface LampasApi {
     openMinecraftLog: () => Promise<string>;
   };
 }
+
+/** Whether Play can launch the game, checked before it syncs the pack. */
+export type LaunchReadiness =
+  | { ready: true }
+  | {
+      ready: false;
+      reason: "login" | "session" | "link" | "minecraft" | "expired";
+      message: string;
+    };

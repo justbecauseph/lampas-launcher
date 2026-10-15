@@ -26,7 +26,12 @@ import {
 import { SessionManager } from "./session-manager";
 import { LauncherAuth } from "./auth";
 import { LauncherSync } from "./sync";
-import { GameRunner, parseJavaArgs } from "./game-runner";
+import {
+  GameRunner,
+  LAUNCH_SIGN_IN_MESSAGES,
+  parseJavaArgs,
+  resolveLaunchIdentity,
+} from "./game-runner";
 import { ClientModManager, ShaderPackManager } from "./client-mods";
 import { LauncherUpdateChecker } from "./update-check";
 import { LauncherLogger } from "./logger";
@@ -44,6 +49,7 @@ import {
   IpcSchemas,
   IpcSecurityError,
   IpcValidationError,
+  AuthRequiredError,
   UserCancelledError,
   ModPolicyError,
   registerSecureHandler,
@@ -59,6 +65,7 @@ import type {
   RendererUserProfile,
   RendererSettingsDto,
   KnownLocationId,
+  LaunchReadiness,
   UpdateSettingsDto,
   GameFilesRemovalResultDto,
 } from "./types";
@@ -1334,14 +1341,40 @@ app.whenReady().then(async () => {
   );
 
   // IPC Handlers: Game
+  // Checked before Play syncs the pack, so a player who can't launch isn't
+  // made to download it first. game:launch checks again.
+  registerSecureHandler(
+    "game:checkReady",
+    IpcSchemas.noArgs,
+    async (): Promise<LaunchReadiness> => {
+      const refreshed = await LauncherAuth.refreshSession();
+      if (!refreshed.valid || !refreshed.user) {
+        return {
+          ready: false,
+          reason: "login",
+          message: LAUNCH_SIGN_IN_MESSAGES.login,
+        };
+      }
+      const identity = resolveLaunchIdentity(
+        refreshed.user,
+        ConfigManager.get().minecraftAccessToken,
+      );
+      if (!identity.ok) {
+        return {
+          ready: false,
+          reason: identity.reason,
+          message: LAUNCH_SIGN_IN_MESSAGES[identity.reason],
+        };
+      }
+      return { ready: true };
+    },
+  );
   registerSecureHandler("game:launch", IpcSchemas.noArgs, async () => {
     const op = OperationCoordinator.acquire("launch", "Launch Minecraft");
     try {
       const refreshed = await LauncherAuth.refreshSession();
       if (!refreshed.valid || !refreshed.user) {
-        throw new IpcValidationError(
-          "Authentication required: Please log in with your Lampas Portal account before playing.",
-        );
+        throw new AuthRequiredError(LAUNCH_SIGN_IN_MESSAGES.login);
       }
       const user = refreshed.user;
       LauncherLogger.info("Initiating authenticated game launch");

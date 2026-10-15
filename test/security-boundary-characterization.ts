@@ -615,12 +615,13 @@ try {
 
   // 1. Inbound IPC Registration Inventory
   await runTest(
-    "Registration harness confirms 45 handles and 1 on channel",
+    "Registration harness confirms 46 handles and 1 on channel",
     () => {
-      if (ipcHandlers.size !== 45)
-        throw new Error(`Expected 45 handles, got ${ipcHandlers.size}`);
+      if (ipcHandlers.size !== 46)
+        throw new Error(`Expected 46 handles, got ${ipcHandlers.size}`);
       for (const channel of [
         "gameDir:removeFiles",
+        "game:checkReady",
         "shaders:browseAndAdd",
         "shaders:addPaths",
         "shaders:remove",
@@ -4615,12 +4616,32 @@ try {
       const launchMinecraftToken = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: "test", exp: 4102444800 })).toString("base64url")}.signature`;
       // Ensure session credentials are present for LauncherAuth.refreshSession
       ConfigManager.set({ gameDir });
+      const checkReadyHandler = ipcHandlers.get("game:checkReady")!;
+
+      // Without a Minecraft token, Play is told before it syncs anything.
+      ConfigManager.establishSession(originAPortal, {
+        token: "valid-launch-token",
+        refreshToken: "valid-launch-refresh",
+      });
+      const notReady = await checkReadyHandler({});
+      if (notReady?.ready !== false || notReady.reason !== "minecraft") {
+        throw new Error(
+          `Expected readiness 'minecraft' without a token, got: ${JSON.stringify(notReady)}`,
+        );
+      }
+
       ConfigManager.establishSession(originAPortal, {
         token: "valid-launch-token",
         refreshToken: "valid-launch-refresh",
         // Launches need a Microsoft-issued Minecraft token (a JWT).
         minecraftAccessToken: launchMinecraftToken,
       });
+      const ready = await checkReadyHandler({});
+      if (ready?.ready !== true) {
+        throw new Error(
+          `Expected launch readiness with a token, got: ${JSON.stringify(ready)}`,
+        );
+      }
 
       // Spy Java runtime and bootstrap to isolate process execution sink
       const javaSpy = spyOn(

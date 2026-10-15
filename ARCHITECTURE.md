@@ -113,7 +113,9 @@ The launcher handles this as follows:
 
 - Sign-in uses a loopback OAuth callback with PKCE. The local server accepts only `GET /callback` with the expected host and state, answers once, and closes after the response has been sent (capped at 1 second). The callback pages inline their fonts because the server is gone by the time the browser could fetch them.
 - The game launches only with a Minecraft access token from a Microsoft sign-in, passed with `--userType msa`. The token comes from the Lampas Portal session. `minecraftTokenProblem` (`src/game-runner.ts`) requires a JWT whose payload decodes and whose `exp`, when present, hasn't passed (with one minute of clock allowance); the launcher can't verify the signature. A missing, malformed or expired token stops the launch with `AuthRequiredError` before Java is prepared. There is no offline-mode fallback.
+- **Play** first calls `game:checkReady`, which refreshes the session and runs the same identity check (`resolveLaunchIdentity`) without syncing anything. A player who can't launch sees what to fix before any download, and **Repair & retry** isn't offered for it. `game:launch` checks again.
 - Sign-in errors that the player has to act on (`AuthRequiredError`) reach the renderer with their message, capped at 120 characters. Other unexpected errors show a generic message.
+- A game that an older launcher started in legacy mode can still be adopted after an upgrade; adoption attaches to a running process and never starts one.
 
 ## Logging and console
 

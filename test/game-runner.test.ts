@@ -84,8 +84,12 @@ let mockSessionUser: any = {
 const { JavaRuntimeManager } = await import("../src/java-runtime");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { ConfigManager } = await import("../src/config");
-const { GameRunner, buildLaunchArguments, minecraftTokenProblem } =
-  await import("../src/game-runner");
+const {
+  GameRunner,
+  buildLaunchArguments,
+  minecraftTokenProblem,
+  resolveLaunchIdentity,
+} = await import("../src/game-runner");
 const { AuthRequiredError } = await import("../src/ipc-boundary");
 const { LauncherAuth } = await import("../src/auth");
 
@@ -279,6 +283,38 @@ describe("GameRunner launch flow & Quick Play", () => {
       expect(bootstrapCalls).toHaveLength(0);
       expect(spawnedCalls).toHaveLength(0);
     }
+  });
+
+  test("resolveLaunchIdentity names what the player must fix", () => {
+    const linked = {
+      ...dummyUser,
+      minecraftUuid: "11111111-2222-3333-4444-555555555555",
+    };
+    expect(
+      resolveLaunchIdentity({ ...dummyUser }, TEST_MINECRAFT_TOKEN),
+    ).toEqual({ ok: false, reason: "link" });
+    expect(resolveLaunchIdentity(linked, undefined)).toEqual({
+      ok: false,
+      reason: "minecraft",
+    });
+    const expired = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: "test", exp: 1 })).toString("base64url")}.signature`;
+    expect(resolveLaunchIdentity(linked, expired)).toEqual({
+      ok: false,
+      reason: "expired",
+    });
+    // The profile's token wins over the stored one.
+    expect(
+      resolveLaunchIdentity(
+        { ...linked, minecraftAccessToken: expired },
+        TEST_MINECRAFT_TOKEN,
+      ),
+    ).toEqual({ ok: false, reason: "expired" });
+    expect(resolveLaunchIdentity(linked, TEST_MINECRAFT_TOKEN)).toEqual({
+      ok: true,
+      username: "TestPlayer",
+      uuid: "11111111-2222-3333-4444-555555555555",
+      token: TEST_MINECRAFT_TOKEN,
+    });
   });
 
   test("minecraftTokenProblem accepts only decodable, unexpired JWTs", () => {
@@ -1163,7 +1199,7 @@ describe("buildLaunchArguments session marker", () => {
     username: "TestPlayer",
     uuid: "11111111222233334444555555555555",
     token: "eyJ-test-minecraft-token",
-    userType: "msa",
+    userType: "msa" as const,
     customJavaArgs: ["-Dcustom.arg=1"],
     mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
     classpathString: "a.jar",

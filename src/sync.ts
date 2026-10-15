@@ -17,6 +17,7 @@ import { app } from "electron";
 import { placeSeedFileIfAbsent, seedEntryExists } from "./seed-file";
 import { reconcileConfigPatches } from "./config-patches";
 import { LauncherLogger } from "./logger";
+import { AuthRequiredError } from "./ipc-boundary";
 import { resolveRuntimeDefinition } from "./runtime-definition";
 import { runBoundedPool } from "./async-pool";
 import type {
@@ -328,8 +329,8 @@ export class LauncherSync {
       !config.sessionPortalUrl ||
       config.sessionPortalUrl !== portalUrl
     ) {
-      throw new Error(
-        "Authentication required: Please log in with your Lampas Portal account.",
+      throw new AuthRequiredError(
+        "Authentication required: log in with your Lampas Portal account before playing.",
       );
     }
     const channel = config.selectedChannel || "stable";

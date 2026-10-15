@@ -3,6 +3,7 @@ import type {
   SyncProgress,
   SyncResult,
   GameLogEntry,
+  LaunchReadiness,
   DirectoryStatus,
   DirectoryValidationResult,
   DirectoryMoveProgress,
@@ -83,6 +84,8 @@ const api: LampasApi = {
   },
   game: {
     launch: (): Promise<boolean> => ipcRenderer.invoke("game:launch"),
+    checkReady: (): Promise<LaunchReadiness> =>
+      ipcRenderer.invoke("game:checkReady"),
     kill: (): Promise<void> => ipcRenderer.invoke("game:kill"),
     isRunning: (): Promise<boolean> => ipcRenderer.invoke("game:isRunning"),
     onLog: (callback: (entry: GameLogEntry) => void) => {
