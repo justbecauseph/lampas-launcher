@@ -1,236 +1,86 @@
-# ⚡ Lampas Launcher
+# Lampas Launcher
 
-> **The zero-braincells, 1-click way to play Lampas SMP.**  
-> No Prism, no CurseForge, no _"hey why is my mod version different than the server"_ pain. Just click **PLAY** and jump straight in! 🚀
+The one-click way to play the Lampas SMP Minecraft server. The launcher keeps your mods in step with the server, sets up Java for you, and joins the server when you press **Play**.
 
-[![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-Get%20it-0078D4?style=for-the-badge&logo=microsoft&logoColor=white)](https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct)
-[![Linux & Portable](https://img.shields.io/github/v/release/justbecauseph/lampas-launcher?label=Linux%20%26%20Portable&style=for-the-badge&color=2ea44f&logo=github)](https://github.com/justbecauseph/lampas-launcher/releases/latest)
+**Download:** [Microsoft Store](https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct) (Windows) · [GitHub Releases](https://github.com/justbecauseph/lampas-launcher/releases/latest) (Windows and Linux)
 
 ---
 
-## 🎮 What is this?
+## What it does
 
-Welcome to the **Lampas Launcher**! It is our custom-built desktop app that handles _everything_ so you can spend less time fixing crashes and more time building dirt huts, dying to creepers, and having fun on Lampas SMP.
+- **Browser sign-in:** log in through the Lampas Portal in your browser.
+- **Automatic mod updates:** before the game starts, the launcher downloads the server's current mods, configs and resource packs, so you always match the server.
+- **Java included:** Minecraft 26.2 needs Java 25. If you don't have it, the launcher downloads Mojang's Java runtime for you.
+- **Straight into the server:** press **Play** and the game joins Lampas, with no server address to type.
+- **Required resource packs:** the server's resource packs are downloaded and switched on for you. Your own packs stay as they are.
+- **Your own mods and shaders:** drop extra mods (`.jar`) or shader packs (`.zip`) into the **Client mods** tab, and switch optional pack mods on or off.
+- **Server status:** see whether the server is online and who is playing before you launch.
+- **Move your game folder:** move the game to another drive from Settings.
+- **Repair:** if the game acts up, Repair checks every file against the server's copy and replaces anything damaged.
 
-### ✨ Why you'll love it:
+## Install and play
 
-- 🟢 **1-Click Login**: Log in with your browser. It automatically checks your Discord whitelist, hooks up your Minecraft account, and you're ready to go.
-- 📦 **Auto-Magic Mod Updates**: Whenever the server gets new mods, updates, or configs, your launcher updates them automatically before the game starts. Zero drift, zero headache.
-- ☕ **No Java? No Problem**: Minecraft 26.2 needs Java 25. Don't have it? Don't even know what Java is? The launcher will download and install the official Java runtime for you automatically in the background.
-- ⚡ **Quick Play (Auto-Connect)**: Hit **PLAY** and the game boots straight into the Lampas server. No typing server IPs or clicking through multiplayer menus.
-- 🎨 **Brings Your Resource Packs**: Required server resource packs are downloaded and turned on for you automatically. Your custom packs and settings stay completely untouched.
-- 🧩 **Add Your Own Mods**: Want your favorite zoom mod, shader pack, or HUD tweaks? Just drag and drop them into the **Client Mods** tab!
-- 👀 **Live Server Status**: Check if the server is online and see who's currently playing before you even launch the game.
-- 💽 **Ran out of C: Drive space?**: You can move your entire game folder to your D: drive (or anywhere else) right from the settings without breaking anything.
-- 🔧 **Repair Button**: Game acting weird? Press **Repair** to run a full cryptographic SHA-256 verification of every managed mod, configuration, asset index, and Fabric runtime library, replacing any corrupt files.
+1. **Get the launcher.**
+   - **Windows:** install it from the [Microsoft Store](https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct). The Store keeps it up to date.
+   - **Windows without the Store:** download `LampasLauncher-Setup-<version>.exe` (installer) or `LampasLauncher-<version>-Windows.exe` (portable) from [GitHub Releases](https://github.com/justbecauseph/lampas-launcher/releases/latest). The launcher tells you when a newer version is out.
+   - **Linux:** download `LampasLauncher-<version>-Linux.AppImage` (make it executable, then run it) or the `.tar.gz` from [GitHub Releases](https://github.com/justbecauseph/lampas-launcher/releases/latest).
+2. **Choose a game folder.** The first time you open the launcher, it asks where to install Minecraft. The suggested folder is fine for most people.
+3. **Log in.** Click **Log in**. Your browser opens the Lampas Portal; sign in and link your Minecraft account there.
+4. **Press Play.** The launcher updates the mods, prepares Java and starts Minecraft.
 
----
+## Launcher tour
 
-## 📥 How to Install & Play
+| Tab                | What it's for                                                                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Play**           | Server status and who's online, the **Play** button, and **Stop** while the game runs.                                                              |
+| **Client mods**    | Switch optional mods on or off, add your own mods and shader packs, and **Repair pack**.                                                            |
+| **Console & logs** | Live game output while Minecraft runs. **Copy** it for staff, or open the launcher log or Minecraft log.                                            |
+| **Settings**       | Memory (2–16 GB, 8 GB by default), release channel (Stable, Beta, Dev), game folder, **Repair game files**, **Remove game files** and Java options. |
 
-Getting started takes about 30 seconds:
+## FAQ
 
-```mermaid
-graph LR
-    A["1. Download Launcher 📦"] --> B["2. Log in with Portal 🔑"]
-    B --> C["3. Hit PLAY! 🎮"]
-    C --> D["4. You're in the SMP! 🏰"]
-```
+### "It says my Minecraft account isn't linked."
 
-1. **Get the launcher**:
-   - **Windows**: Install it from the [**Microsoft Store**](https://apps.microsoft.com/detail/9P9WWSV7L7RS?mode=direct). The Store keeps the launcher up to date for you.
-   - **Windows (without the Store)**: Download `LampasLauncher-Setup-<version>.exe` (Installer) or `LampasLauncher-<version>-Windows.exe` (Portable) from [**GitHub Releases (Latest)**](https://github.com/justbecauseph/lampas-launcher/releases/latest). The launcher tells you when a newer version is out.
-   - **Linux**: Download `LampasLauncher-<version>-Linux.AppImage` (make executable & run) or `.tar.gz` from [**GitHub Releases (Latest)**](https://github.com/justbecauseph/lampas-launcher/releases/latest).
-2. **Log in**:
-   - Click **Login with Lampas Portal**.
-   - Your browser will open. Authorize your account, link your Minecraft username, and boom — you're logged in!
-3. **Hit PLAY**:
-   - The launcher will grab the newest mods, prepare Java, and launch Minecraft straight into Lampas.
+Open the [Lampas Portal](https://dev.lampas.town), link your Minecraft Java account to your profile, then log in to the launcher again.
 
----
+### "It says Minecraft sign-in is required."
 
-## 🕹️ Launcher Tour
+The launcher only starts Minecraft for an account that owns Minecraft: Java Edition. On the [Lampas Portal](https://dev.lampas.town), link the Microsoft account you bought Minecraft with, then log in to the launcher again.
 
-| Tab                | What it's for                                                                                                                                                           |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **🚀 Play**        | The main dashboard. See server status, who's online, pick your channel (`Stable`, `Beta`, `Dev`), and press the big **PLAY** button.                                    |
-| **🧩 Client Mods** | Toggle official optional mods or drop your own `.jar` files here.                                                                                                       |
-| **📜 Console**     | Live logs while your game is running. If something goes wrong, you can search and copy errors here to send to staff. Open the launcher or Minecraft log file from here. |
-| **⚙️ Settings**    | Allocate RAM (slider, 2–16 GB; new installs default to 8 GB), change the game folder, **Remove game files**, or set extra JVM arguments.                                |
+### "It says a launcher update is required."
 
----
+The server's current pack needs a newer launcher. Microsoft Store installs update through the Store; other installs download the latest release from GitHub.
 
-## ❓ FAQ & Troubleshooting
+### "My game crashed or won't start."
 
-### 🛑 "It says my Minecraft account isn't bound!"
+1. Click **Repair & retry** under the error, or **Repair game files** in Settings. This checks every file and replaces anything broken.
+2. If it still fails, open **Console & logs**, click **Copy**, and send the output to the Lampas staff on Discord.
 
-Head over to the [Lampas Portal](https://dev.lampas.town) dashboard, link your Minecraft Java username to your account, and hit login again in the launcher!
+### "Will updates delete my worlds, screenshots or settings?"
 
-### 🆕 "It says Launcher update required!"
+No. Updates never replace your worlds, screenshots, logs, game options or server list. If you don't have game options or a server list yet, the launcher gives you the pack's starting copies. In your game options, the launcher only keeps the server's resource packs switched on, and the pack can change a specific key binding once (for example the map key); after that, you can change it back.
 
-The current pack needs a newer launcher. Store installs update through the Microsoft Store; other installs download the latest GitHub release. Launchers before 1.6.0 show a manifest error instead of this message for packs with seed files or keybind patches; updating fixes both.
+**Remove game files** in Settings is different: it deletes the game folder, including your worlds, after asking you to confirm.
 
-### 💥 "My game crashed or won't start!"
+### "Where are my game files with the Microsoft Store version?"
 
-1. Click the **Repair** button on the Play tab. This checks every single file against the server and replaces anything that broke.
-2. If it still crashes, head to the **Console** tab, click **Copy Logs**, and paste them in the Discord `#support` channel!
+By default, in the launcher's own storage, shown as **Launcher storage** at the bottom of the Play tab. Windows deletes that storage, including your worlds, when you uninstall the launcher. To keep your files after an uninstall, choose another folder during setup or move the game folder in Settings, for example to another drive.
 
-### 💾 "Will updating delete my worlds, screenshots, or keybinds?"
+### "Does closing the launcher close Minecraft?"
 
-**Nope!** Your `saves/`, `screenshots/` and `logs/` are never overwritten or deleted. If you have no `options.txt` or `servers.dat` yet, the launcher places the pack's starting copies; it never replaces ones you already have. The pack can rebind a specific key once (for example Xaero's map key to `,`): the launcher changes only that key's existing line in `options.txt`, one time, and you can rebind it afterwards. The launcher also keeps the required resource packs switched on in `options.txt`.
+No. Minecraft keeps running, and the launcher reconnects to it when you reopen it. To end the game from the launcher, press **Stop**; this closes Minecraft right away, so save your world first.
 
-### 🏪 "Where are my game files with the Microsoft Store version?"
+## Privacy and security
 
-Microsoft Store installs keep game files in the app's own storage, which Windows deletes on uninstall. If Windows redirected a game folder under `%APPDATA%` or `%LOCALAPPDATA%` into that storage, the launcher uses the redirected copy when it holds an existing install. The launcher also does not let a Store install move its game folder into AppData.
+- [Privacy notice](PRIVACY.md): what the launcher stores and shares.
+- [Security](SECURITY.md): how the launcher protects your account and files, and how to report a problem.
 
-### 🚪 "Does closing the launcher close Minecraft?"
+## For developers
 
-No. Minecraft keeps running if you close the launcher, and the launcher picks the running game up again when you reopen it (live console output is not available for a game started by an earlier launcher session; use **Minecraft Log** instead). Use the **Stop** button on the Play or Console tab to end the game from the launcher; it force-closes the process.
+Build steps, release process and internals are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-### 🧩 "How does config file ownership work?"
+## License
 
-Lampas uses a 3-tier ownership model for mod configurations:
+The source code is licensed under the [Apache License 2.0](LICENSE). Lampas names, logos and artwork are not covered by that license and are reserved by the Lampas SMP team. Minecraft, mods, resource packs and other game assets belong to their respective owners.
 
-- **`MANAGED`**: Lampas owns the whole file. Required files are synchronized and verified; obsolete files are deleted.
-- **`PRESERVE`**: You or the mod own the file. Lampas only seeds initial files if missing.
-- **`CONFIG PATCH / enforce`**: You own the config file; Lampas only enforces declared properties (e.g. turning off Hypixel-only chat tabs in `config/chatting.json`). Your personal settings, volume sliders, formatting, and comments stay intact!
-- **`CONFIG PATCH / once`**: Lampas seeds recommended values once, then relinquishes ownership to you.
-
----
-
-## 🤓 For Nerds & Developers
-
-If you want to build or tinker with the launcher code locally:
-
-### Supported Platforms & Runtime Requirements
-
-- **Supported Target Platforms:**
-  - **Windows (x64):** Windows 10, Windows 11 (NSIS installer & portable `.exe`). The Microsoft Store AppX requires Windows 10 version 1809 (build 17763) or later.
-  - **Linux (x64):** Modern glibc distributions (AppImage & `.tar.gz`).
-- **Tooling Requirements:**
-  - **Bun:** `v1.4.2` (pinned in CI)
-  - **Node.js:** not pinned. CI runs the runner's preinstalled `node` for the Electron install script, the fuse check and the packaged workflow test.
-  - **Electron:** `44.7.0`
-  - **Vite:** `^6.2.0` (renderer bundler)
-  - **TypeScript:** `^5.8.2`
-
-A Bun override scopes electron-builder's `app-builder-lib` to `@electron/get` `5.1.0`, removing the vulnerable `got`/`cacheable-request`/`http-cache-semantics` chain. Direct networking with default checksums is the intended configuration; custom Got proxy, TLS, or `downloadOptions` settings are unverified. Validate fresh packages for every release platform; CI packaging steps stop after 20 minutes.
-
-### Developer Commands
-
-```bash
-# 1. Install dependencies
-bun install --frozen-lockfile
-
-# 2. Typecheck main/preload (tsconfig.json) and renderer (tsconfig.renderer.json)
-bun run typecheck
-
-# 3. Check formatting with Prettier (CI runs this)
-bun run format:check
-
-# 4. Run full unit & integration test suite
-bun test
-
-# 5. Run real Electron smoke test harness (verifies assets, fonts, preload, & execution)
-bun run smoke
-
-# 6. Run performance benchmark suite (warm sync, repair, move, logging, catalog search)
-bun run benchmark
-
-# 7. Run in development mode (TypeScript watch + Vite HMR + Electron)
-bun run dev
-
-# 8. Production build (compiles main/preload CJS and bundles modular renderer)
-bun run build
-
-# 9. Package unpacked distribution directory (testing packaged paths without installers)
-bun run package:dir
-
-# 10. Package production distribution artifacts
-bun run package:win    # Windows installer & portable exe
-bun run package:appx   # Windows Microsoft Store AppX (unsigned; the Store signs it)
-bun run package:msix   # Alias of package:appx
-bun run package:linux  # Linux AppImage & tar.gz
-bun run package:all    # Multi-platform distribution build
-bun run package:test   # Build the AppX, sign it with devcert.pfx and install it (Windows, pwsh)
-```
-
-`scripts/package-and-test.ps1` builds the AppX, signs it with `devcert.pfx` from the repository root (gitignored) using the password in `LAMPAS_DEVCERT_PASSWORD`, and installs it with `Add-AppxPackage`. It looks for `signtool.exe` under `%LOCALAPPDATA%\electron-builder` and stops if `LAMPAS_DEVCERT_PASSWORD` is unset. The signing certificate must be trusted on the machine for the install to succeed.
-
-### GitHub Actions Builds and Windows Signing
-
-`validate.yml` runs on pushes and pull requests to `main` on Windows and Ubuntu: `bun audit`, `format:check`, typecheck, build, tests, `package:dir`, the fuse check, and the packaged smoke and packaged module workflow tests.
-
-Windows packages built by GitHub Actions are unsigned: the workflow passes no signing certificate to electron-builder. Windows may show a publisher warning. Microsoft signs the Store AppX during certification.
-
-Running the release workflow manually on a branch builds and uploads artifacts for that workflow run without publishing a GitHub Release. Pushing a version tag builds and publishes a release after validation. Signature verification should be restored when signing certificate custody is ready.
-
-GitHub artifact attestations are generated for public repositories. This private repository does not generate an attestation on GitHub Free; an eligible Enterprise Cloud repository can enable it with the `ENABLE_ARTIFACT_ATTESTATIONS` repository variable set to `true`. Releases still include a CycloneDX SBOM with the dependency inventory and a `SHA256SUMS` file with artifact hashes. The hashes do not verify publisher identity.
-
-### Microsoft Store Releases
-
-The Windows build also produces an unsigned `LampasLauncher-<version>-Windows.appx`, which is checksummed with the other artifacts but not attached to the GitHub Release. Every version tag runs the `store` job in `release-pack.yml` after the GitHub Release is published. The job submits that AppX to the Microsoft Store (product ID `9P9WWSV7L7RS`) with the Microsoft Store Developer CLI, unless the preflight below skips it. The Store signs the package during certification, which takes from a few hours to a few days.
-
-- Before submitting, the `store` job runs `.github/scripts/store-preflight.sh`. It checks the AppX name and its `SHA256SUMS` entry, the Store credentials, the Partner Center submission status, and the Store's public version. If a check fails, the job skips the submission, posts the reason to Discord, and still succeeds, so the release is unaffected. Skips happen when a submission is still in certification or processing, when `msstore submission status` prints output the script does not recognize, when the credentials are missing, or when the Store already has this version or a newer one.
-- Once certification finishes, submit a skipped release with **Actions → Microsoft Store Status → Run workflow** and `action` set to `publish`. Leave `tag` empty for the latest GitHub release, or enter a tag such as `v1.6.1`. The run must use `main`. The manual publish runs the same preflight, but any skip makes the run fail with the reason. It also requires a published, non-prerelease GitHub release whose `release-pack.yml` push run succeeded, including its `release` job, and it takes the AppX from that run's artifact. Tag builds keep that artifact for 90 days.
-- The Store steps need the secrets `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET` and `SELLER_ID`. The Entra application must have the **Manager** role under Partner Center → User management → Microsoft Entra applications.
-- `msstore publish` accepts only `.msix`, `.msixbundle` and `.msixupload` files, so the job uploads the AppX under an `.msix` name. Partner Center rejects MSIX uploads with a `MinVersion` of `10.0.17134.0` or lower, so `appx.minVersion` in `package.json` must stay at `10.0.17763.0` or higher.
-- The job replaces a pending submission that was created through the API, but it fails if a draft submission started in the Partner Center web UI exists. Submit or delete such drafts before tagging a release.
-- Every Store upload needs a higher package version than the last one. electron-builder maps `package.json` version `X.Y.Z` to package version `X.Y.Z.0` (for example `1.6.1` → `1.6.1.0`).
-- Store installs skip the launcher's GitHub update notice because the Store delivers updates.
-- The `release` job posts to Discord through the `DISCORD_WEBHOOK_URL` secret and the `store` job posts its submission result. All Discord posts use the username **Releases**. A missing secret logs a warning, and a Discord error never fails either job.
-- `store-status.yml` runs every 6 hours (`0 */6 * * *` UTC) on `ubuntu-latest` and only reports status. The Partner Center status step runs only when the four Store secrets are set. It compares the latest release with the Display Catalog and posts once per tag when that version is installable or its Partner Center submission fails. The one-time markers are Actions caches named `store-notified-<tag>-live` and `store-notified-<tag>-failed`, so run `workflow_dispatch` from the default branch.
-
----
-
-## 🏗️ Architecture & Operational Invariants
-
-### ⚡ Verification Modes: Fast-Mode Sync vs Full Repair
-
-- **Fast-Mode Sync (Pre-Launch Default):**
-  - Validates files against client manifest using a cached metadata shortcut: file size, modification timestamp (`mtimeMs`), and expected SHA-256 registered in `installation.json`.
-  - Untouched files require zero disk hashing before launch.
-  - Files requiring download or replacement are verified via in-flight SHA-256 streaming before atomic placement into the game directory.
-- **Full Repair (Explicit User Action):**
-  - Performs an exhaustive cryptographic SHA-256 hash calculation of every managed mod, configuration, and asset file.
-  - Independently re-validates `version-meta-26.2.json` and `assetIndex.json` against trusted Mojang SHA-1 digests before parsing objects.
-  - Re-validates all extracted native binaries and Fabric Loader libraries against authoritative upstream Maven sidecar digests, replacing any tampered or corrupted files.
-
-### 💽 Directory Relocation & Resilient Crash Recovery
-
-- **Non-Blocking Streaming Architecture:** Relocating the game directory uses an asynchronous streaming pipeline (`scanDirectoryAsync` -> `streamCopyAndHash` -> destination readback verification) bounded to 6 concurrent streams. Empty directories are preserved; unsupported links (symlinks, junctions) fail closed immediately to prevent data loss.
-- **Pre-Promotion Drift Guard:** Before promoting the staging directory or deleting the original source, the launcher re-scans the source tree to ensure no external processes modified, added, or deleted files during copying.
-- **Atomic State Journaling & Startup Recovery:** Operations publish state atomically through journal phases (`preparing` -> `copying` -> `verifying` -> `finalizing` -> `cleaning`). If a move is interrupted by power failure or application termination:
-  - On next startup, `recoverInterruptedMove` inspects the journal before any new filesystem mutations are permitted.
-  - Incomplete staging directories are cleaned up safely, or verified staging is promoted to final target, leaving the user's data completely intact.
-
-### 📜 Logging, Console Virtual Windowing, & Overload Protection
-
-- **Bounded Asynchronous Sink (`src/logger.ts`):** Replaces blocking synchronous filesystem writes with an asynchronous ring buffer and stream writer with backpressure management (4 MB buffer cap) and session rotation.
-- **Credential Redaction:** Sensitive authentication tokens (`token`, `refreshToken`, `minecraftAccessToken`) are strictly redacted _before_ payload serialization and live transport dispatch.
-- **UTF-8 Stream Framing (`src/game-log-stream.ts`):** Game stdout/stderr chunks are decoded using streaming UTF-8 decoders with 16 KiB per-line truncation protection. IPC batches are acknowledged via receiver-bound credit/ACK accounting to prevent memory backpressure when the renderer is hidden.
-- **Console Virtual Windowing (`ui/src/views/console-view.ts`):** The renderer console caps DOM elements at 1,000 lines (`MAX_CONSOLE_LINES`), pruning leading nodes via `DocumentFragment` batched updates. Auto-scroll is sticky: if the user scrolls upward to inspect logs, the viewport remains stationary without forced jumps.
-- **Dual Log-Source Buttons:**
-  - **Launcher Log**: Opens `launcher.log` containing launcher initialization, HTTP requests, sync steps, and process lifecycle events.
-  - **Minecraft Log**: Directly opens the active game directory's `logs/latest.log` generated by Minecraft itself.
-
-### ⚙️ Manifest-Defined Fabric Runtime Contract
-
-- **Authoritative Release Ownership**: The Lampas Launcher does **not** choose or hardcode the Fabric Loader version. The active release descriptor and client manifest specify the exact required Minecraft and Fabric Loader versions (`runtime: { minecraft, loader: { type: "fabric", version } }`).
-- **Pre-Sync Cross-Validation**: The launcher validates exact Minecraft and Loader agreement between the release descriptor and client manifest before performing downloads, cache checks, or deletions.
-- **Dynamic Fabric Bootstrap**: `FabricMetaResolver` queries the official Fabric Meta API (`/v2/versions/loader/{minecraft}/{loaderVersion}`) for Loader and Intermediary Maven coordinates, support libraries, SHA-256 sidecar checksums, and the client main class.
-- **Isolated Classpath**: The launch classpath is assembled dynamically using only the libraries declared for the active Loader version. Coexisting older Loader versions on disk never enter the active classpath.
-- **Scope Boundary**: Client runtime bootstrap is currently scoped to Minecraft `26.2`.
-- **Consistent Operations**: GameRunner, Sync, and Repair share the exact same manifest-defined runtime. Repair in full verification mode re-validates and repairs all Fabric libraries against trusted sidecar checksums.
-
----
-
-## 📄 License
-
-This project is licensed under the [Apache License 2.0](LICENSE).
-
-- **Source Code:** Licensed under [Apache-2.0](LICENSE).
-- **Branding & Assets:** Lampas logos, art assets, and server branding are proprietary and reserved by Lampas SMP / Lampas Tech Team.
-- **Game Assets & Mods:** Mod binaries, Minecraft runtime components, and game assets belong to their respective creators.
-
-_NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT._
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.

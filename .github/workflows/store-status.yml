@@ -62,7 +62,7 @@ jobs:
           version: v0.4.3
 
       # The expected Store version is the latest release tag with the v removed and .0 appended, matching
-      # electron-builder's package version (README: Microsoft Store Releases).
+      # electron-builder's package version (ARCHITECTURE.md: Microsoft Store).
       - name: Compare latest release with the Store catalog
         id: catalog
         shell: bash
