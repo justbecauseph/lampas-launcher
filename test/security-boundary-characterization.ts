@@ -3703,8 +3703,8 @@ try {
         assetIndex: "26.2",
         username: "Player",
         uuid: "00000000000000000000000000000001",
-        token: "0",
-        userType: "legacy",
+        token: "eyJ-test-minecraft-token",
+        userType: "msa",
         customJavaArgs: ["-Xmx4G", "-XX:+UseG1GC", "-Dfile.encoding=UTF-8"],
         mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
         classpathString: "libraries.jar",
@@ -3747,8 +3747,8 @@ try {
             assetIndex: "26.2",
             username: "Player",
             uuid: "00000000000000000000000000000001",
-            token: "0",
-            userType: "legacy",
+            token: "eyJ-test-minecraft-token",
+            userType: "msa",
             customJavaArgs: badArg,
             mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
             classpathString: "libraries.jar",
@@ -4612,11 +4612,14 @@ try {
       };
       fs.writeFileSync(releasePath, JSON.stringify(validRelease, null, 2));
 
+      const launchMinecraftToken = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: "test", exp: 4102444800 })).toString("base64url")}.signature`;
       // Ensure session credentials are present for LauncherAuth.refreshSession
       ConfigManager.set({ gameDir });
       ConfigManager.establishSession(originAPortal, {
         token: "valid-launch-token",
         refreshToken: "valid-launch-refresh",
+        // Launches need a Microsoft-issued Minecraft token (a JWT).
+        minecraftAccessToken: launchMinecraftToken,
       });
 
       // Spy Java runtime and bootstrap to isolate process execution sink
@@ -4808,14 +4811,14 @@ try {
             `Expected exact pair --uuid 00000000000000000000000000000001, got: ${getFlagVal("--uuid")}`,
           );
         }
-        if (getFlagVal("--accessToken") !== "0") {
+        if (getFlagVal("--accessToken") !== launchMinecraftToken) {
           throw new Error(
-            `Expected exact pair --accessToken 0, got: ${getFlagVal("--accessToken")}`,
+            `Expected exact pair --accessToken <Microsoft token>, got: ${getFlagVal("--accessToken")}`,
           );
         }
-        if (getFlagVal("--userType") !== "legacy") {
+        if (getFlagVal("--userType") !== "msa") {
           throw new Error(
-            `Expected exact pair --userType legacy, got: ${getFlagVal("--userType")}`,
+            `Expected exact pair --userType msa, got: ${getFlagVal("--userType")}`,
           );
         }
         if (getFlagVal("--versionType") !== "release") {

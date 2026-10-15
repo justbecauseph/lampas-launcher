@@ -13,6 +13,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
 
+// Shaped like a Microsoft-issued Minecraft token (a JWT); launches refuse anything else.
+const TEST_MINECRAFT_TOKEN = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: "test", exp: 4102444800 })).toString("base64url")}.signature`;
+
 const testRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "lampas-sync-pub-test-"),
 );
@@ -264,6 +267,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       name: "Player",
       minecraftUsername: "Player",
       minecraftUuid: "11111111-2222-3333-4444-555555555555",
+      minecraftAccessToken: TEST_MINECRAFT_TOKEN,
       isAdmin: false,
       isTech: false,
       roles: [],
@@ -306,6 +310,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       name: "Player",
       minecraftUsername: "Player",
       minecraftUuid: "11111111-2222-3333-4444-555555555555",
+      minecraftAccessToken: TEST_MINECRAFT_TOKEN,
       isAdmin: false,
       isTech: false,
       roles: [],
@@ -347,6 +352,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       name: "Player",
       minecraftUsername: "Player",
       minecraftUuid: "11111111-2222-3333-4444-555555555555",
+      minecraftAccessToken: TEST_MINECRAFT_TOKEN,
       isAdmin: false,
       isTech: false,
       roles: [],
@@ -382,6 +388,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       name: "Player",
       minecraftUsername: "Player",
       minecraftUuid: "11111111-2222-3333-4444-555555555555",
+      minecraftAccessToken: TEST_MINECRAFT_TOKEN,
       isAdmin: false,
       isTech: false,
       roles: [],
@@ -406,6 +413,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       id: "fixture",
       name: "Fixture",
       minecraftUuid: "11111111-2222-4333-8444-555555555555",
+      minecraftAccessToken: TEST_MINECRAFT_TOKEN,
       minecraftUsername: "Fixture",
       isAdmin: false,
       isTech: false,

@@ -1,7 +1,6 @@
 import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { createHash } from "node:crypto";
 import { ConfigManager, resolveStoreGameDir } from "./config";
 import { normalizePortalUrl } from "./portal-policy";
 import { LauncherAuth } from "./auth";
@@ -17,6 +16,7 @@ import {
   classifyJavaArgs,
   parseJavaArgs,
   InstallationStateError,
+  AuthRequiredError,
 } from "./ipc-boundary";
 import type { GameLogEntry, ReleaseDescriptor, UserProfile } from "./types";
 import { assertSyncSafetyAdmission } from "./sync-safety";
@@ -73,11 +73,34 @@ function readInstalledMetadata(gameDir: string, filePath: string): unknown {
   }
 }
 
-function generateOfflineUuid(username: string): string {
-  const md5 = createHash("md5").update(`OfflinePlayer:${username}`).digest();
-  md5[6] = (md5[6] & 0x0f) | 0x30; // Version 3
-  md5[8] = (md5[8] & 0x3f) | 0x80; // Variant RFC 4122
-  return md5.toString("hex");
+// Allowance for a clock that runs slightly ahead of Microsoft's.
+const TOKEN_EXPIRY_SKEW_MS = 60_000;
+
+/**
+ * Why `token` can't launch the game, or null when it can. A usable token is
+ * a Minecraft access token from a Microsoft sign-in: a JWT whose payload
+ * decodes and whose `exp`, when present, has not passed. The launcher can't
+ * verify the signature; the Lampas Portal obtains the token from Microsoft.
+ */
+export function minecraftTokenProblem(
+  token: string | undefined,
+  now: number = Date.now(),
+): "missing" | "expired" | null {
+  if (typeof token !== "string" || !token.startsWith("ey")) return "missing";
+  const parts = token.split(".");
+  if (parts.length !== 3 || token.length <= 50) return "missing";
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch {
+    return "missing";
+  }
+  if (!payload || typeof payload !== "object") return "missing";
+  const exp = (payload as { exp?: unknown }).exp;
+  if (typeof exp === "number" && exp * 1000 < now - TOKEN_EXPIRY_SKEW_MS) {
+    return "expired";
+  }
+  return null;
 }
 
 export class GameRunner {
@@ -220,15 +243,15 @@ export class GameRunner {
         activeUser = user;
       } else {
         if (!config.token && !config.refreshToken) {
-          throw new Error(
-            "Authentication required: Please log in with your Lampas Portal account before playing.",
+          throw new AuthRequiredError(
+            "Authentication required: log in with your Lampas Portal account before playing.",
           );
         }
         log("INFO", "Refreshing authentication tokens via Lampas Portal...");
         const refreshed = await LauncherAuth.refreshSession(config.portalUrl);
         if (!refreshed.valid || !refreshed.user) {
-          throw new Error(
-            "Session expired or invalid: Please log in with your Lampas Portal account.",
+          throw new AuthRequiredError(
+            "Your session has expired. Log in with your Lampas Portal account again.",
           );
         }
         activeUser = refreshed.user;
@@ -242,8 +265,8 @@ export class GameRunner {
         !uuid ||
         uuid === "00000000-0000-0000-0000-000000000000"
       ) {
-        throw new Error(
-          "Authentication error: No bound Minecraft account found in your profile. Please link your Minecraft account on the portal dashboard.",
+        throw new AuthRequiredError(
+          "No bound Minecraft account found in your profile. Link one on the Lampas Portal.",
         );
       }
 
@@ -264,13 +287,21 @@ export class GameRunner {
       const rawUuid = uuid.replace(/-/g, "");
       const mcToken =
         activeUser.minecraftAccessToken || activeConfig.minecraftAccessToken;
-      const isRealMsa = !!(
-        mcToken &&
-        mcToken.startsWith("ey") &&
-        mcToken.length > 50
-      );
-      const token = isRealMsa ? mcToken : "0";
-      const userType = isRealMsa ? "msa" : "legacy";
+      // The game runs only with an unexpired Minecraft token from a Microsoft
+      // sign-in. There is no offline-mode fallback.
+      const tokenProblem = minecraftTokenProblem(mcToken);
+      if (tokenProblem === "expired") {
+        throw new AuthRequiredError(
+          "Your Minecraft session has expired. Log out, log in again, and try once more.",
+        );
+      }
+      if (tokenProblem || !mcToken) {
+        throw new AuthRequiredError(
+          "Minecraft sign-in required: link the Microsoft account that owns Minecraft on the Lampas Portal, then log in again.",
+        );
+      }
+      const token = mcToken;
+      const userType = "msa";
 
       // Resolve active release descriptor for launch configuration
       let release: ReleaseDescriptor | null = releaseOverride || null;
@@ -425,10 +456,7 @@ export class GameRunner {
       const launchDir = resolveStoreGameDir(gameDir);
       if (launchDir !== gameDir)
         log("INFO", `Game files are in the Store package's copy: ${launchDir}`);
-      log(
-        "INFO",
-        `Authentication: ${isRealMsa ? "Microsoft Services" : "Lampas Protocol"}`,
-      );
+      log("INFO", "Authentication: Microsoft account");
 
       // 1. Ensure OpenJDK 25 Runtime
       const javaExe = await JavaRuntimeManager.ensureJava25(launchDir, (msg) =>
@@ -758,7 +786,7 @@ export function buildLaunchArguments(options: {
   username: string;
   uuid: string;
   token: string;
-  userType: string;
+  userType: "msa";
   customJavaArgs: string[];
   mainClass: string;
   classpathString: string;

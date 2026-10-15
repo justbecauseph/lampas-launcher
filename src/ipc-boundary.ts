@@ -63,6 +63,14 @@ export class OperationConflictError extends MainIpcError {
   }
 }
 
+/** The player must sign in, or link an account, before the action can run. */
+export class AuthRequiredError extends MainIpcError {
+  constructor(message: string) {
+    super(message, "AUTH_REQUIRED");
+    this.name = "AuthRequiredError";
+  }
+}
+
 export class InstallationStateError extends MainIpcError {
   constructor(message: string) {
     super(message, "INSTALLATION_STATE_ERROR");
@@ -1681,6 +1689,7 @@ export function sanitizeIpcError(err: any): Error {
     err instanceof UserCancelledError ||
     err instanceof OperationConflictError ||
     err instanceof InstallationStateError ||
+    err instanceof AuthRequiredError ||
     err instanceof ModPolicyError ||
     (err && typeof err === "object" && (err as any).isMainOwnedError === true)
   ) {

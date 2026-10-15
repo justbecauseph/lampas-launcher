@@ -16,6 +16,9 @@ import * as crypto from "node:crypto";
 import type { ReleaseDescriptor, UserProfile } from "../src/types";
 import type { ProcessProbe } from "../src/game-session";
 
+// Shaped like a Microsoft-issued Minecraft token (a JWT); launches refuse anything else.
+const TEST_MINECRAFT_TOKEN = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: "test", exp: 4102444800 })).toString("base64url")}.signature`;
+
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-runner-test-"));
 const userDataDir = path.join(testRoot, "user-data");
 const gameDir = path.join(testRoot, "game");
@@ -71,6 +74,7 @@ let mockSessionUser: any = {
   name: "TestPlayer",
   minecraftUsername: "TestPlayer",
   minecraftUuid: "11111111-2222-3333-4444-555555555555",
+  minecraftAccessToken: TEST_MINECRAFT_TOKEN,
   isAdmin: false,
   isTech: false,
   roles: [],
@@ -80,7 +84,9 @@ let mockSessionUser: any = {
 const { JavaRuntimeManager } = await import("../src/java-runtime");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
 const { ConfigManager } = await import("../src/config");
-const { GameRunner, buildLaunchArguments } = await import("../src/game-runner");
+const { GameRunner, buildLaunchArguments, minecraftTokenProblem } =
+  await import("../src/game-runner");
+const { AuthRequiredError } = await import("../src/ipc-boundary");
 const { LauncherAuth } = await import("../src/auth");
 
 const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(
@@ -122,6 +128,7 @@ beforeEach(() => {
     name: "TestPlayer",
     minecraftUsername: "TestPlayer",
     minecraftUuid: "11111111-2222-3333-4444-555555555555",
+    minecraftAccessToken: TEST_MINECRAFT_TOKEN,
     isAdmin: false,
     isTech: false,
     roles: [],
@@ -225,6 +232,74 @@ describe("GameRunner launch flow & Quick Play", () => {
     expect(spawnedCalls.length).toBe(1);
     const { jvmArgs } = spawnedCalls[0];
     expect(jvmArgs.includes("--quickPlayMultiplayer")).toBe(false);
+  });
+
+  test("refuses to launch without a Microsoft-issued Minecraft token", async () => {
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+    };
+
+    const jwt = (payload: object) =>
+      `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.signature`;
+    const cases: Array<[string | undefined, string]> = [
+      // No token, the old offline placeholder, and a token that isn't a JWT.
+      [undefined, "Minecraft sign-in required"],
+      ["0", "Minecraft sign-in required"],
+      ["portal-session-x", "Minecraft sign-in required"],
+      // A Microsoft token that expired an hour ago.
+      [
+        jwt({ sub: "test", exp: Math.floor(Date.now() / 1000) - 3600 }),
+        "Minecraft session has expired",
+      ],
+    ];
+    for (const [minecraftAccessToken, message] of cases) {
+      spawnedCalls = [];
+      bootstrapCalls = [];
+      javaSpy.mockClear();
+      mockSessionUser = { ...mockSessionUser, minecraftAccessToken };
+      const launch = GameRunner.launchGame(
+        dummyUser,
+        () => {},
+        () => {},
+        release,
+      );
+      await expect(launch).rejects.toThrow(message);
+      await expect(launch).rejects.toBeInstanceOf(AuthRequiredError);
+      // Refused before Java, the game files or the process.
+      expect(javaSpy).not.toHaveBeenCalled();
+      expect(bootstrapCalls).toHaveLength(0);
+      expect(spawnedCalls).toHaveLength(0);
+    }
+  });
+
+  test("minecraftTokenProblem accepts only decodable, unexpired JWTs", () => {
+    const jwt = (payload: unknown) =>
+      `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.signature`;
+    const now = Date.UTC(2026, 9, 15);
+    const nowSec = now / 1000;
+    expect(minecraftTokenProblem(undefined, now)).toBe("missing");
+    expect(minecraftTokenProblem("0", now)).toBe("missing");
+    expect(minecraftTokenProblem(`ey${"a".repeat(80)}`, now)).toBe("missing");
+    expect(
+      minecraftTokenProblem(`eyJhbGciOiJIUzI1NiJ9.${"!".repeat(40)}.sig`, now),
+    ).toBe("missing");
+    expect(minecraftTokenProblem(jwt({ exp: nowSec + 3600 }), now)).toBeNull();
+    // No exp claim: accepted, since the Portal vouches for the token.
+    expect(minecraftTokenProblem(jwt({ sub: "x".repeat(40) }), now)).toBeNull();
+    // Within the one-minute clock allowance, then past it.
+    expect(minecraftTokenProblem(jwt({ exp: nowSec - 30 }), now)).toBeNull();
+    expect(minecraftTokenProblem(jwt({ exp: nowSec - 120 }), now)).toBe(
+      "expired",
+    );
   });
 
   test("blocks launch if auto-connect server is malformed", async () => {
@@ -1087,8 +1162,8 @@ describe("buildLaunchArguments session marker", () => {
     assetIndex: "26.2",
     username: "TestPlayer",
     uuid: "11111111222233334444555555555555",
-    token: "0",
-    userType: "legacy",
+    token: "eyJ-test-minecraft-token",
+    userType: "msa",
     customJavaArgs: ["-Dcustom.arg=1"],
     mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
     classpathString: "a.jar",

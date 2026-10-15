@@ -14,8 +14,12 @@ mock.module("electron", () => ({
   shell: {},
 }));
 
-const { scrubErrorText, sanitizeIpcError, IpcValidationError } =
-  await import("../src/ipc-boundary");
+const {
+  scrubErrorText,
+  sanitizeIpcError,
+  IpcValidationError,
+  AuthRequiredError,
+} = await import("../src/ipc-boundary");
 const { ConfigManager } = await import("../src/config");
 
 const isWindows = process.platform === "win32";
@@ -124,5 +128,21 @@ describe("sanitizeIpcError preserves the configured game directory", () => {
     );
     expect(out.message).not.toContain(foreign);
     expect(out.message).toContain("<path>");
+  });
+});
+
+describe("sanitizeIpcError shows sign-in errors", () => {
+  test("an AuthRequiredError reaches the renderer with its message", () => {
+    const message =
+      "Minecraft sign-in required: link the Microsoft account that owns Minecraft on the Lampas Portal, then log in again.";
+    expect(sanitizeIpcError(new AuthRequiredError(message)).message).toBe(
+      message,
+    );
+  });
+
+  test("a plain Error still becomes the generic message", () => {
+    expect(
+      sanitizeIpcError(new Error("Minecraft sign-in required")).message,
+    ).toBe("Operation failed: An unexpected internal error occurred.");
   });
 });
