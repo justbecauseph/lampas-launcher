@@ -51,6 +51,7 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
     const titlebarStatusText = reg("titlebar-status-text");
     const runtimeLoaderVersion = reg("runtime-loader-version");
     const runtimeMinecraftVersion = reg("runtime-minecraft-version");
+    const aboutPackVersion = reg("about-pack-version");
 
     (globalThis as any).document = {
       getElementById: (id: string) => elements.get(id) || null,
@@ -91,6 +92,7 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
           getInstalledRuntime: async () => {
             getInstalledRuntimeCalled = true;
             return {
+              version: "1.9.0",
               minecraft: "1.21.1",
               loader: { type: "fabric", version: "0.16.5" },
             };
@@ -138,6 +140,7 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
       expect(getInstalledRuntimeCalled).toBe(true);
       expect(runtimeMinecraftVersion.innerText).toBe("1.21.1");
       expect(runtimeLoaderVersion.innerText).toBe("0.16.5");
+      expect(aboutPackVersion.innerText).toBe("1.9.0");
 
       // Verify game was launched directly
       expect(gameLaunchCalled).toBe(true);
@@ -169,6 +172,7 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
       // Verify sync pipeline WAS called
       expect(syncStartCalled).toBe(true);
       expect(gameLaunchCalled).toBe(true);
+      expect(aboutPackVersion.innerText).toBe("2.0.0");
 
       // Reset spies and simulate game closing
       exitCallback(0);

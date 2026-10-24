@@ -88,6 +88,8 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       "GeistMono-Regular.woff2",
       "GeistMono-Medium.woff2",
       "GeistMono-Bold.woff2",
+      "IosevkaTerm-Regular.woff2",
+      "IosevkaTerm-Bold.woff2",
     ];
 
     for (const fontName of expectedFonts) {
@@ -110,9 +112,11 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     expect(css).toMatch(/font-family:\s*["']IM Fell English["']/);
     expect(css).toMatch(/font-family:\s*["']Alegreya Sans["']/);
     expect(css).toMatch(/font-family:\s*["']Geist Mono["']/);
+    expect(css).toMatch(/font-family:\s*["']Iosevka Term["']/);
     expect(css).toContain("IMFellEnglish-Regular.woff2");
     expect(css).toContain("AlegreyaSans-Regular.woff2");
     expect(css).toContain("GeistMono-Regular.woff2");
+    expect(css).toContain("IosevkaTerm-Regular.woff2");
   });
 
   test("mod-view template eliminates inline onerror attribute in favor of programmatic handling", () => {

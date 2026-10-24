@@ -218,12 +218,7 @@ async function startApp(): Promise<void> {
     if (window.lampas.sync?.getInstalledRuntime) {
       try {
         const installedRuntime = await window.lampas.sync.getInstalledRuntime();
-        if (installedRuntime) {
-          playView.updateRuntimeSpecsUI(installedRuntime);
-          if (installedRuntime.launch) {
-            playView.updateLaunchTargetUI(installedRuntime.launch);
-          }
-        }
+        if (installedRuntime) playView.updateRuntimeSpecsUI(installedRuntime);
       } catch {}
     }
   } catch (err: any) {

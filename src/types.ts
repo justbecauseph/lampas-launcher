@@ -301,6 +301,8 @@ export interface ModCatalogEntry {
 }
 
 export interface InstalledRuntimeInfo {
+  /** Version of the installed pack. */
+  version?: string;
   minecraft: string;
   loader: {
     type: string;

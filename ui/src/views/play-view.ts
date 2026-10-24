@@ -46,7 +46,6 @@ export function describeProgress(prog: SyncProgress): string {
 
 export function initPlayView(options: PlayViewOptions): {
   updateRuntimeSpecsUI: (runtime: InstalledRuntimeInfo | null) => void;
-  updateLaunchTargetUI: (release: any) => void;
   setGameStatus: (state: GameStatus) => void;
   refreshPlayButton: () => void;
   dispose: () => void;
@@ -69,8 +68,6 @@ export function initPlayView(options: PlayViewOptions): {
   const btnPlayText = el("btn-play-text");
   const btnPlaySpinner = el("btn-play-spinner");
   const btnStop = el<HTMLButtonElement>("btn-stop");
-  const playTargetContainer = el("play-target-container");
-  const playTargetServer = el("play-target-server");
   const progressContainer = el("progress-container");
   const progressFill = el("progress-fill");
   const progressMsg = el("progress-msg");
@@ -85,6 +82,7 @@ export function initPlayView(options: PlayViewOptions): {
   const runtimeLoaderVersion = el("runtime-loader-version");
   const runtimeMinecraftVersion = el("runtime-minecraft-version");
   const aboutMinecraftVersion = el("about-minecraft-version");
+  const aboutPackVersion = el("about-pack-version");
 
   let status: GameStatus = "idle";
   const disposers: Array<() => void> = [];
@@ -150,19 +148,13 @@ export function initPlayView(options: PlayViewOptions): {
     launchError?.classList.add("hidden");
   }
 
-  function updateLaunchTargetUI(release: any): void {
-    if (playTargetContainer && playTargetServer) {
-      if (release?.launch?.autoConnect && release?.launch?.server) {
-        playTargetServer.innerText = release.launch.server;
-        playTargetContainer.classList.remove("hidden");
-      } else {
-        playTargetContainer.classList.add("hidden");
-      }
-    }
+  function setPackVersion(version: string | undefined): void {
+    if (version && aboutPackVersion) aboutPackVersion.innerText = version;
   }
 
   function updateRuntimeSpecsUI(runtime: InstalledRuntimeInfo | null): void {
     if (!runtime) return;
+    setPackVersion(runtime.version);
     if (runtime.loader?.version && runtimeLoaderVersion) {
       runtimeLoaderVersion.innerText = runtime.loader.version;
     }
@@ -214,12 +206,7 @@ export function initPlayView(options: PlayViewOptions): {
     try {
       if (window.lampas.sync?.getInstalledRuntime) {
         const installedRuntime = await window.lampas.sync.getInstalledRuntime();
-        if (installedRuntime) {
-          updateRuntimeSpecsUI(installedRuntime);
-          if (installedRuntime.launch) {
-            updateLaunchTargetUI(installedRuntime.launch);
-          }
-        }
+        if (installedRuntime) updateRuntimeSpecsUI(installedRuntime);
       }
     } catch {}
 
@@ -261,8 +248,8 @@ export function initPlayView(options: PlayViewOptions): {
       unsubProgress();
       unsubProgress = null;
 
-      if (syncResult.release) updateLaunchTargetUI(syncResult.release);
       if (syncResult.runtime) updateRuntimeSpecsUI(syncResult.runtime);
+      setPackVersion(syncResult.version);
 
       setGameStatus("launching");
       setPlayLabel("Starting…", true);
@@ -313,6 +300,22 @@ export function initPlayView(options: PlayViewOptions): {
     });
     disposers.push(unsub);
   }
+
+  // Removing game files can delete the installed pack.
+  const onGameFilesRemoved = async () => {
+    if (!aboutPackVersion) return;
+    try {
+      const installed = await window.lampas.sync?.getInstalledRuntime?.();
+      aboutPackVersion.innerText = installed?.version || "Not installed";
+    } catch {}
+  };
+  window.addEventListener?.("lampas:game-files-removed", onGameFilesRemoved);
+  disposers.push(() =>
+    window.removeEventListener?.(
+      "lampas:game-files-removed",
+      onGameFilesRemoved,
+    ),
+  );
 
   // Check initial game state
   if (window.lampas.game?.isRunning) {
@@ -366,7 +369,6 @@ export function initPlayView(options: PlayViewOptions): {
 
   return {
     updateRuntimeSpecsUI,
-    updateLaunchTargetUI,
     setGameStatus,
     refreshPlayButton,
     dispose: () => {

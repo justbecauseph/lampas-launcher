@@ -1141,6 +1141,7 @@ app.whenReady().then(async () => {
         }
         if (release?.minecraft && release?.loader?.version) {
           return {
+            version: release.version,
             minecraft: release.minecraft,
             loader: {
               type: release.loader.type || "fabric",

@@ -1,5 +1,6 @@
 /* Maraha type, bundled locally because the renderer CSP blocks remote fonts.
-   Display: IM Fell English. Body and UI: Alegreya Sans. Data: Geist Mono. */
+   Display: IM Fell English. Body and UI: Alegreya Sans. Data: Geist Mono.
+   Console: Iosevka Term. */
 @font-face {
   font-family: "IM Fell English";
   font-style: normal;
@@ -57,4 +58,19 @@
   font-weight: 700;
   font-display: swap;
   src: url("./assets/fonts/GeistMono-Bold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Iosevka Term";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/IosevkaTerm-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Iosevka Term";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/IosevkaTerm-Bold.woff2") format("woff2");
 }

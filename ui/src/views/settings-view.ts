@@ -747,6 +747,9 @@ export function initSettingsView(options: SettingsViewOptions): {
         btnRepairSettings.disabled = true;
         showToast("Verifying and repairing game files...", "info");
         const res = await window.lampas.sync.repair();
+        const aboutPackVersion = document.getElementById("about-pack-version");
+        if (res?.version && aboutPackVersion)
+          aboutPackVersion.innerText = res.version;
         const completionMsg =
           res?.message ||
           "Repair complete! All game files, assets, and libraries verified.";
