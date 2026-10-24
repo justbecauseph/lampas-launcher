@@ -282,12 +282,12 @@ describe("Console View Auto-Scroll and Controls", () => {
 
     // Initially idle -> stop button hidden
     consoleView.setGameStatus("idle");
-    expect(consoleStatusText.innerText).toBe("IDLE");
+    expect(consoleStatusText.innerText).toBe("Not running");
     expect(btnConsoleStop.classList.contains("hidden")).toBe(true);
 
     // Running -> stop button shown
     consoleView.setGameStatus("running");
-    expect(consoleStatusText.innerText).toBe("GAME RUNNING");
+    expect(consoleStatusText.innerText).toBe("Playing");
     expect(consoleStatusDot.className).toContain("status-dot-running");
     expect(btnConsoleStop.classList.contains("hidden")).toBe(false);
 

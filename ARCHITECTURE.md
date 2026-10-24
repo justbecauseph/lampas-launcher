@@ -77,7 +77,7 @@ The launcher handles this as follows:
 ## Sync and repair
 
 - **Fast sync** runs before every launch. A managed file whose size and modification time match the record in `.lampas/installation.json` is accepted without hashing. Downloads are SHA-256 verified while streaming and placed atomically.
-- **Full repair** (**Repair pack** on the Client mods tab, **Repair game files** in Settings, or **Repair & retry** after a failed launch) hashes every managed mod, config and asset with SHA-256. It checks the Minecraft client jar, libraries, natives and asset index against the SHA-1 digests in the bundled `version-meta-26.2.json`, and Fabric libraries against the `.sha256` sidecars on the Fabric Maven repository (falling back to `.sha1`). It replaces anything that doesn't match.
+- **Full repair** (**Repair game files** on the Mods tab, **Repair game files** in Settings, or **Repair and try again** after a failed launch) hashes every managed mod, config and asset with SHA-256. It checks the Minecraft client jar, libraries, natives and asset index against the SHA-1 digests in the bundled `version-meta-26.2.json`, and Fabric libraries against the `.sha256` sidecars on the Fabric Maven repository (falling back to `.sha1`). It replaces anything that doesn't match.
 - A hash or size mismatch on download is retried only when the body has the wrong size, since CDNs sometimes return an empty or truncated body. Wrong bytes of the right size fail at once, and the error stays classified as an integrity failure.
 
 ### File ownership
@@ -113,7 +113,7 @@ The launcher handles this as follows:
 
 - Sign-in uses a loopback OAuth callback with PKCE. The local server accepts only `GET /callback` with the expected host and state, answers once, and closes after the response has been sent (capped at 1 second). The callback pages inline their fonts because the server is gone by the time the browser could fetch them.
 - The game launches only with a Minecraft access token from a Microsoft sign-in, passed with `--userType msa`. The token comes from the Lampas Portal session. `minecraftTokenProblem` (`src/game-runner.ts`) requires a JWT whose payload decodes and whose `exp`, when present, hasn't passed (with one minute of clock allowance); the launcher can't verify the signature. A missing, malformed or expired token stops the launch with `AuthRequiredError` before Java is prepared. There is no offline-mode fallback.
-- **Play** first calls `game:checkReady`, which refreshes the session and runs the same identity check (`resolveLaunchIdentity`) without syncing anything. A player who can't launch sees what to fix before any download, and **Repair & retry** isn't offered for it. `game:launch` checks again.
+- **Play** first calls `game:checkReady`, which refreshes the session and runs the same identity check (`resolveLaunchIdentity`) without syncing anything. A player who can't launch sees what to fix before any download, and **Repair and try again** isn't offered for it. `game:launch` checks again.
 - Sign-in errors that the player has to act on (`AuthRequiredError`) reach the renderer with their message, capped at 120 characters. Other unexpected errors show a generic message.
 - A game that an older launcher started in legacy mode can still be adopted after an upgrade; adoption attaches to a running process and never starts one.
 

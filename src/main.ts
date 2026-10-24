@@ -694,16 +694,14 @@ app.whenReady().then(async () => {
           const confirmed = await IpcBoundary.confirmPrivilegedOperation(
             event,
             {
-              title: "Confirm Custom Java Executable",
-              message: "Set custom Java executable?",
-              detail: `Custom Java binary path:\n${newConfig.javaPath}`,
-              confirmButtonText: "Confirm",
+              title: "Custom Java",
+              message: "Use a different Java?",
+              detail: `Java program:\n${newConfig.javaPath}`,
+              confirmButtonText: "Use it",
             },
           );
           if (!confirmed) {
-            throw new UserCancelledError(
-              "Custom Java executable update cancelled by user.",
-            );
+            throw new UserCancelledError("You cancelled the change.");
           }
         }
       }
@@ -717,7 +715,7 @@ app.whenReady().then(async () => {
         const classification = classifyJavaArgs(parsedArgs);
         if (classification.hasLaunchTargetOverride) {
           throw new IpcValidationError(
-            "Custom Java arguments cannot override launch target or main class.",
+            "These Java arguments aren't allowed because they change how Minecraft starts.",
           );
         }
         if (classification.isPrivileged) {
@@ -729,17 +727,15 @@ app.whenReady().then(async () => {
             const confirmed = await IpcBoundary.confirmPrivilegedOperation(
               event,
               {
-                title: "Security Warning: Privileged Java Arguments",
+                title: "Allow these Java arguments?",
                 message:
-                  "The specified Java arguments contain privileged or sensitive flags that can execute arbitrary code.",
-                detail: `Detected flags:\n${classification.privilegedReasons.join("\n")}\n\nFull arguments:\n${newConfig.javaArgs}\n\nDo you want to allow these arguments?`,
+                  "Some of these arguments can run other programs on your computer. Only allow them if the Lampas team asked you to.",
+                detail: `Arguments that need your OK:\n${classification.privilegedReasons.join("\n")}\n\nAll arguments:\n${newConfig.javaArgs}`,
                 confirmButtonText: "Allow",
               },
             );
             if (!confirmed) {
-              throw new UserCancelledError(
-                "Privileged Java arguments rejected by user.",
-              );
+              throw new UserCancelledError("You cancelled the change.");
             }
           }
         }
@@ -780,7 +776,7 @@ app.whenReady().then(async () => {
       }
       const snapshot = IpcBoundary.createApprovalSnapshot(event);
       const result = await dialog.showOpenDialog(snapshot.window, {
-        title: "Select Minecraft Installation Directory",
+        title: "Choose a game folder",
         defaultPath: defaultPath || ConfigManager.get().gameDir,
         properties: ["openDirectory", "createDirectory"],
       });
@@ -812,13 +808,13 @@ app.whenReady().then(async () => {
       );
       if (!hasApproval) {
         const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
-          title: "Confirm Minecraft Installation Directory",
-          message: "Configure Minecraft installation directory?",
-          detail: `The application will configure its installation at:\n${targetPath}`,
-          confirmButtonText: "Configure",
+          title: "Game folder",
+          message: "Use this game folder?",
+          detail: `Minecraft and mods will be installed in:\n${targetPath}`,
+          confirmButtonText: "Use this folder",
         });
         if (!confirmed) {
-          throw new UserCancelledError("Configuration cancelled by user.");
+          throw new UserCancelledError("You cancelled choosing a game folder.");
         }
       }
       OperationCoordinator.assertCanMutate("configure game directory");
@@ -837,13 +833,13 @@ app.whenReady().then(async () => {
       );
       if (!hasApproval) {
         const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
-          title: "Confirm Installation Move",
-          message: "Move Minecraft installation directory?",
-          detail: `The existing installation and data will be moved to:\n${targetPath}`,
+          title: "Game folder",
+          message: "Move the game folder?",
+          detail: `Everything will be moved to:\n${targetPath}`,
           confirmButtonText: "Move",
         });
         if (!confirmed) {
-          throw new UserCancelledError("Move cancelled by user.");
+          throw new UserCancelledError("You cancelled the folder move.");
         }
       }
       OperationCoordinator.assertCanMutate("move game directory");
@@ -1168,7 +1164,7 @@ app.whenReady().then(async () => {
       }
       const snapshot = IpcBoundary.createApprovalSnapshot(event);
       const result = await dialog.showOpenDialog(snapshot.window, {
-        title: "Add local client mods",
+        title: "Add mods",
         filters: [{ name: "Minecraft mods", extensions: ["jar"] }],
         properties: ["openFile", "multiSelections"],
       });
@@ -1211,13 +1207,13 @@ app.whenReady().then(async () => {
       }
       if (unapproved.length > 0) {
         const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
-          title: "Confirm Mod Import",
-          message: "Import local client mod(s)?",
-          detail: `Are you sure you want to import the following mod file(s)?\n${unapproved.join("\n")}`,
-          confirmButtonText: "Import",
+          title: "Add mods",
+          message: "Add these mods?",
+          detail: unapproved.join("\n"),
+          confirmButtonText: "Add",
         });
         if (!confirmed) {
-          throw new UserCancelledError("Mod import cancelled by user.");
+          throw new UserCancelledError("You cancelled adding mods.");
         }
         OperationCoordinator.assertCanMutate("add client mods");
       }
@@ -1234,12 +1230,12 @@ app.whenReady().then(async () => {
         const mod = catalog.find((m) => m.id === id && m.source === "official");
         if (!mod) {
           throw new ModPolicyError(
-            `Cannot disable unknown official mod: '${id}'`,
+            "Couldn't check the pack's mod list. Press Check files, then try again.",
           );
         }
         if (mod.canDisable !== true) {
           throw new ModPolicyError(
-            `Official mod '${id}' is required and cannot be disabled.`,
+            "This mod is required and can't be turned off.",
           );
         }
       }
@@ -1319,13 +1315,13 @@ app.whenReady().then(async () => {
       }
       if (unapproved.length > 0) {
         const confirmed = await IpcBoundary.confirmPrivilegedOperation(event, {
-          title: "Confirm Shader Pack Import",
-          message: "Import shader pack(s)?",
-          detail: `Are you sure you want to import the following shader pack file(s)?\n${unapproved.join("\n")}`,
-          confirmButtonText: "Import",
+          title: "Add shader packs",
+          message: "Add these shader packs?",
+          detail: unapproved.join("\n"),
+          confirmButtonText: "Add",
         });
         if (!confirmed) {
-          throw new UserCancelledError("Shader pack import cancelled by user.");
+          throw new UserCancelledError("You cancelled adding shader packs.");
         }
         OperationCoordinator.assertCanMutate("add shader packs");
       }

@@ -183,7 +183,7 @@ export function renderSuccessHtml(): string {
 }
 
 export function renderErrorHtml(
-  message: string = "Authentication failed. Please return to the launcher and try again.",
+  message: string = "Sign-in didn't work. Go back to the launcher and try again.",
 ): string {
   return renderPage({
     title: "Sign-in failed · Lampas Launcher",

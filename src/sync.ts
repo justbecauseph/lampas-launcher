@@ -329,9 +329,7 @@ export class LauncherSync {
       !config.sessionPortalUrl ||
       config.sessionPortalUrl !== portalUrl
     ) {
-      throw new AuthRequiredError(
-        "Authentication required: log in with your Lampas Portal account before playing.",
-      );
+      throw new AuthRequiredError("Sign in with your Lampas account to play.");
     }
     const channel = config.selectedChannel || "stable";
     const gameDir = config.gameDir;
@@ -342,7 +340,7 @@ export class LauncherSync {
 
     onProgress({
       status: "checking",
-      message: `Connecting to Lampas Portal channel '${channel}'...`,
+      message: "Checking for updates…",
       filesCompleted: 0,
       totalFiles: 0,
       percent: 5,
@@ -419,7 +417,7 @@ export class LauncherSync {
       // 3. Fetch client manifest
       onProgress({
         status: "checking",
-        message: `Fetching client manifest v${targetVersion}...`,
+        message: `Getting pack ${targetVersion}…`,
         filesCompleted: 0,
         totalFiles: 0,
         percent: 15,
@@ -859,7 +857,7 @@ export class LauncherSync {
           );
           onProgress({
             status: "downloading",
-            message: `Downloading ${path.basename(file.path)}...`,
+            message: "Downloading mods…",
             currentFile: file.path,
             filesCompleted: completedCount,
             totalFiles,
@@ -874,7 +872,7 @@ export class LauncherSync {
       // Apply only after every artifact is present and verified in the cache.
       onProgress({
         status: "staging",
-        message: "Staging and applying modpack files...",
+        message: "Installing the update…",
         filesCompleted: completedCount,
         totalFiles,
         percent: 96,
@@ -1013,7 +1011,7 @@ export class LauncherSync {
     if (configPatches.length > 0) {
       onProgress({
         status: "staging",
-        message: "Applying modpack configuration patches...",
+        message: "Applying pack settings…",
         filesCompleted: totalFiles,
         totalFiles,
         percent: 98,
@@ -1088,7 +1086,7 @@ export class LauncherSync {
 
     onProgress({
       status: "complete",
-      message: `Lampas Modpack v${targetVersion} is ready!`,
+      message: `Pack ${targetVersion} is installed.`,
       filesCompleted: totalFiles,
       totalFiles,
       percent: 100,
@@ -1180,7 +1178,7 @@ export class LauncherSync {
     // 1. Force full synchronization of all modpack files with SHA-256 validation
     onProgress({
       status: "repairing",
-      message: "Verifying and repairing modpack files...",
+      message: "Checking pack files…",
       filesCompleted: 0,
       totalFiles: 100,
       percent: 5,
@@ -1208,7 +1206,7 @@ export class LauncherSync {
     // 2. Minecraft 26.2 client JAR, Fabric Loader, libraries, natives, and 5,000+ asset objects
     onProgress({
       status: "repairing",
-      message: "Verifying Minecraft libraries, natives, and asset objects...",
+      message: "Checking Minecraft files…",
       filesCompleted: 40,
       totalFiles: 100,
       percent: 45,
@@ -1223,7 +1221,7 @@ export class LauncherSync {
         log("INFO", msg);
         onProgress({
           status: "repairing",
-          message: msg,
+          message: "Checking Minecraft files…",
           filesCompleted: 70,
           totalFiles: 100,
           percent: 75,
@@ -1237,7 +1235,7 @@ export class LauncherSync {
     // 3. Java 25 verification
     onProgress({
       status: "repairing",
-      message: "Verifying OpenJDK 25 runtime environment...",
+      message: "Checking Java…",
       filesCompleted: 85,
       totalFiles: 100,
       percent: 85,
@@ -1254,8 +1252,7 @@ export class LauncherSync {
 
     onProgress({
       status: "complete",
-      message:
-        "Repair complete! All modpack files, assets, and libraries are verified.",
+      message: "Repair finished. Missing or damaged files were replaced.",
       filesCompleted: 100,
       totalFiles: 100,
       percent: 100,
@@ -1267,7 +1264,7 @@ export class LauncherSync {
 
     return {
       success: true,
-      message: "Installation repaired successfully.",
+      message: "Repair finished. Missing or damaged files were replaced.",
       version: syncResult.version,
       packName: syncResult.packName,
     };
@@ -1405,8 +1402,7 @@ export class LauncherSync {
       id: `local:${mod.filename}`,
       name: mod.filename.replace(/\.jar$/i, ""),
       filename: mod.filename,
-      description:
-        "Local client mod. Preserved when the Lampas pack synchronizes.",
+      description: "Added by you. Stays when the pack updates.",
       side: "client",
       categories: ["custom"],
       source: "custom",
@@ -1419,7 +1415,7 @@ export class LauncherSync {
       name: pack.filename.replace(/\.zip$/i, ""),
       filename: pack.filename,
       description:
-        "Local shader pack. Select it in-game under Video Settings → Shader Packs.",
+        "Added by you. Pick it in-game under Options → Video Settings → Shader Packs.",
       side: "client",
       categories: ["shader", "custom"],
       source: "custom",

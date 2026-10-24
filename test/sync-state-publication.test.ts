@@ -16,6 +16,9 @@ import { EventEmitter } from "node:events";
 // Shaped like a Microsoft-issued Minecraft token (a JWT); launches refuse anything else.
 const TEST_MINECRAFT_TOKEN = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: "test", exp: 4102444800 })).toString("base64url")}.signature`;
 
+const MISMATCH_MESSAGE =
+  "Your game files don't match the current pack. Use Repair game files in Settings.";
+
 const testRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "lampas-sync-pub-test-"),
 );
@@ -274,13 +277,19 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       allowedChannels: ["stable"],
     };
 
+    const logs: string[] = [];
     await expect(
       GameRunner.launchGame(
         dummyUser,
-        () => {},
+        (entry) => logs.push(entry.message),
         () => {},
       ),
-    ).rejects.toThrow(/Incompatible installation state detected/);
+    ).rejects.toThrow(MISMATCH_MESSAGE);
+    expect(
+      logs.some((line) =>
+        line.includes("Incompatible installation state detected"),
+      ),
+    ).toBe(true);
   });
 
   test("GameRunner.launchGame rejects launch when syncGeneration IDs mismatch", async () => {
@@ -317,13 +326,19 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       allowedChannels: ["stable"],
     };
 
+    const logs: string[] = [];
     await expect(
       GameRunner.launchGame(
         dummyUser,
-        () => {},
+        (entry) => logs.push(entry.message),
         () => {},
       ),
-    ).rejects.toThrow(/Incompatible installation generation detected/);
+    ).rejects.toThrow(MISMATCH_MESSAGE);
+    expect(
+      logs.some((line) =>
+        line.includes("Incompatible installation generation detected"),
+      ),
+    ).toBe(true);
   });
 
   test("GameRunner.launchGame maintains backward compatibility with legacy states lacking syncGeneration", async () => {
@@ -401,7 +416,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
         () => {},
         () => {},
       ),
-    ).rejects.toThrow(/Installation state metadata is corrupted/);
+    ).rejects.toThrow(MISMATCH_MESSAGE);
   });
 
   test("cached launch metadata rejects oversized releases and poisoned prior paths before Java execution", async () => {
@@ -433,7 +448,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
         () => {},
         () => {},
       ),
-    ).rejects.toThrow(/corrupted/);
+    ).rejects.toThrow(MISMATCH_MESSAGE);
     fs.writeFileSync(
       releasePath,
       JSON.stringify(cachedReleaseFixture("2.0.0")),
@@ -458,7 +473,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
         () => {},
         () => {},
       ),
-    ).rejects.toThrow(/invalid/);
+    ).rejects.toThrow(MISMATCH_MESSAGE);
     expect(javaSpy.mock.calls.length).toBe(javaCalls);
   });
 

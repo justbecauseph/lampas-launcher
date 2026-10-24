@@ -1,5 +1,9 @@
 import type { ModCatalogEntry } from "../types";
-import { cleanModDisplayName, formatFriendlyError } from "../utils";
+import {
+  cleanModDisplayName,
+  formatFriendlyError,
+  isUserCancelled,
+} from "../utils";
 
 interface NormalizedMod extends ModCatalogEntry {
   _searchKey: string;
@@ -30,15 +34,15 @@ const UPLOAD_COPY: Record<
   }
 > = {
   mod: {
-    mark: "JAR",
-    title: "Drop client mod JARs here",
-    hint: "Local additions stay yours and are never removed by synchronization.",
-    button: "Add local mods",
+    mark: ".jar",
+    title: "Drop mod files (.jar) here",
+    hint: "Mods you add here stay when the pack updates.",
+    button: "Add your mods",
     extension: ".jar",
   },
   shader: {
-    mark: "ZIP",
-    title: "Drop shader pack ZIPs here",
+    mark: ".zip",
+    title: "Drop shader packs (.zip) here",
     hint: "Then pick it in-game under Options → Video Settings → Shader Packs.",
     button: "Add shader packs",
     extension: ".zip",
@@ -225,15 +229,20 @@ export function initModsView(options: ModsViewOptions): () => void {
 
     const filtered = allMods.filter((mod) => {
       // Filter category/type check
-      if (filter === "client" && mod.side !== "client") return false;
+      if (
+        filter === "optional" &&
+        !(mod.source === "official" && mod.canDisable)
+      )
+        return false;
+      if (
+        filter === "required" &&
+        !(mod.source === "official" && !mod.canDisable)
+      )
+        return false;
       if (filter === "disabled" && mod.enabled !== false) return false;
       if (filter === "custom" && mod.source !== "custom") return false;
-      if (filter === "server" && mod.side !== "server") return false;
-      if (filter === "both" && mod.side !== "both") return false;
       if (
-        !["all", "client", "disabled", "custom", "server", "both"].includes(
-          filter,
-        )
+        !["all", "optional", "required", "disabled", "custom"].includes(filter)
       ) {
         const cats = (mod.categories || []).map((c) => c.toLowerCase());
         if (!cats.includes(filter)) return false;
@@ -255,7 +264,7 @@ export function initModsView(options: ModsViewOptions): () => void {
       const emptyText =
         filter === "shader" && !query
           ? "No shader packs yet. Drop a .zip above to add one."
-          : "No mods found matching your search and filter criteria.";
+          : "No mods match your search.";
       modsGrid.innerHTML = `
         <div class="col-span-2 empty-state">
           ${emptyText}
@@ -267,12 +276,10 @@ export function initModsView(options: ModsViewOptions): () => void {
     const generation = ++iconRenderGeneration;
     modsGrid.innerHTML = filtered
       .map((mod) => {
-        const sideBadge =
-          mod.side === "client"
-            ? '<span class="tag">Client only</span>'
-            : mod.side === "server"
-              ? '<span class="tag">Server only</span>'
-              : '<span class="tag">Required</span>';
+        const requirementBadge =
+          mod.source === "official"
+            ? `<span class="tag">${mod.canDisable ? "Optional" : "Required"}</span>`
+            : "";
 
         const fallbackChar = escapeHtml(
           (mod.name || mod.id || "M")[0].toUpperCase(),
@@ -300,11 +307,11 @@ export function initModsView(options: ModsViewOptions): () => void {
           : "";
         const localBadge =
           mod.source === "custom"
-            ? '<span class="local-mod-badge">Local</span>'
+            ? '<span class="local-mod-badge">Added by you</span>'
             : "";
         const remove =
           mod.source === "custom"
-            ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" data-kind="${mod.kind === "shaderpack" ? "shaderpack" : "mod"}" data-name="${modName}" title="Remove this local ${mod.kind === "shaderpack" ? "shader pack" : "mod"}">Remove</button>`
+            ? `<button class="mod-remove-btn js-mod-remove" data-filename="${escapeHtml(mod.filename || "")}" data-kind="${mod.kind === "shaderpack" ? "shaderpack" : "mod"}" data-name="${modName}" title="Remove this ${mod.kind === "shaderpack" ? "shader pack" : "mod"}">Remove</button>`
             : "";
 
         return `
@@ -314,9 +321,9 @@ export function initModsView(options: ModsViewOptions): () => void {
               <div class="min-w-0 flex-1">
                 <div class="flex items-center justify-between gap-1">
                   <h5 class="mod-name truncate" title="${modName}">${modName}</h5>
-                  <div class="flex items-center gap-1">${localBadge}${sideBadge}${toggle}</div>
+                  <div class="flex items-center gap-1">${localBadge}${requirementBadge}${toggle}</div>
                 </div>
-                <p class="mod-description line-clamp-2">${escapeHtml(mod.description || "Synchronized modpack component.")}</p>
+                <p class="mod-description line-clamp-2">${escapeHtml(mod.description || "Part of the Lampas pack.")}</p>
               </div>
             </div>
             <div class="mod-meta">
@@ -410,7 +417,7 @@ export function initModsView(options: ModsViewOptions): () => void {
           onModsChanged?.();
         } catch (err: any) {
           showToast(
-            `Could not remove ${displayName}: ${formatFriendlyError(err)}`,
+            `Couldn't remove ${displayName}: ${formatFriendlyError(err)}`,
             "error",
           );
         } finally {
@@ -463,7 +470,7 @@ export function initModsView(options: ModsViewOptions): () => void {
         // Rollback checkbox
         target.checked = !enabled;
         showToast(
-          `Could not ${enabled ? "enable" : "disable"} ${displayName}: ${formatFriendlyError(err)}`,
+          `Couldn't ${enabled ? "enable" : "disable"} ${displayName}: ${formatFriendlyError(err)}`,
           "error",
         );
       } finally {
@@ -510,7 +517,7 @@ export function initModsView(options: ModsViewOptions): () => void {
   async function afterImport(mode: UploadMode, res: unknown): Promise<void> {
     if (Array.isArray(res) && res.length) {
       showToast(
-        mode === "shader" ? "Shader packs updated." : "Client mods updated.",
+        mode === "shader" ? "Shader packs updated." : "Mods added.",
         "success",
       );
       await loadCatalog();
@@ -519,8 +526,9 @@ export function initModsView(options: ModsViewOptions): () => void {
   }
 
   function importErrorToast(mode: UploadMode, err: unknown): void {
+    if (isUserCancelled(err)) return;
     showToast(
-      `Could not add ${mode === "shader" ? "shader pack" : "mod"}: ${formatFriendlyError(err)}`,
+      `Couldn't add the ${mode === "shader" ? "shader pack" : "mod"}: ${formatFriendlyError(err)}`,
       "error",
     );
   }
@@ -556,16 +564,20 @@ export function initModsView(options: ModsViewOptions): () => void {
       if (!window.lampas?.sync?.repair) return;
       try {
         btnRepairPack.disabled = true;
-        showToast("Verifying and repairing game files...", "info");
+        showToast("Checking game files…", "info");
         const res = await window.lampas.sync.repair();
         const completionMsg =
           res?.message ||
-          "Repair complete! All game files, assets, and libraries verified.";
+          "Repair finished. Missing or damaged files were replaced.";
         showToast(completionMsg, "success", 4500);
         await loadCatalog();
         onModsChanged?.();
       } catch (err: any) {
-        showToast(`Repair failed: ${formatFriendlyError(err)}`, "error", 6000);
+        showToast(
+          `Couldn't repair game files: ${formatFriendlyError(err)}`,
+          "error",
+          6000,
+        );
       } finally {
         btnRepairPack.disabled = false;
       }
@@ -585,16 +597,16 @@ export function initModsView(options: ModsViewOptions): () => void {
       if (!window.lampas?.sync?.start) return;
       try {
         btnVerifyPack.disabled = true;
-        showToast("Verifying modpack integrity...", "info");
+        showToast("Checking pack files…", "info");
         const res = await window.lampas.sync.start();
         const completionMsg =
-          res?.message || `Modpack v${res.version} verified successfully.`;
+          res?.message || `All pack files are OK (version ${res.version}).`;
         showToast(completionMsg, "success", 4500);
         await loadCatalog();
         onModsChanged?.();
       } catch (err: any) {
         showToast(
-          `Verification failed: ${formatFriendlyError(err)}`,
+          `Couldn't check files: ${formatFriendlyError(err)}`,
           "error",
           6000,
         );
@@ -641,7 +653,7 @@ export function initModsView(options: ModsViewOptions): () => void {
           showToast(
             mode === "shader"
               ? "Shader packs must be .zip files."
-              : "Client mods must be .jar files. For shader packs, open the Shaders filter first.",
+              : "Mods must be .jar files. To add shader packs, choose Shaders first.",
             "error",
           );
         }

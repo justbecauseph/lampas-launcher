@@ -41,4 +41,11 @@ describe("OAuth callback pages", () => {
     );
     expect(html).not.toContain('<script>alert("x")</script>');
   });
+
+  test("error page without a message says what to do next", () => {
+    const html = renderErrorHtml();
+    expect(html).toContain(
+      "Sign-in didn&#39;t work. Go back to the launcher and try again.",
+    );
+  });
 });

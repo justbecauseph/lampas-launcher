@@ -1201,6 +1201,9 @@ h3 {
 .presence-count {
   color: var(--ash);
 }
+.presence-summary:has(.presence-count:empty) .presence-sep {
+  display: none;
+}
 .server-presence-detail {
   flex-basis: 100%;
   font-size: 14px;

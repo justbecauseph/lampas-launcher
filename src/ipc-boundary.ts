@@ -185,7 +185,7 @@ export function parseJavaArgs(value: string): string[] {
   }
   if (escaped) current += "\\";
   if (quote)
-    throw new Error("Custom Java arguments contain an unclosed quote.");
+    throw new IpcValidationError("A quote in the Java arguments isn't closed.");
   if (current) args.push(current);
   return args;
 }
@@ -1254,7 +1254,7 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
     const classification = classifyJavaArgs(tokens);
     if (classification.hasLaunchTargetOverride) {
       throw new IpcValidationError(
-        "Custom Java arguments cannot override launch target or main class.",
+        "These Java arguments aren't allowed because they change how Minecraft starts.",
       );
     }
     sanitized.javaArgs = raw.javaArgs;

@@ -3,7 +3,7 @@ import type {
   DirectoryMoveProgress,
   RendererSettingsDto,
 } from "../types";
-import { formatFriendlyError } from "../utils";
+import { formatFriendlyError, isUserCancelled } from "../utils";
 
 export interface SettingsViewOptions {
   showToast: (
@@ -16,6 +16,12 @@ export interface SettingsViewOptions {
 }
 
 const PENDING_TOAST_KEY = "lampas:pending-toast";
+
+const CHANNEL_LABELS: Record<"stable" | "beta" | "dev", string> = {
+  stable: "Stable",
+  beta: "Beta",
+  dev: "Dev",
+};
 
 /** Holds a toast across window.location.reload(); see showPendingToast. */
 function queueToastAfterReload(
@@ -204,7 +210,7 @@ export function initSettingsView(options: SettingsViewOptions): {
       const isAppStorage =
         appStorageDir !== null &&
         dir.toLowerCase() === appStorageDir.toLowerCase();
-      gamedirDisplay.innerText = isAppStorage ? "Launcher storage" : dir;
+      gamedirDisplay.innerText = isAppStorage ? "Default location" : dir;
       gamedirDisplay.title = dir;
     }
     if (settingGamedirInput) {
@@ -222,7 +228,7 @@ export function initSettingsView(options: SettingsViewOptions): {
       }
     });
     if (titlebarChannelBadge) {
-      titlebarChannelBadge.innerText = channel.toUpperCase();
+      titlebarChannelBadge.innerText = CHANNEL_LABELS[channel];
       if (channel === "stable") titlebarChannelBadge.classList.add("hidden");
       else titlebarChannelBadge.classList.remove("hidden");
     }
@@ -285,10 +291,11 @@ export function initSettingsView(options: SettingsViewOptions): {
             updateGameDirUI(updated.gameDir);
             currentConfig = updated;
             onConfigChanged(updated);
-            showToast("Installation directory initialized.", "success");
+            showToast("Game folder set.", "success");
           } catch (err: any) {
+            if (isUserCancelled(err)) return;
             if (initialDirError) {
-              initialDirError.innerText = err.message;
+              initialDirError.innerText = formatFriendlyError(err);
               initialDirError.classList.remove("hidden");
             }
           }
@@ -316,7 +323,7 @@ export function initSettingsView(options: SettingsViewOptions): {
               if (!val.valid) {
                 if (initialDirError) {
                   initialDirError.innerText =
-                    val.reason || "Invalid directory path";
+                    val.reason || "Choose a different folder.";
                   initialDirError.classList.remove("hidden");
                 }
                 return;
@@ -328,10 +335,11 @@ export function initSettingsView(options: SettingsViewOptions): {
             updateGameDirUI(updated.gameDir);
             currentConfig = updated;
             onConfigChanged(updated);
-            showToast("Installation directory configured.", "success");
+            showToast("Game folder set.", "success");
           } catch (err: any) {
+            if (isUserCancelled(err)) return;
             if (initialDirError) {
-              initialDirError.innerText = err.message;
+              initialDirError.innerText = formatFriendlyError(err);
               initialDirError.classList.remove("hidden");
             }
           }
@@ -375,7 +383,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         flashSaved();
       } catch (err: any) {
         showToast(
-          `Could not update RAM allocation: ${formatFriendlyError(err)}`,
+          `Couldn't change memory: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -394,12 +402,12 @@ export function initSettingsView(options: SettingsViewOptions): {
         currentConfig = updated;
         onConfigChanged(updated);
         showToast(
-          `Release channel switched to ${channel.toUpperCase()}.`,
+          `You'll now get ${CHANNEL_LABELS[channel]} pack updates.`,
           "info",
         );
       } catch (err: any) {
         showToast(
-          `Could not switch channel: ${formatFriendlyError(err)}`,
+          `Couldn't change the pack version: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -424,7 +432,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         }
       } catch (err: any) {
         showToast(
-          `Could not update No-Sync setting: ${formatFriendlyError(err)}`,
+          `Couldn't change this setting: ${formatFriendlyError(err)}`,
           "error",
         );
         updateNoSyncUI(currentConfig?.noSync);
@@ -450,7 +458,7 @@ export function initSettingsView(options: SettingsViewOptions): {
       } catch (err: any) {
         settingExternalImages.checked = Boolean(currentConfig?.externalImages);
         showToast(
-          `Could not update external image setting: ${formatFriendlyError(err)}`,
+          `Couldn't change this setting: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -494,7 +502,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         );
         if (!valRes.valid) {
           showToast(
-            valRes.reason || "Cannot use this location.",
+            valRes.reason || "Choose a different folder.",
             "error",
             5000,
           );
@@ -513,7 +521,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         if (modalMoveDir) modalMoveDir.classList.remove("hidden");
       } catch (err: any) {
         showToast(
-          `Could not select directory: ${formatFriendlyError(err)}`,
+          `Couldn't use that folder: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -553,10 +561,10 @@ export function initSettingsView(options: SettingsViewOptions): {
       );
       if (!valRes.valid) {
         if (moveError) {
-          moveError.innerText = valRes.reason || "Invalid directory.";
+          moveError.innerText = valRes.reason || "Choose a different folder.";
           moveError.classList.remove("hidden");
         }
-        showToast(valRes.reason || "Invalid directory.", "error");
+        showToast(valRes.reason || "Choose a different folder.", "error");
         return;
       }
 
@@ -564,10 +572,9 @@ export function initSettingsView(options: SettingsViewOptions): {
       if (moveModalProgressView)
         moveModalProgressView.classList.remove("hidden");
 
-      if (moveProgressPhase)
-        moveProgressPhase.innerText = "Preparing relocation…";
+      if (moveProgressPhase) moveProgressPhase.innerText = "Getting ready…";
       if (moveProgressDetails)
-        moveProgressDetails.innerText = "Scanning files...";
+        moveProgressDetails.innerText = "Counting files…";
       if (moveProgressPercent) moveProgressPercent.innerText = "0%";
       if (moveProgressFill) moveProgressFill.style.width = "0%";
       if (moveProgressFile) moveProgressFile.innerText = "";
@@ -576,11 +583,11 @@ export function initSettingsView(options: SettingsViewOptions): {
         (prog: DirectoryMoveProgress) => {
           if (moveProgressPhase) {
             const phaseLabels: Record<string, string> = {
-              preparing: "Preparing relocation…",
-              moving: "Copying files to staging...",
-              verifying: "Verifying checksums and counts...",
-              cleaning: "Cleaning source directory...",
-              complete: "Relocation complete!",
+              preparing: "Getting ready…",
+              moving: "Copying files…",
+              verifying: "Checking the copy…",
+              cleaning: "Removing the old folder…",
+              complete: "Done.",
             };
             moveProgressPhase.innerText = phaseLabels[prog.phase] || prog.phase;
           }
@@ -607,13 +614,13 @@ export function initSettingsView(options: SettingsViewOptions): {
 
         if (moveRes.success) {
           updateGameDirUI(moveRes.gameDir);
-          showToast(`Installation relocated to: ${moveRes.gameDir}`, "success");
+          showToast(`Game folder moved to ${moveRes.gameDir}.`, "success");
           const freshConfig = await window.lampas.config.get();
           currentConfig = freshConfig;
           onConfigChanged(freshConfig);
-        } else {
+        } else if (!isUserCancelled(moveRes.error)) {
           showToast(
-            `Relocation failed: ${formatFriendlyError(moveRes.error)}`,
+            `Couldn't move the game folder: ${formatFriendlyError(moveRes.error)}`,
             "error",
             6000,
           );
@@ -624,8 +631,9 @@ export function initSettingsView(options: SettingsViewOptions): {
         if (moveModalProgressView)
           moveModalProgressView.classList.add("hidden");
         pendingMoveTargetPath = "";
+        if (isUserCancelled(err)) return;
         showToast(
-          `Relocation failed: ${formatFriendlyError(err)}`,
+          `Couldn't move the game folder: ${formatFriendlyError(err)}`,
           "error",
           6000,
         );
@@ -645,7 +653,7 @@ export function initSettingsView(options: SettingsViewOptions): {
         flashSaved();
       } catch (err: any) {
         showToast(
-          `Could not save portal URL: ${formatFriendlyError(err)}`,
+          `Couldn't save the address: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -662,8 +670,12 @@ export function initSettingsView(options: SettingsViewOptions): {
         onConfigChanged(updated);
         flashSaved();
       } catch (err: any) {
+        if (isUserCancelled(err)) {
+          settingJavaArgs.value = currentConfig?.javaArgs || "";
+          return;
+        }
         showToast(
-          `Could not save JVM arguments: ${formatFriendlyError(err)}`,
+          `Couldn't save Java arguments: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -716,7 +728,7 @@ export function initSettingsView(options: SettingsViewOptions): {
               ? ` ${res.leftoverEntries} other item${res.leftoverEntries === 1 ? " was" : "s were"} left in the folder.`
               : "";
           const noSync = res.noSyncTurnedOff
-            ? " No Sync is now off so Play can download the game."
+            ? " Pack updates are back on so Play can download the game."
             : "";
           showToast(
             `Removed ${formatBytes(res.freedBytes)} of game files.${leftover}${noSync}`,
@@ -745,17 +757,21 @@ export function initSettingsView(options: SettingsViewOptions): {
       if (!window.lampas?.sync?.repair) return;
       try {
         btnRepairSettings.disabled = true;
-        showToast("Verifying and repairing game files...", "info");
+        showToast("Checking game files…", "info");
         const res = await window.lampas.sync.repair();
         const aboutPackVersion = document.getElementById("about-pack-version");
         if (res?.version && aboutPackVersion)
           aboutPackVersion.innerText = res.version;
         const completionMsg =
           res?.message ||
-          "Repair complete! All game files, assets, and libraries verified.";
+          "Repair finished. Missing or damaged files were replaced.";
         showToast(completionMsg, "success", 4500);
       } catch (err: any) {
-        showToast(`Repair failed: ${formatFriendlyError(err)}`, "error", 6000);
+        showToast(
+          `Couldn't repair game files: ${formatFriendlyError(err)}`,
+          "error",
+          6000,
+        );
       } finally {
         btnRepairSettings.disabled = false;
       }

@@ -105,15 +105,13 @@ export function minecraftTokenProblem(
 
 /** What the player must do before the game can launch. */
 export const LAUNCH_SIGN_IN_MESSAGES = {
-  login:
-    "Authentication required: log in with your Lampas Portal account before playing.",
-  session:
-    "Your session has expired. Log in with your Lampas Portal account again.",
-  link: "No bound Minecraft account found in your profile. Link one on the Lampas Portal.",
+  login: "Sign in with your Lampas account to play.",
+  session: "You've been signed out. Sign in again to play.",
+  link: "Your Lampas account isn't linked to a Minecraft account yet. Link one on the Lampas website, then sign in again.",
   minecraft:
-    "Minecraft sign-in required: link the Microsoft account that owns Minecraft on the Lampas Portal, then log in again.",
+    "Link the Microsoft account that owns Minecraft on the Lampas website, then sign in again.",
   expired:
-    "Your Minecraft session has expired. Log out, log in again, and try once more.",
+    "Your Minecraft sign-in has expired. Sign out, sign in again, then press Play.",
 } as const;
 
 export type LaunchSignInReason = keyof typeof LAUNCH_SIGN_IN_MESSAGES;
@@ -312,7 +310,7 @@ export class GameRunner {
         });
       } catch {
         throw new InstallationStateError(
-          "Launch blocked by an unresolved synchronization failure. Run Repair before playing.",
+          "The last pack update didn't finish. Use Repair game files in Settings, then press Play.",
         );
       }
       const ramGb = activeConfig.allocatedRamGb || 8;
@@ -325,7 +323,7 @@ export class GameRunner {
         const stateReleasePath = path.join(gameDir, ".lampas", "release.json");
         if (!fs.existsSync(stateReleasePath)) {
           throw new InstallationStateError(
-            "No installed Lampas release found. Please synchronize or repair your modpack installation first.",
+            "The pack isn't installed yet. Press Play with pack updates on, or use Repair game files in Settings.",
           );
         }
         try {
@@ -347,7 +345,7 @@ export class GameRunner {
           release = cached;
         } catch {
           throw new InstallationStateError(
-            "Release descriptor is corrupted. Please synchronize or repair your modpack installation first.",
+            "Your game files don't match the current pack. Use Repair game files in Settings.",
           );
         }
       }
@@ -358,12 +356,16 @@ export class GameRunner {
         Object.keys(release).length === 0
       ) {
         throw new InstallationStateError(
-          "No installed Lampas release found. Please synchronize or repair your modpack installation first.",
+          "The pack isn't installed yet. Press Play with pack updates on, or use Repair game files in Settings.",
         );
       }
       if (!release.version || typeof release.version !== "string") {
+        log(
+          "ERROR",
+          "Release descriptor metadata is missing mandatory 'version' field.",
+        );
         throw new InstallationStateError(
-          "Release descriptor metadata is missing mandatory 'version' field. Please synchronize or repair.",
+          "Your game files don't match the current pack. Use Repair game files in Settings.",
         );
       }
 
@@ -376,7 +378,7 @@ export class GameRunner {
         );
         if (!fs.existsSync(stateFilePath)) {
           throw new InstallationStateError(
-            "Missing installation state metadata: No installed modpack found. Please synchronize or repair your modpack installation first.",
+            "The pack isn't installed yet. Press Play with pack updates on, or use Repair game files in Settings.",
           );
         }
         let installedState: any;
@@ -384,7 +386,7 @@ export class GameRunner {
           installedState = readInstalledMetadata(gameDir, stateFilePath);
         } catch {
           throw new InstallationStateError(
-            "Installation state metadata is corrupted. Please synchronize or repair your modpack installation first.",
+            "Your game files don't match the current pack. Use Repair game files in Settings.",
           );
         }
         if (
@@ -393,15 +395,19 @@ export class GameRunner {
           Object.keys(installedState).length === 0
         ) {
           throw new InstallationStateError(
-            "Installation state metadata is empty. Please synchronize or repair your modpack installation first.",
+            "Your game files don't match the current pack. Use Repair game files in Settings.",
           );
         }
         if (
           !installedState.version ||
           typeof installedState.version !== "string"
         ) {
+          log(
+            "ERROR",
+            "Installation state metadata is missing mandatory 'version' field.",
+          );
           throw new InstallationStateError(
-            "Installation state metadata is missing mandatory 'version' field. Please synchronize or repair.",
+            "Your game files don't match the current pack. Use Repair game files in Settings.",
           );
         }
         if (
@@ -409,8 +415,12 @@ export class GameRunner {
           release.version &&
           installedState.version !== release.version
         ) {
+          log(
+            "ERROR",
+            `Incompatible installation state detected: installed version '${installedState.version}' does not match release descriptor '${release.version}'.`,
+          );
           throw new InstallationStateError(
-            `Incompatible installation state detected: installed version '${installedState.version}' does not match release descriptor '${release.version}'. Please synchronize or repair.`,
+            "Your game files don't match the current pack. Use Repair game files in Settings.",
           );
         }
         if (
@@ -418,8 +428,12 @@ export class GameRunner {
           release.syncGeneration &&
           installedState.syncGeneration !== release.syncGeneration
         ) {
+          log(
+            "ERROR",
+            `Incompatible installation generation detected: installed generation '${installedState.syncGeneration}' does not match release descriptor '${release.syncGeneration}'.`,
+          );
           throw new InstallationStateError(
-            `Incompatible installation generation detected: installed generation '${installedState.syncGeneration}' does not match release descriptor '${release.syncGeneration}'. Please synchronize or repair.`,
+            "Your game files don't match the current pack. Use Repair game files in Settings.",
           );
         }
         try {
@@ -428,7 +442,7 @@ export class GameRunner {
             throw new Error("Installed pack identity mismatch");
         } catch {
           throw new InstallationStateError(
-            "Installation state metadata is invalid. Please synchronize or repair.",
+            "Your game files don't match the current pack. Use Repair game files in Settings.",
           );
         }
       }

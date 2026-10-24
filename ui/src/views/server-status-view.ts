@@ -11,7 +11,18 @@ export interface ServerStatusViewModel {
 
 export function getServerStatusView(
   status: ServerStatus | null | undefined,
+  signedIn = true,
 ): ServerStatusViewModel {
+  if (!signedIn) {
+    return {
+      state: "unknown",
+      label: "Status unknown",
+      count: "",
+      detail: "Sign in to see the server status.",
+      players: [],
+      more: 0,
+    };
+  }
   const state = status?.server?.state || "unknown";
   const online = status?.players?.online;
   const players = Array.isArray(status?.players?.list)
@@ -22,25 +33,27 @@ export function getServerStatusView(
     starting: "Server starting",
     stopping: "Server stopping",
     offline: "Server offline",
-    unknown: "Status unavailable",
+    unknown: "Status unknown",
   };
   let detail =
-    "Unable to verify server status right now. You can still launch.";
+    "Couldn't check the server just now. You can still start the game.";
   if (state === "online")
     detail = online === 0 ? "No one is online right now." : "";
   else if (state === "starting")
-    detail = "The server is still loading. You can launch while it starts.";
+    detail =
+      "The server is starting. It should be ready by the time the game loads.";
   else if (state === "stopping")
-    detail = "The server is stopping. You can still launch.";
+    detail = "The server is shutting down, maybe for a restart.";
   else if (state === "offline")
-    detail = "The server appears offline. You can still launch.";
+    detail =
+      "The server is down. You can start the game, but you can't join until it's back.";
 
   return {
     state: labels[state] ? state : "unknown",
     label: labels[state] || labels.unknown,
     count:
       online === null || online === undefined
-        ? "— players"
+        ? ""
         : `${online} player${online === 1 ? "" : "s"}`,
     detail,
     players: players.slice(0, 8).map((player) => ({
@@ -74,8 +87,11 @@ export function initServerStatusView(getIsLoggedIn: () => boolean): () => void {
   let serverStatusRequest: Promise<ServerStatus | null> | null = null;
   let serverStatusInterval: ReturnType<typeof setInterval> | null = null;
 
-  function renderServerStatus(status: ServerStatus | null | undefined): void {
-    const view = getServerStatusView(status);
+  function renderServerStatus(
+    status: ServerStatus | null | undefined,
+    signedIn = true,
+  ): void {
+    const view = getServerStatusView(status, signedIn);
     const state = view.state;
 
     if (serverPresence) serverPresence.dataset.state = state;
@@ -109,7 +125,7 @@ export function initServerStatusView(getIsLoggedIn: () => boolean): () => void {
   async function refreshServerStatus(): Promise<ServerStatus | null> {
     if (!window.lampas.server?.getStatus) return null;
     if (!getIsLoggedIn()) {
-      renderServerStatus(null);
+      renderServerStatus(null, false);
       return null;
     }
     if (serverStatusRequest) return serverStatusRequest;

@@ -1,14 +1,22 @@
 import { describe, it, expect } from "bun:test";
-import { formatFriendlyError, cleanModDisplayName } from "../ui/src/utils";
+import {
+  formatFriendlyError,
+  cleanModDisplayName,
+  isUserCancelled,
+} from "../ui/src/utils";
 
 describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
   describe("formatFriendlyError", () => {
     it("returns default fallback when error is empty or undefined", () => {
-      expect(formatFriendlyError(null)).toBe("An unexpected error occurred.");
-      expect(formatFriendlyError(undefined)).toBe(
-        "An unexpected error occurred.",
+      expect(formatFriendlyError(null)).toBe(
+        "Something went wrong. Open Logs for details.",
       );
-      expect(formatFriendlyError("")).toBe("An unexpected error occurred.");
+      expect(formatFriendlyError(undefined)).toBe(
+        "Something went wrong. Open Logs for details.",
+      );
+      expect(formatFriendlyError("")).toBe(
+        "Something went wrong. Open Logs for details.",
+      );
     });
 
     it("translates Minecraft running conflicts into friendly instructions", () => {
@@ -16,14 +24,14 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
         "Cannot perform 'toggle official mod' while Minecraft is running.",
       );
       expect(formatFriendlyError(err1)).toBe(
-        "Minecraft is currently running. Please close the game first.",
+        "Close Minecraft first, then try again.",
       );
 
       const err2 = new Error(
         "Cannot modify client mods while an operation or Minecraft is running.",
       );
       expect(formatFriendlyError(err2)).toBe(
-        "Minecraft is currently running. Please close the game first.",
+        "Close Minecraft first, then try again.",
       );
     });
 
@@ -32,7 +40,7 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
         "Cannot start 'sync': operation 'repair' is currently in progress.",
       );
       expect(formatFriendlyError(err)).toBe(
-        "Another launcher operation is currently in progress. Please wait for it to finish.",
+        "The launcher is busy with something else. Try again when it's done.",
       );
     });
 
@@ -41,7 +49,7 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
         "EBUSY: resource locked or busy, unlink 'C:\\games\\mods\\foo.jar'",
       );
       expect(formatFriendlyError(err)).toBe(
-        "The file is currently locked or open in another program. Please close Minecraft or any file editor and try again.",
+        "A file is in use by another program. Close Minecraft and anything else using it, then try again.",
       );
     });
 
@@ -50,7 +58,7 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
         "EPERM: operation not permitted, rename 'old' -> 'new'",
       );
       expect(formatFriendlyError(err)).toBe(
-        "Permission denied. The launcher does not have permission to modify these files.",
+        "The launcher isn't allowed to change these files. Check that the folder isn't read-only.",
       );
     });
 
@@ -58,27 +66,23 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
       const err = new Error(
         "ENOENT: no such file or directory, stat 'missing.jar'",
       );
-      expect(formatFriendlyError(err)).toBe(
-        "The file or directory could not be found.",
-      );
+      expect(formatFriendlyError(err)).toBe("A file or folder is missing.");
     });
 
     it("translates disk space (ENOSPC) into friendly messages", () => {
       const err = new Error("ENOSPC: no space left on device, write");
       expect(formatFriendlyError(err)).toBe(
-        "There is not enough free disk space. Please free up space and try again.",
+        "Your disk is full. Free up some space and try again.",
       );
     });
 
     it("translates network errors into friendly messages", () => {
       expect(formatFriendlyError(new Error("Failed to fetch"))).toBe(
-        "Network connection failed. Please check your internet connection and try again.",
+        "Can't connect. Check your internet connection and try again.",
       );
       expect(
         formatFriendlyError(new Error("connect ECONNREFUSED 127.0.0.1:443")),
-      ).toBe(
-        "Network connection failed. Please check your internet connection and try again.",
-      );
+      ).toBe("Can't connect. Check your internet connection and try again.");
     });
 
     it("translates mod destination conflicts", () => {
@@ -86,7 +90,7 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
         "Cannot toggle BSL.zip: destination already exists.",
       );
       expect(formatFriendlyError(err)).toBe(
-        "A mod file with this name already exists in your mods folder.",
+        "You already have a mod file with this name.",
       );
     });
 
@@ -98,6 +102,37 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
       expect(formatFriendlyError(errWithPeriod)).toBe(
         "Profile name cannot be blank.",
       );
+    });
+
+    it("strips the Electron IPC prefix and the Error: prefix before formatting", () => {
+      const err = new Error(
+        "Error invoking remote method 'game:launch': Error: invalid configuration value",
+      );
+      expect(formatFriendlyError(err)).toBe("Invalid configuration value.");
+    });
+
+    it("matches friendly mappings after the Electron IPC prefix is stripped", () => {
+      const err = new Error(
+        "Error invoking remote method 'game:launch': Error: Minecraft is running.",
+      );
+      expect(formatFriendlyError(err)).toBe(
+        "Close Minecraft first, then try again.",
+      );
+    });
+
+    it("maps unexpected internal errors to the fallback text", () => {
+      expect(
+        formatFriendlyError(
+          new Error("Operation failed: An unexpected internal error occurred."),
+        ),
+      ).toBe("Something went wrong. Open Logs for details.");
+      expect(
+        formatFriendlyError(
+          new Error(
+            "Error invoking remote method 'sync:start': Error: Operation failed: An unexpected internal error occurred.",
+          ),
+        ),
+      ).toBe("Something went wrong. Open Logs for details.");
     });
   });
 
@@ -116,6 +151,25 @@ describe("UI Utils - formatFriendlyError & cleanModDisplayName", () => {
     it("handles fallback and empty inputs", () => {
       expect(cleanModDisplayName("")).toBe("Mod");
       expect(cleanModDisplayName(undefined, "Custom")).toBe("Custom");
+    });
+  });
+
+  describe("isUserCancelled", () => {
+    it("recognises a cancelled confirmation from the main process", () => {
+      expect(
+        isUserCancelled(
+          new Error(
+            "Error invoking remote method 'gameDir:move': Error: You cancelled the folder move.",
+          ),
+        ),
+      ).toBe(true);
+      expect(isUserCancelled("You cancelled adding mods.")).toBe(true);
+    });
+
+    it("does not treat other failures as cancellations", () => {
+      expect(isUserCancelled(new Error("EBUSY: resource locked"))).toBe(false);
+      expect(isUserCancelled(new Error("Sign-in was cancelled."))).toBe(false);
+      expect(isUserCancelled(null)).toBe(false);
     });
   });
 });

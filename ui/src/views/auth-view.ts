@@ -120,32 +120,39 @@ export function initAuthView(options: AuthViewOptions): {
   async function runLogin(): Promise<void> {
     try {
       if (btnLogin) btnLogin.disabled = true;
-      setLoginLabel("Logging in…");
+      setLoginLabel("Signing in…");
       const res = await window.lampas.auth.login();
       updateUserUI(res.user);
       showToast(
-        `Welcome, ${res.user.minecraftUsername || res.user.name}!`,
+        `Signed in as ${res.user.minecraftUsername || res.user.name}.`,
         "success",
       );
       try {
         const storageStatus = await window.lampas.auth.getStorageStatus();
         if (storageStatus.sessionOnly) {
           showToast(
-            "Session-only mode active: credentials will not persist across restarts.",
+            "You'll need to sign in again next time you open the launcher.",
             "info",
           );
         } else if (storageStatus.lastPersistenceError) {
+          console.warn(
+            "Sign-in storage warning:",
+            storageStatus.lastPersistenceError,
+          );
           showToast(
-            `Storage warning: ${storageStatus.lastPersistenceError}`,
+            "Couldn't save your sign-in on this computer. You'll need to sign in again next time.",
             "error",
           );
         }
       } catch {}
     } catch (err: any) {
-      showToast(`Login failed: ${formatFriendlyError(err)}`, "error");
+      showToast(
+        formatFriendlyError(err, "Couldn't sign in. Open Logs for details."),
+        "error",
+      );
     } finally {
       if (btnLogin) btnLogin.disabled = false;
-      setLoginLabel("Log in");
+      setLoginLabel("Sign in");
     }
   }
 
@@ -168,20 +175,24 @@ export function initAuthView(options: AuthViewOptions): {
         const logoutResult = await window.lampas.auth.logout();
         updateUserUI(null);
         if (logoutResult && !logoutResult.success) {
+          console.warn(
+            "Sign-out cleanup incomplete:",
+            logoutResult.error || "cleanup error",
+          );
           showToast(
-            `Logout warning: Persistent cleanup incomplete (${logoutResult.error || "cleanup error"})`,
+            "Signed out, but the saved sign-in couldn't be deleted from this computer.",
             "error",
           );
         } else if (logoutResult && logoutResult.success) {
-          showToast("Logged out successfully.", "info");
+          showToast("Signed out.", "info");
         } else {
           showToast(
-            "Logged out (session cleared). Persistent cleanup unverified.",
+            "Signed out. Couldn't confirm the saved sign-in was deleted from this computer.",
             "error",
           );
         }
       } catch (err: any) {
-        showToast(`Could not log out: ${formatFriendlyError(err)}`, "error");
+        showToast(`Couldn't sign out: ${formatFriendlyError(err)}`, "error");
       }
     };
   }

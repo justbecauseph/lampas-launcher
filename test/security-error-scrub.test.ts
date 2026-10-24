@@ -134,7 +134,7 @@ describe("sanitizeIpcError preserves the configured game directory", () => {
 describe("sanitizeIpcError shows sign-in errors", () => {
   test("an AuthRequiredError reaches the renderer with its message", () => {
     const message =
-      "Minecraft sign-in required: link the Microsoft account that owns Minecraft on the Lampas Portal, then log in again.";
+      "Link the Microsoft account that owns Minecraft on the Lampas website, then sign in again.";
     expect(sanitizeIpcError(new AuthRequiredError(message)).message).toBe(
       message,
     );
@@ -142,7 +142,8 @@ describe("sanitizeIpcError shows sign-in errors", () => {
 
   test("a plain Error still becomes the generic message", () => {
     expect(
-      sanitizeIpcError(new Error("Minecraft sign-in required")).message,
+      sanitizeIpcError(new Error("Sign in with your Lampas account to play."))
+        .message,
     ).toBe("Operation failed: An unexpected internal error occurred.");
   });
 });

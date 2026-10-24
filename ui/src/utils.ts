@@ -2,22 +2,43 @@
  * Utility functions for the Lampas Launcher renderer UI.
  */
 
+/** Electron prefixes a rejected ipcRenderer.invoke with the channel name. */
+const ELECTRON_IPC_PREFIX = /^\s*Error invoking remote method '[^']*':\s*/i;
+
+function stripErrorPrefixes(raw: string): string {
+  return raw
+    .replace(ELECTRON_IPC_PREFIX, "")
+    .replace(/^(Error:\s*)+/i, "")
+    .trim();
+}
+
+/** True when the player cancelled a confirmation dialog shown by main. */
+export function isUserCancelled(err: unknown): boolean {
+  const raw = typeof err === "string" ? err : (err as any)?.message || "";
+  return /^You cancelled\b/i.test(stripErrorPrefixes(String(raw)));
+}
+
 /**
  * Normalizes technical backend and filesystem errors into clear, friendly guidance for users.
  */
 export function formatFriendlyError(
   err: unknown,
-  fallbackMessage = "An unexpected error occurred.",
+  fallbackMessage = "Something went wrong. Open Logs for details.",
 ): string {
   if (!err) return fallbackMessage;
 
   const raw =
     typeof err === "string" ? err : (err as any)?.message || String(err);
-  const clean = raw.replace(/^(Error:\s*)+/i, "").trim();
+  const clean = stripErrorPrefixes(raw);
+
+  // Generic failure from the main process
+  if (/unexpected internal error/i.test(clean)) {
+    return fallbackMessage;
+  }
 
   // Minecraft running conflict
   if (/Minecraft is running/i.test(clean)) {
-    return "Minecraft is currently running. Please close the game first.";
+    return "Close Minecraft first, then try again.";
   }
 
   // Active operation busy conflict
@@ -25,27 +46,27 @@ export function formatFriendlyError(
     /is currently in progress/i.test(clean) ||
     /operation.*in progress/i.test(clean)
   ) {
-    return "Another launcher operation is currently in progress. Please wait for it to finish.";
+    return "The launcher is busy with something else. Try again when it's done.";
   }
 
   // Recovery blocked
   if (/unresolved startup recovery failure/i.test(clean)) {
-    return "Launcher operations are temporarily blocked due to a recovery issue. Please restart the launcher.";
+    return "The launcher needs a restart. Close it and open it again.";
   }
 
   // Mod-specific errors
   if (/destination already exists/i.test(clean)) {
-    return "A mod file with this name already exists in your mods folder.";
+    return "You already have a mod file with this name.";
   }
   if (/missing from the mods folder/i.test(clean)) {
-    return "The mod file could not be found in your mods folder.";
+    return "That mod file is no longer in your mods folder.";
   }
   if (
     /already exists in the mods folder and is not a launcher-managed/i.test(
       clean,
     )
   ) {
-    return "This file already exists in your mods folder and is not managed by the launcher.";
+    return "A file with this name is already in your mods folder.";
   }
   if (
     /Only .jar and .zip mod files are allowed/i.test(clean) ||
@@ -56,20 +77,20 @@ export function formatFriendlyError(
 
   // Common OS / filesystem errors
   if (/EBUSY/i.test(clean) || /resource locked/i.test(clean)) {
-    return "The file is currently locked or open in another program. Please close Minecraft or any file editor and try again.";
+    return "A file is in use by another program. Close Minecraft and anything else using it, then try again.";
   }
   if (
     /EPERM/i.test(clean) ||
     /EACCES/i.test(clean) ||
     /permission denied/i.test(clean)
   ) {
-    return "Permission denied. The launcher does not have permission to modify these files.";
+    return "The launcher isn't allowed to change these files. Check that the folder isn't read-only.";
   }
   if (/ENOENT/i.test(clean) || /no such file or directory/i.test(clean)) {
-    return "The file or directory could not be found.";
+    return "A file or folder is missing.";
   }
   if (/ENOSPC/i.test(clean) || /no space left on device/i.test(clean)) {
-    return "There is not enough free disk space. Please free up space and try again.";
+    return "Your disk is full. Free up some space and try again.";
   }
 
   // Network errors
@@ -78,12 +99,12 @@ export function formatFriendlyError(
       clean,
     )
   ) {
-    return "Network connection failed. Please check your internet connection and try again.";
+    return "Can't connect. Check your internet connection and try again.";
   }
 
   // Authentication errors
   if (/Unauthorized|Invalid credentials|token expired/i.test(clean)) {
-    return "Session expired or invalid credentials. Please log in again.";
+    return "You've been signed out. Sign in again.";
   }
 
   // If there are multiple lines (e.g. stack trace), take only the first line

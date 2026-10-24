@@ -111,7 +111,7 @@ export function initConsoleView(
       consoleCount.innerText = "0 lines";
     }
     if (notify) {
-      showToast("Console cleared.", "info", 1500);
+      showToast("Cleared.", "info", 1500);
     }
   }
 
@@ -199,18 +199,18 @@ export function initConsoleView(
     if (consoleGameStatus && consoleStatusDot && consoleStatusText) {
       if (state === "running") {
         consoleStatusDot.className = "status-dot status-dot-running";
-        consoleStatusText.innerText = textOverride || "GAME RUNNING";
+        consoleStatusText.innerText = textOverride || "Playing";
         consoleGameStatus.className = "console-status console-status-running";
         if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
       } else if (state === "syncing" || state === "launching") {
         consoleStatusDot.className = "status-dot status-dot-launching";
         consoleStatusText.innerText =
-          textOverride || (state === "syncing" ? "SYNCING..." : "LAUNCHING...");
+          textOverride || (state === "syncing" ? "Updating…" : "Starting…");
         consoleGameStatus.className = "console-status console-status-busy";
         if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
       } else {
         consoleStatusDot.className = "status-dot status-dot-idle";
-        consoleStatusText.innerText = textOverride || "IDLE";
+        consoleStatusText.innerText = textOverride || "Not running";
         consoleGameStatus.className = "console-status console-status-idle";
         if (btnConsoleStop) btnConsoleStop.classList.add("hidden");
       }
@@ -276,10 +276,10 @@ export function initConsoleView(
       try {
         btnConsoleStop.disabled = true;
         await window.lampas?.game?.kill?.();
-        showToast("Stopping Minecraft...", "info");
+        showToast("Closing Minecraft…", "info");
       } catch (err: any) {
         showToast(
-          `Could not stop Minecraft: ${formatFriendlyError(err)}`,
+          `Couldn't close Minecraft: ${formatFriendlyError(err)}`,
           "error",
         );
       } finally {
@@ -296,9 +296,9 @@ export function initConsoleView(
       const text = consoleOutput.innerText;
       try {
         await navigator.clipboard.writeText(text);
-        showToast("Console output copied to clipboard.", "success", 2000);
+        showToast("Copied.", "success", 2000);
       } catch {
-        showToast("Failed to copy console logs.", "error");
+        showToast("Couldn't copy the log.", "error");
       }
     };
     btnCopyLogs.addEventListener("click", onCopy);
@@ -311,7 +311,7 @@ export function initConsoleView(
         await window.lampas?.utils?.openLogFile?.();
       } catch (err: any) {
         showToast(
-          `Could not open log file: ${formatFriendlyError(err)}`,
+          `Couldn't open the log file: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -328,7 +328,7 @@ export function initConsoleView(
         await window.lampas?.utils?.openLogsDir?.();
       } catch (err: any) {
         showToast(
-          `Could not open logs folder: ${formatFriendlyError(err)}`,
+          `Couldn't open the logs folder: ${formatFriendlyError(err)}`,
           "error",
         );
       }
@@ -345,7 +345,7 @@ export function initConsoleView(
         await window.lampas?.utils?.openMinecraftLog?.();
       } catch (err: any) {
         showToast(
-          `Could not open Minecraft log: ${formatFriendlyError(err)}`,
+          `Couldn't open Minecraft's log file: ${formatFriendlyError(err)}`,
           "error",
         );
       }

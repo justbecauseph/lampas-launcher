@@ -25,9 +25,16 @@ export interface PlayViewOptions {
 const PROGRESS_LABELS: Partial<Record<SyncProgress["status"], string>> = {
   checking: "Checking for updates…",
   downloading: "Downloading…",
-  verifying: "Verifying files…",
+  verifying: "Checking files…",
   staging: "Installing…",
   repairing: "Repairing…",
+};
+
+const TITLEBAR_STATUS_TEXT: Record<GameStatus, string> = {
+  idle: "Ready",
+  syncing: "Updating…",
+  launching: "Starting…",
+  running: "Playing",
 };
 
 function formatMegabytes(bytes: number): string {
@@ -39,9 +46,9 @@ export function describeProgress(prog: SyncProgress): string {
     return `Downloading ${formatMegabytes(prog.bytesDownloaded)} of ${formatMegabytes(prog.totalBytes)}`;
   }
   if (prog.totalFiles > 0 && prog.status !== "complete") {
-    return `${prog.message || "Synchronizing"} (${prog.filesCompleted}/${prog.totalFiles})`;
+    return `${prog.message || "Updating"} (${prog.filesCompleted}/${prog.totalFiles})`;
   }
-  return prog.message || "Synchronizing…";
+  return prog.message || "Updating…";
 }
 
 export function initPlayView(options: PlayViewOptions): {
@@ -100,7 +107,7 @@ export function initPlayView(options: PlayViewOptions): {
     if (status === "running") {
       setPlayLabel("Playing", false);
     } else if (status === "idle") {
-      setPlayLabel(getUser() ? "Play" : "Log in to play", false);
+      setPlayLabel(getUser() ? "Play" : "Sign in to play", false);
     }
   }
 
@@ -110,7 +117,7 @@ export function initPlayView(options: PlayViewOptions): {
       titlebarStatusDot.className = `status-dot status-dot-${state}`;
     }
     if (titlebarStatusText) {
-      titlebarStatusText.innerText = state.toUpperCase();
+      titlebarStatusText.innerText = TITLEBAR_STATUS_TEXT[state];
     }
 
     const busy = state === "syncing" || state === "launching";
@@ -211,7 +218,11 @@ export function initPlayView(options: PlayViewOptions): {
     } catch {}
 
     appendLog("INFO", "Bootstrapping runtime and launching game...");
-    showToast("No-sync mode active. Launching game...", "info", 2500);
+    showToast(
+      "Updates are off. Starting with the files you have.",
+      "info",
+      2500,
+    );
 
     try {
       await launchGame();
@@ -224,7 +235,7 @@ export function initPlayView(options: PlayViewOptions): {
     setGameStatus("syncing");
     setPlayLabel(isRepair ? "Repairing…" : "Checking for updates…", true);
     setProgress(
-      isRepair ? "Verifying every game file…" : "Checking for pack updates…",
+      isRepair ? "Checking every game file…" : "Checking for pack updates…",
       0,
     );
 
@@ -295,7 +306,9 @@ export function initPlayView(options: PlayViewOptions): {
       if (code === 0 || code === null) {
         showToast("Minecraft closed.", "info");
       } else {
-        showLaunchError(`Minecraft closed unexpectedly (exit code ${code}).`);
+        showLaunchError(
+          "Minecraft crashed. Open the logs to see why, or repair game files and try again.",
+        );
       }
     });
     disposers.push(unsub);
@@ -330,7 +343,7 @@ export function initPlayView(options: PlayViewOptions): {
         if (requestLogin) {
           await requestLogin();
         } else {
-          showToast("Please log in with your Lampas account first.", "error");
+          showToast("Sign in with your Lampas account to play.", "error");
         }
         return;
       }
@@ -354,10 +367,10 @@ export function initPlayView(options: PlayViewOptions): {
         btnStop.disabled = true;
         btnStop.innerText = "Stopping…";
         await window.lampas.game.kill();
-        showToast("Stopping Minecraft...", "info");
+        showToast("Closing Minecraft…", "info");
       } catch (err: any) {
         showToast(
-          `Could not stop Minecraft: ${formatFriendlyError(err)}`,
+          `Couldn't close Minecraft: ${formatFriendlyError(err)}`,
           "error",
         );
       } finally {

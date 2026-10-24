@@ -168,7 +168,7 @@ describe("Console view clearing", () => {
 
     expect(consoleOutput.childNodes).toHaveLength(0);
     expect(consoleCount.innerText).toBe("0 lines");
-    expect(toasts).toEqual([{ message: "Console cleared.", type: "info" }]);
+    expect(toasts).toEqual([{ message: "Cleared.", type: "info" }]);
   });
 
   test("dispose unsubscribes from game log and exit events", () => {

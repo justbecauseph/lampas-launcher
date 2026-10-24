@@ -1919,7 +1919,9 @@ try {
         await LauncherSync.syncClient(() => {});
       } catch (err: any) {
         syncThrew = true;
-        if (!err.message.includes("Authentication required")) {
+        if (
+          !err.message.includes("Sign in with your Lampas account to play.")
+        ) {
           throw new Error(
             `Expected authentication required error, got: ${err.message}`,
           );
@@ -3135,7 +3137,7 @@ try {
       } catch (e: any) {
         threw = true;
         if (
-          !e.message.includes("Authentication required") &&
+          !e.message.includes("Sign in with your Lampas account to play.") &&
           !e.message.includes("Session expired")
         ) {
           throw new Error(`Unexpected launch rejection message: ${e.message}`);
@@ -3193,7 +3195,11 @@ try {
         await toggleHandler({}, "unknown-mod-id", false);
       } catch (e: any) {
         threw = true;
-        if (!e.message.includes("Cannot disable unknown official mod")) {
+        if (
+          !e.message.includes(
+            "Couldn't check the pack's mod list. Press Check files, then try again.",
+          )
+        ) {
           throw new Error(`Unexpected error: ${e.message}`);
         }
       }
@@ -3600,7 +3606,7 @@ try {
           threw = true;
           if (
             !e.message.includes(
-              "Custom Java arguments cannot override launch target",
+              "These Java arguments aren't allowed because they change how Minecraft starts.",
             )
           ) {
             throw new Error(
@@ -3659,9 +3665,7 @@ try {
         });
       } catch (e: any) {
         cancelThrew = true;
-        if (
-          !e.message.includes("Privileged Java arguments rejected by user.")
-        ) {
+        if (!e.message.includes("You cancelled the change.")) {
           throw new Error(`Unexpected cancellation error: ${e.message}`);
         }
       }
@@ -4321,9 +4325,7 @@ try {
         });
       } catch (e: any) {
         cancelThrew = true;
-        if (
-          !e.message.includes("Privileged Java arguments rejected by user.")
-        ) {
+        if (!e.message.includes("You cancelled the change.")) {
           throw new Error(`Unexpected cancellation error: ${e.message}`);
         }
       }
@@ -4386,7 +4388,7 @@ try {
         await configureHandler(event as any, testConfigureDir);
       } catch (e: any) {
         configureCancelThrew = true;
-        if (!e.message.includes("Configuration cancelled by user.")) {
+        if (!e.message.includes("You cancelled choosing a game folder.")) {
           throw new Error(
             `Unexpected configure cancellation error: ${e.message}`,
           );
@@ -4443,7 +4445,7 @@ try {
         await moveHandler(event as any, testMoveDir);
       } catch (e: any) {
         moveCancelThrew = true;
-        if (!e.message.includes("Move cancelled by user.")) {
+        if (!e.message.includes("You cancelled the folder move.")) {
           throw new Error(`Unexpected move cancellation error: ${e.message}`);
         }
       }
@@ -4497,7 +4499,7 @@ try {
         await modsAddHandler(event as any, [testModFile]);
       } catch (e: any) {
         modCancelThrew = true;
-        if (!e.message.includes("Mod import cancelled by user.")) {
+        if (!e.message.includes("You cancelled adding mods.")) {
           throw new Error(
             `Unexpected mod import cancellation error: ${e.message}`,
           );
@@ -4665,7 +4667,11 @@ try {
           await launchHandler({});
         } catch (e: any) {
           missingStateThrew = true;
-          if (!e.message.includes("Missing installation state metadata")) {
+          if (
+            !e.message.includes(
+              "The pack isn't installed yet. Press Play with pack updates on, or use Repair game files in Settings.",
+            )
+          ) {
             throw new Error(`Unexpected missing state error: ${e.message}`);
           }
         }
@@ -4681,7 +4687,11 @@ try {
           await launchHandler({});
         } catch (e: any) {
           emptyStateThrew = true;
-          if (!e.message.includes("Installation state metadata is empty")) {
+          if (
+            !e.message.includes(
+              "Your game files don't match the current pack. Use Repair game files in Settings.",
+            )
+          ) {
             throw new Error(`Unexpected empty state error: ${e.message}`);
           }
         }
@@ -4700,7 +4710,11 @@ try {
           await launchHandler({});
         } catch (e: any) {
           noVersionThrew = true;
-          if (!e.message.includes("missing mandatory 'version' field")) {
+          if (
+            !e.message.includes(
+              "Your game files don't match the current pack. Use Repair game files in Settings.",
+            )
+          ) {
             throw new Error(`Unexpected missing version error: ${e.message}`);
           }
         }
@@ -4719,7 +4733,11 @@ try {
           await launchHandler({});
         } catch (e: any) {
           mismatchThrew = true;
-          if (!e.message.includes("Incompatible installation state detected")) {
+          if (
+            !e.message.includes(
+              "Your game files don't match the current pack. Use Repair game files in Settings.",
+            )
+          ) {
             throw new Error(`Unexpected mismatch error: ${e.message}`);
           }
         }
@@ -5194,12 +5212,12 @@ try {
       // G. Main-owned domain errors: Cancellation, OperationBusy, InstallationState, ModPolicy
       const userCancelSanitized = sanitizeIpcError(
         new UserCancelledError(
-          "Configuration cancelled by user at C:\\secret\\dir",
+          "You cancelled choosing a game folder at C:\\secret\\dir",
         ),
       );
       if (
         !userCancelSanitized.message.includes(
-          "Configuration cancelled by user",
+          "You cancelled choosing a game folder",
         ) ||
         userCancelSanitized.message.includes("C:\\secret")
       ) {
@@ -5243,13 +5261,11 @@ try {
 
       const installStateSanitized = sanitizeIpcError(
         new InstallationStateError(
-          "Missing installation state metadata: No installed modpack found.",
+          "The pack isn't installed yet. Press Play with pack updates on, or use Repair game files in Settings.",
         ),
       );
       if (
-        !installStateSanitized.message.includes(
-          "Missing installation state metadata",
-        )
+        !installStateSanitized.message.includes("The pack isn't installed yet.")
       ) {
         throw new Error(
           `InstallationStateError not properly formatted: '${installStateSanitized.message}'`,
@@ -5257,11 +5273,13 @@ try {
       }
 
       const modPolicySanitized = sanitizeIpcError(
-        new ModPolicyError("Cannot disable unknown official mod: 'core'"),
+        new ModPolicyError(
+          "Couldn't check the pack's mod list. Press Check files, then try again.",
+        ),
       );
       if (
         !modPolicySanitized.message.includes(
-          "Cannot disable unknown official mod",
+          "Couldn't check the pack's mod list. Press Check files, then try again.",
         )
       ) {
         throw new Error(

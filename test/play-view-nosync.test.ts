@@ -155,10 +155,10 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
       ).toBe(true);
       expect(
         toasts.some((t) =>
-          t.msg.includes("No-sync mode active. Launching game..."),
+          t.msg.includes("Updates are off. Starting with the files you have."),
         ),
       ).toBe(true);
-      expect(titlebarStatusText.innerText).toBe("RUNNING");
+      expect(titlebarStatusText.innerText).toBe("Playing");
 
       // Reset test spies and simulate game closing
       exitCallback(0);

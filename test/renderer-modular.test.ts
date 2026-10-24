@@ -5,7 +5,11 @@ import { getServerStatusView } from "../ui/src/views/server-status-view";
 import { initAuthView } from "../ui/src/views/auth-view";
 import { initSettingsView } from "../ui/src/views/settings-view";
 import { initModsView } from "../ui/src/views/mods-view";
-import type { RendererSettingsDto, RendererUserProfile } from "../src/types";
+import type {
+  ModCatalogEntry,
+  RendererSettingsDto,
+  RendererUserProfile,
+} from "../src/types";
 
 describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
   test("secret-bearing tokens are excluded from renderer DTO interfaces", () => {
@@ -428,15 +432,13 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       // Verify toasts: initial info toast followed by success completion toast
       expect(
         toasts.some(
-          (t) => t.type === "info" && t.message.includes("Verifying"),
+          (t) => t.type === "info" && t.message === "Checking game files…",
         ),
       ).toBe(true);
       expect(
         toasts.some(
           (t) =>
-            t.type === "success" &&
-            (t.message.includes("repaired") ||
-              t.message.includes("Repair complete")),
+            t.type === "success" && t.message === "All components repaired.",
         ),
       ).toBe(true);
     } finally {
@@ -575,6 +577,148 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       expect(typeof modsOpenDirBtn.onclick).toBe("function");
       await modsOpenDirBtn.onclick();
       expect(openedPath).toBe("modsDir");
+
+      dispose();
+    } finally {
+      (globalThis as any).document = prevDoc;
+      (globalThis as any).window = prevWin;
+    }
+  });
+
+  test("mods view labels each mod's requirement and filters the grid by it", async () => {
+    const catalog: ModCatalogEntry[] = [
+      {
+        id: "optional-mod",
+        name: "Optional Mod",
+        filename: "optional-mod.jar",
+        side: "client",
+        source: "official",
+        kind: "mod",
+        enabled: true,
+        canDisable: true,
+      },
+      {
+        id: "required-mod",
+        name: "Required Mod",
+        filename: "required-mod.jar",
+        side: "both",
+        source: "official",
+        kind: "mod",
+        enabled: true,
+        canDisable: false,
+      },
+      {
+        id: "local:my-addon.jar",
+        name: "My Addon",
+        filename: "my-addon.jar",
+        side: "client",
+        source: "custom",
+        kind: "mod",
+        enabled: true,
+        canDisable: true,
+      },
+    ];
+
+    class MockNode {
+      innerHTML = "";
+      innerText = "";
+      disabled = false;
+      dataset: Record<string, string> = {};
+      private classes = new Set<string>();
+      private listeners = new Map<string, Array<(event: unknown) => void>>();
+      classList = {
+        add: (...names: string[]) => names.forEach((n) => this.classes.add(n)),
+        remove: (...names: string[]) =>
+          names.forEach((n) => this.classes.delete(n)),
+        contains: (name: string) => this.classes.has(name),
+      };
+      onclick: unknown = null;
+      addEventListener(event: string, handler: (event: unknown) => void) {
+        this.listeners.set(event, [
+          ...(this.listeners.get(event) ?? []),
+          handler,
+        ]);
+      }
+      removeEventListener() {}
+      click() {
+        for (const handler of this.listeners.get("click") ?? []) {
+          handler({ target: this });
+        }
+      }
+    }
+
+    const elements = new Map<string, MockNode>();
+    const reg = (id: string) => {
+      const el = new MockNode();
+      elements.set(id, el);
+      return el;
+    };
+    const grid = reg("mods-grid");
+    const filteredCount = reg("mods-filtered-count");
+    reg("tab-mods");
+    const pills = ["all", "optional", "required", "custom"].map((filter) => {
+      const pill = new MockNode();
+      pill.dataset.filter = filter;
+      return pill;
+    });
+
+    const prevDoc = (globalThis as any).document;
+    const prevWin = (globalThis as any).window;
+    (globalThis as any).document = {
+      getElementById: (id: string) => elements.get(id) || null,
+      querySelectorAll: (selector: string) =>
+        selector === ".mod-filter-pill" ? pills : [],
+      createElement: () => new MockNode(),
+    };
+    (globalThis as any).window = {
+      lampas: {
+        sync: { getModCatalog: async () => catalog },
+      },
+    };
+
+    const cardsOf = (html: string) =>
+      html.split('<div class="mod-card"').slice(1);
+    const shownModIds = () =>
+      cardsOf(grid.innerHTML).map(
+        (card) => /data-mod-id="([^"]+)"/.exec(card)![1],
+      );
+    const badgesOf = (id: string) => {
+      const card = cardsOf(grid.innerHTML).find((c) =>
+        c.includes(`data-mod-id="${id}"`),
+      )!;
+      return [
+        ...card.matchAll(
+          /<span class="(?:tag|local-mod-badge)">([^<]+)<\/span>/g,
+        ),
+      ].map((match) => match[1]);
+    };
+    const pickFilter = (filter: string) => {
+      pills.find((pill) => pill.dataset.filter === filter)!.click();
+    };
+
+    try {
+      // The tab is visible at start-up, so the catalog loads during init.
+      const dispose = initModsView({
+        showToast: () => {},
+        onModsChanged: () => {},
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(badgesOf("optional-mod")).toEqual(["Optional"]);
+      expect(badgesOf("required-mod")).toEqual(["Required"]);
+      expect(badgesOf("local:my-addon.jar")).toEqual(["Added by you"]);
+      expect(grid.innerHTML).not.toContain("Client only");
+      expect(grid.innerHTML).not.toContain("Server only");
+
+      pickFilter("optional");
+      expect(shownModIds()).toEqual(["optional-mod"]);
+      expect(filteredCount.innerText).toBe("1 of 3");
+
+      pickFilter("required");
+      expect(shownModIds()).toEqual(["required-mod"]);
+
+      pickFilter("custom");
+      expect(shownModIds()).toEqual(["local:my-addon.jar"]);
 
       dispose();
     } finally {

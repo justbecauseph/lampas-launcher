@@ -194,9 +194,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     LauncherAuth.cancelLogin();
     expect(LauncherAuth.activeLoginContext).toBeNull();
-    await expect(loginPromise1).rejects.toThrow(
-      "Authentication cancelled by user",
-    );
+    await expect(loginPromise1).rejects.toThrow("Sign-in was cancelled.");
 
     // 2. Supersession path
     const loginPromise2 = LauncherAuth.loginWithPortal();
@@ -205,7 +203,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
 
     // Start a second login while first is in-flight -> supersedes first
     const loginPromise3 = LauncherAuth.loginWithPortal();
-    await expect(loginPromise2).rejects.toThrow("superseded");
+    await expect(loginPromise2).rejects.toThrow(
+      "A newer sign-in replaced this one.",
+    );
 
     // Clean up second
     LauncherAuth.cancelLogin();
@@ -729,7 +729,13 @@ describe("Phase 3 Failure Path Reproductions", () => {
       clientReq.end();
 
       // Exchange must reject and fail the login promise
-      await expect(loginPromise).rejects.toThrow(/invalid user identity/);
+      await expect(loginPromise).rejects.toThrow(
+        "Couldn't finish signing in. Try again.",
+      );
+      await expect(loginPromise).rejects.toHaveProperty(
+        "isMainOwnedError",
+        true,
+      );
       expect(SessionManager.isAuthenticated()).toBe(false);
       expect(SessionManager.getCredentials()).toBeNull();
     } finally {
@@ -1153,7 +1159,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
       }
 
       // Simulate timeout termination on active context
-      context.terminate("Login timed out after 120s");
+      context.terminate("timeout");
 
       // Release barrier after timeout termination
       barrierResolve!(true);
@@ -1162,7 +1168,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       expect(loginErr).toBeDefined();
-      expect(loginErr.message).toContain("timed out");
+      expect(loginErr.message).toBe("Sign-in took too long. Try again.");
 
       // Nonpublication assertions
       expect(SessionManager.getCredentials()).toBeNull();
@@ -1269,7 +1275,7 @@ describe("Phase 3 Failure Path Reproductions", () => {
       // Attempt A must reject with superseded error
       await new Promise((r) => setTimeout(r, 30));
       expect(loginErrA).toBeDefined();
-      expect(loginErrA.message).toContain("superseded");
+      expect(loginErrA.message).toBe("A newer sign-in replaced this one.");
 
       while (!contextB.authUrl) {
         await new Promise((r) => setTimeout(r, 10));
@@ -2998,7 +3004,7 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
       );
       expect(targetValidation.valid).toBe(false);
       expect(targetValidation.reason).toMatch(
-        /symbolic link|Target directory physically aliases/i,
+        /Choose a normal folder, not a shortcut or link\.|That's already your game folder\./,
       );
     } finally {
       try {

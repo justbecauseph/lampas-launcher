@@ -90,7 +90,8 @@ const {
   minecraftTokenProblem,
   resolveLaunchIdentity,
 } = await import("../src/game-runner");
-const { AuthRequiredError } = await import("../src/ipc-boundary");
+const { AuthRequiredError, InstallationStateError, sanitizeIpcError } =
+  await import("../src/ipc-boundary");
 const { LauncherAuth } = await import("../src/auth");
 
 const javaSpy = spyOn(JavaRuntimeManager, "ensureJava25").mockImplementation(
@@ -256,13 +257,22 @@ describe("GameRunner launch flow & Quick Play", () => {
       `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.signature`;
     const cases: Array<[string | undefined, string]> = [
       // No token, the old offline placeholder, and a token that isn't a JWT.
-      [undefined, "Minecraft sign-in required"],
-      ["0", "Minecraft sign-in required"],
-      ["portal-session-x", "Minecraft sign-in required"],
+      [
+        undefined,
+        "Link the Microsoft account that owns Minecraft on the Lampas website, then sign in again.",
+      ],
+      [
+        "0",
+        "Link the Microsoft account that owns Minecraft on the Lampas website, then sign in again.",
+      ],
+      [
+        "portal-session-x",
+        "Link the Microsoft account that owns Minecraft on the Lampas website, then sign in again.",
+      ],
       // A Microsoft token that expired an hour ago.
       [
         jwt({ sub: "test", exp: Math.floor(Date.now() / 1000) - 3600 }),
-        "Minecraft session has expired",
+        "Your Minecraft sign-in has expired. Sign out, sign in again, then press Play.",
       ],
     ];
     for (const [minecraftAccessToken, message] of cases) {
@@ -283,6 +293,30 @@ describe("GameRunner launch flow & Quick Play", () => {
       expect(bootstrapCalls).toHaveLength(0);
       expect(spawnedCalls).toHaveLength(0);
     }
+  });
+
+  test("launch with no installed pack is refused with the Press Play message, which survives IPC", async () => {
+    const emptyGameDir = fs.mkdtempSync(path.join(testRoot, "no-pack-"));
+    ConfigManager.set({ gameDir: emptyGameDir, allocatedRamGb: 4 });
+    spawnedCalls = [];
+    javaSpy.mockClear();
+
+    const rejection = await GameRunner.launchGame(
+      dummyUser,
+      () => {},
+      () => {},
+    ).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(rejection).toBeInstanceOf(InstallationStateError);
+    expect(sanitizeIpcError(rejection).message).toBe(
+      "The pack isn't installed yet. Press Play with pack updates on, or use Repair game files in Settings.",
+    );
+    // Refused before Java is prepared or the game is spawned.
+    expect(javaSpy).not.toHaveBeenCalled();
+    expect(spawnedCalls).toHaveLength(0);
   });
 
   test("resolveLaunchIdentity names what the player must fix", () => {
@@ -472,7 +506,9 @@ describe("GameRunner launch flow & Quick Play", () => {
         () => {},
         () => {},
       ),
-    ).rejects.toThrow("No bound Minecraft account found in your profile");
+    ).rejects.toThrow(
+      "Your Lampas account isn't linked to a Minecraft account yet. Link one on the Lampas website, then sign in again.",
+    );
   });
 
   test("rejects launch if user has zero/placeholder Minecraft UUID", async () => {
@@ -493,7 +529,9 @@ describe("GameRunner launch flow & Quick Play", () => {
         () => {},
         () => {},
       ),
-    ).rejects.toThrow("No bound Minecraft account found in your profile");
+    ).rejects.toThrow(
+      "Your Lampas account isn't linked to a Minecraft account yet. Link one on the Lampas website, then sign in again.",
+    );
   });
 
   test("propagates exact release runtime (0.99.123-test) to MinecraftBootstrap and JVM args (PLAN.md Section 44)", async () => {

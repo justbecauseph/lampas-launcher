@@ -757,7 +757,7 @@ export class GameDirectoryManager {
       typeof targetPath !== "string" ||
       targetPath.trim().length === 0
     ) {
-      return { valid: false, reason: "Target directory path cannot be empty." };
+      return { valid: false, reason: "Choose a folder." };
     }
 
     const trimmed = targetPath.trim();
@@ -768,7 +768,7 @@ export class GameDirectoryManager {
     ) {
       return {
         valid: false,
-        reason: "Target directory cannot be a root drive directory.",
+        reason: "Choose a folder inside a drive, not the top of the drive.",
       };
     }
 
@@ -783,7 +783,7 @@ export class GameDirectoryManager {
     ) {
       return {
         valid: false,
-        reason: "Target directory cannot be a root drive directory.",
+        reason: "Choose a folder inside a drive, not the top of the drive.",
       };
     }
 
@@ -800,20 +800,22 @@ export class GameDirectoryManager {
         ) {
           return {
             valid: false,
-            reason:
-              "Target directory cannot be a symbolic link or special file.",
+            reason: "Choose a normal folder, not a shortcut or link.",
           };
         }
         if (!stat.isDirectory()) {
           return {
             valid: false,
-            reason: "Target path exists but is not a directory.",
+            reason: "That's a file, not a folder.",
           };
         }
       } catch (err: any) {
+        LauncherLogger.warn(
+          `Cannot inspect target directory: ${err?.message || err}`,
+        );
         return {
           valid: false,
-          reason: `Cannot inspect target directory: ${err.message}`,
+          reason: "Couldn't open that folder.",
         };
       }
     }
@@ -823,7 +825,7 @@ export class GameDirectoryManager {
     if (parsedCanon.root.toLowerCase() === canonTarget.toLowerCase()) {
       return {
         valid: false,
-        reason: "Target directory cannot resolve to a root drive directory.",
+        reason: "Choose a folder inside a drive, not the top of the drive.",
       };
     }
 
@@ -842,8 +844,7 @@ export class GameDirectoryManager {
       if (cmpLexCurrent === cmpLexTarget) {
         return {
           valid: false,
-          reason:
-            "Target directory is the same as the current installation directory.",
+          reason: "That's already your game folder.",
         };
       }
 
@@ -855,8 +856,7 @@ export class GameDirectoryManager {
       ) {
         return {
           valid: false,
-          reason:
-            "Target directory cannot be inside the current installation directory.",
+          reason: "Choose a folder outside your current game folder.",
         };
       }
 
@@ -869,7 +869,7 @@ export class GameDirectoryManager {
         return {
           valid: false,
           reason:
-            "Current installation directory cannot be inside the target directory.",
+            "Choose a folder that doesn't contain your current game folder.",
         };
       }
 
@@ -885,8 +885,7 @@ export class GameDirectoryManager {
       if (cmpCanonCurrent === cmpCanonTarget) {
         return {
           valid: false,
-          reason:
-            "Target directory physically aliases the current installation directory.",
+          reason: "That's already your game folder.",
         };
       }
 
@@ -900,8 +899,7 @@ export class GameDirectoryManager {
       if (cmpCanonTarget.startsWith(currentPrefix)) {
         return {
           valid: false,
-          reason:
-            "Target directory cannot be inside the current installation directory.",
+          reason: "Choose a folder outside your current game folder.",
         };
       }
 
@@ -909,7 +907,7 @@ export class GameDirectoryManager {
         return {
           valid: false,
           reason:
-            "Current installation directory cannot be inside the target directory.",
+            "Choose a folder that doesn't contain your current game folder.",
         };
       }
     }
@@ -937,7 +935,7 @@ export class GameDirectoryManager {
     if (!checkWritable(resolvedTarget)) {
       return {
         valid: false,
-        reason: "Target location is not writable or access is denied.",
+        reason: "The launcher can't save files there. Choose another folder.",
       };
     }
 

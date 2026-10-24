@@ -8,12 +8,12 @@ The one-click way to play the Lampas SMP Minecraft server. The launcher keeps yo
 
 ## What it does
 
-- **Browser sign-in:** log in through the Lampas Portal in your browser.
+- **Browser sign-in:** sign in through the Lampas website in your browser.
 - **Automatic mod updates:** before the game starts, the launcher downloads the server's current mods, configs and resource packs, so you always match the server.
 - **Java included:** Minecraft 26.2 needs Java 25. If you don't have it, the launcher downloads Mojang's Java runtime for you.
 - **Straight into the server:** press **Play** and the game joins Lampas, with no server address to type.
 - **Required resource packs:** the server's resource packs are downloaded and switched on for you. Your own packs stay as they are.
-- **Your own mods and shaders:** drop extra mods (`.jar`) or shader packs (`.zip`) into the **Client mods** tab, and switch optional pack mods on or off.
+- **Your own mods and shaders:** drop extra mods (`.jar`) or shader packs (`.zip`) into the **Mods** tab, and switch optional pack mods on or off.
 - **Server status:** see whether the server is online and who is playing before you launch.
 - **Move your game folder:** move the game to another drive from Settings.
 - **Repair:** if the game acts up, Repair checks every file against the server's copy and replaces anything damaged.
@@ -25,27 +25,27 @@ The one-click way to play the Lampas SMP Minecraft server. The launcher keeps yo
    - **Windows without the Store:** download `LampasLauncher-Setup-<version>.exe` (installer) or `LampasLauncher-<version>-Windows.exe` (portable) from [GitHub Releases](https://github.com/justbecauseph/lampas-launcher/releases/latest). The launcher tells you when a newer version is out.
    - **Linux:** download `LampasLauncher-<version>-Linux.AppImage` (make it executable, then run it) or the `.tar.gz` from [GitHub Releases](https://github.com/justbecauseph/lampas-launcher/releases/latest).
 2. **Choose a game folder.** The first time you open the launcher, it asks where to install Minecraft. The suggested folder is fine for most people.
-3. **Log in.** Click **Log in**. Your browser opens the Lampas Portal; sign in and link your Minecraft account there.
+3. **Sign in.** Click **Sign in**. Your browser opens the Lampas website; sign in and link your Minecraft account there.
 4. **Press Play.** The launcher updates the mods, prepares Java and starts Minecraft.
 
 ## Launcher tour
 
-| Tab                | What it's for                                                                                                                                       |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Play**           | Server status and who's online, the **Play** button, and **Stop** while the game runs.                                                              |
-| **Client mods**    | Switch optional mods on or off, add your own mods and shader packs, and **Repair pack**.                                                            |
-| **Console & logs** | Live game output while Minecraft runs. **Copy** it for staff, or open the launcher log or Minecraft log.                                            |
-| **Settings**       | Memory (2–16 GB, 8 GB by default), release channel (Stable, Beta, Dev), game folder, **Repair game files**, **Remove game files** and Java options. |
+| Tab          | What it's for                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Play**     | Server status and who's online, the **Play** button, and **Stop** while the game runs.                                                           |
+| **Mods**     | Switch optional mods on or off, add your own mods and shader packs, and **Repair game files**.                                                   |
+| **Logs**     | Live game output while Minecraft runs. **Copy** it for staff, or open the launcher log or Minecraft log.                                         |
+| **Settings** | Memory (2–16 GB, 8 GB by default), pack version (Stable, Beta, Dev), game folder, **Repair game files**, **Remove game files** and Java options. |
 
 ## FAQ
 
 ### "It says my Minecraft account isn't linked."
 
-Open the [Lampas Portal](https://dev.lampas.town), link your Minecraft Java account to your profile, then log in to the launcher again.
+Open the [Lampas website](https://dev.lampas.town), link your Minecraft Java account to your profile, then sign in to the launcher again.
 
-### "It says Minecraft sign-in is required."
+### "It says to link the Microsoft account that owns Minecraft."
 
-The launcher only starts Minecraft for an account that owns Minecraft: Java Edition. On the [Lampas Portal](https://dev.lampas.town), link the Microsoft account you bought Minecraft with, then log in to the launcher again.
+The launcher only starts Minecraft for an account that owns Minecraft: Java Edition. On the [Lampas website](https://dev.lampas.town), link the Microsoft account you bought Minecraft with, then sign in to the launcher again.
 
 ### "It says a launcher update is required."
 
@@ -53,8 +53,8 @@ The server's current pack needs a newer launcher. Microsoft Store installs updat
 
 ### "My game crashed or won't start."
 
-1. Click **Repair & retry** under the error, or **Repair game files** in Settings. This checks every file and replaces anything broken.
-2. If it still fails, open **Console & logs**, click **Copy**, and send the output to the Lampas staff on Discord.
+1. Click **Repair and try again** under the error, or **Repair game files** in Settings. This checks every file and replaces anything broken.
+2. If it still fails, open **Logs**, click **Copy**, and send the output to the Lampas staff on Discord.
 
 ### "Will updates delete my worlds, screenshots or settings?"
 

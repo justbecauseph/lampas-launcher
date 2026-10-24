@@ -15,7 +15,12 @@ import {
 } from "./credential-store";
 import type { UserProfile } from "./types";
 import { LauncherLogger } from "./logger";
-import { OperationConflictError, UserCancelledError } from "./ipc-boundary";
+import {
+  AuthRequiredError,
+  MainIpcError,
+  OperationConflictError,
+  UserCancelledError,
+} from "./ipc-boundary";
 import { renderErrorHtml, renderSuccessHtml } from "./callback-page";
 
 export const LOGIN_TIMEOUT_MS = 120_000; // 120 seconds (2 minutes) timeout
@@ -33,6 +38,35 @@ function generatePkce() {
   const hash = createHash("sha256").update(verifier).digest();
   const challenge = base64Url(hash);
   return { verifier, challenge };
+}
+
+const SIGN_IN_FAILED_MESSAGE = "Couldn't finish signing in. Try again.";
+const UNREACHABLE_MESSAGE =
+  "Couldn't reach the Lampas website. Check your internet connection, then try again.";
+const NOT_LINKED_MESSAGE =
+  "Your Lampas account isn't linked to a Minecraft account yet. Link one on the Lampas website, then sign in again.";
+
+/**
+ * The player-facing sentence for a sign-in that ended with no error of its own.
+ */
+function signInStoppedMessage(reason: string): string {
+  switch (reason) {
+    case "timeout":
+      return "Sign-in took too long. Try again.";
+    case "cancelled":
+    case "denied":
+      return "Sign-in was cancelled.";
+    case "superseded":
+      return "A newer sign-in replaced this one.";
+    case "shutdown":
+      return "The launcher closed before sign-in finished.";
+    case "server_error":
+      return SIGN_IN_FAILED_MESSAGE;
+    case "browser_error":
+      return "The browser couldn't finish sign-in. Try again.";
+    default:
+      return "Sign-in stopped. Try again.";
+  }
 }
 
 interface LoginOperationContext {
@@ -72,7 +106,7 @@ export class LauncherAuth {
     if (this.activeLoginContext) {
       this.activeLoginContext.terminate(
         "cancelled",
-        new UserCancelledError("Authentication cancelled by user."),
+        new UserCancelledError("Sign-in was cancelled."),
       );
       this.activeLoginContext = null;
     }
@@ -86,9 +120,7 @@ export class LauncherAuth {
     if (this.activeLoginContext) {
       this.activeLoginContext.terminate(
         "superseded",
-        new OperationConflictError(
-          "Login was superseded by a new login request.",
-        ),
+        new OperationConflictError("A newer sign-in replaced this one."),
       );
       this.activeLoginContext = null;
     }
@@ -195,7 +227,8 @@ export class LauncherAuth {
         terminate: (reason, err) => {
           if (isSettled) return;
           abortController.abort();
-          const finalError = err || new Error(`Login terminated: ${reason}`);
+          const finalError =
+            err || new MainIpcError(signInStoppedMessage(reason));
           settleOnce({ success: false, error: finalError }, reason);
         },
         settleSuccess: (data) => {
@@ -208,10 +241,7 @@ export class LauncherAuth {
       // 120-second terminal deadline
       timeoutTimer = setTimeout(() => {
         LauncherLogger.warn("[Auth] Portal login timed out after 120 seconds.");
-        opContext.terminate(
-          "timeout",
-          new Error("Login timed out after 120 seconds."),
-        );
+        opContext.terminate("timeout");
       }, LOGIN_TIMEOUT_MS);
 
       const server = http.createServer(async (req, res) => {
@@ -220,7 +250,7 @@ export class LauncherAuth {
           if (opContext.isTerminal()) {
             try {
               res.writeHead(400, { "Content-Type": "text/plain" });
-              res.end("Login session is no longer active");
+              res.end("Sign-in session is no longer active");
             } catch {}
             return;
           }
@@ -292,7 +322,7 @@ export class LauncherAuth {
             });
             res.end(
               renderErrorHtml(
-                "Authentication was denied or cancelled on the portal.",
+                "Sign-in was cancelled. Go back to the launcher and try again.",
               ),
             );
             LauncherLogger.warn(
@@ -300,7 +330,7 @@ export class LauncherAuth {
             );
             opContext.terminate(
               "denied",
-              new Error("Authentication was denied or cancelled by user"),
+              new UserCancelledError("Sign-in was cancelled."),
             );
             return;
           }
@@ -340,15 +370,13 @@ export class LauncherAuth {
             });
             res.end(
               renderErrorHtml(
-                "Authentication session was superseded or cancelled.",
+                "This sign-in was replaced by a newer one. Go back to the launcher.",
               ),
             );
             pageSockets.add(req.socket);
             opContext.terminate(
               "superseded",
-              new Error(
-                "Authentication session was invalidated or portal changed during login flow",
-              ),
+              new OperationConflictError("A newer sign-in replaced this one."),
             );
             return;
           }
@@ -369,15 +397,16 @@ export class LauncherAuth {
               signal: abortController.signal,
             });
           } catch (netErr: any) {
+            LauncherLogger.error(
+              `[Auth] Token exchange request failed: ${netErr?.message || netErr}`,
+            );
             if (opContext.isTerminal()) return;
             res.writeHead(502, {
               "Content-Type": "text/html; charset=utf-8",
               Connection: "close",
             });
-            res.end(
-              renderErrorHtml("Network error communicating with the portal."),
-            );
-            opContext.terminate("error", netErr);
+            res.end(renderErrorHtml(UNREACHABLE_MESSAGE));
+            opContext.terminate("error", new MainIpcError(UNREACHABLE_MESSAGE));
             return;
           }
 
@@ -398,12 +427,11 @@ export class LauncherAuth {
               "Content-Type": "text/html; charset=utf-8",
               Connection: "close",
             });
-            res.end(
-              renderErrorHtml(
-                "Token exchange failed. Please try logging in again.",
-              ),
+            res.end(renderErrorHtml(SIGN_IN_FAILED_MESSAGE));
+            opContext.terminate(
+              "error",
+              new MainIpcError(SIGN_IN_FAILED_MESSAGE),
             );
-            opContext.terminate("error", new Error(errMsg));
             return;
           }
 
@@ -421,18 +449,15 @@ export class LauncherAuth {
             typeof json.token !== "string" ||
             !json.token.trim()
           ) {
-            const err = new Error(
-              "Token exchange failed: portal returned invalid token",
+            LauncherLogger.error(
+              "[Auth] Token exchange failed: portal returned invalid token",
             );
+            const err = new MainIpcError(SIGN_IN_FAILED_MESSAGE);
             res.writeHead(400, {
               "Content-Type": "text/html; charset=utf-8",
               Connection: "close",
             });
-            res.end(
-              renderErrorHtml(
-                "Token exchange failed. Server returned invalid token.",
-              ),
-            );
+            res.end(renderErrorHtml(SIGN_IN_FAILED_MESSAGE));
             opContext.terminate("error", err);
             return;
           }
@@ -450,18 +475,15 @@ export class LauncherAuth {
             user.name.toLowerCase() === "account" ||
             user.name.toLowerCase() === "unverified-migration"
           ) {
-            const err = new Error(
-              "Token exchange failed: portal returned invalid user identity",
+            LauncherLogger.error(
+              "[Auth] Token exchange failed: portal returned invalid user identity",
             );
+            const err = new MainIpcError(SIGN_IN_FAILED_MESSAGE);
             res.writeHead(400, {
               "Content-Type": "text/html; charset=utf-8",
               Connection: "close",
             });
-            res.end(
-              renderErrorHtml(
-                "Token exchange failed. Server returned invalid user identity.",
-              ),
-            );
+            res.end(renderErrorHtml(SIGN_IN_FAILED_MESSAGE));
             opContext.terminate("error", err);
             return;
           }
@@ -470,9 +492,7 @@ export class LauncherAuth {
             !isValidMinecraftUuid(user?.minecraftUuid) ||
             !user?.minecraftUsername
           ) {
-            const err = new Error(
-              "Minecraft account not bound: Please link your Minecraft Java account on the Lampas Portal dashboard.",
-            );
+            const err = new AuthRequiredError(NOT_LINKED_MESSAGE);
             LauncherLogger.error(
               "[Auth] Identity is missing a bound Minecraft UUID",
             );
@@ -481,11 +501,7 @@ export class LauncherAuth {
               "Content-Type": "text/html; charset=utf-8",
               Connection: "close",
             });
-            res.end(
-              renderErrorHtml(
-                "Minecraft account not bound. Please link your Minecraft Java account on the portal dashboard.",
-              ),
-            );
+            res.end(renderErrorHtml(NOT_LINKED_MESSAGE));
             opContext.terminate("error", err);
             return;
           }
@@ -503,15 +519,13 @@ export class LauncherAuth {
             });
             res.end(
               renderErrorHtml(
-                "Authentication session was superseded or cancelled.",
+                "This sign-in was replaced by a newer one. Go back to the launcher.",
               ),
             );
             pageSockets.add(req.socket);
             opContext.terminate(
               "superseded",
-              new Error(
-                "Authentication session was invalidated or portal changed during token exchange",
-              ),
+              new OperationConflictError("A newer sign-in replaced this one."),
             );
             return;
           }
@@ -580,10 +594,7 @@ export class LauncherAuth {
 
       server.on("error", (err: any) => {
         LauncherLogger.error(`[Auth] Loopback server error: ${err.message}`);
-        opContext.terminate(
-          "server_error",
-          new Error(`Loopback callback server failed: ${err.message}`),
-        );
+        opContext.terminate("server_error");
       });
 
       server.listen(0, "127.0.0.1", () => {
@@ -602,13 +613,19 @@ export class LauncherAuth {
             );
             opContext.terminate(
               "browser_error",
-              new Error(
-                `Failed to open browser for authentication: ${openErr.message}`,
+              new MainIpcError(
+                "Couldn't open your browser to sign in. Try again.",
               ),
             );
           });
         } catch (listenErr: any) {
-          opContext.terminate("server_error", listenErr);
+          LauncherLogger.error(
+            `[Auth] Sign-in callback setup failed: ${listenErr?.message || listenErr}`,
+          );
+          opContext.terminate(
+            "server_error",
+            new MainIpcError(signInStoppedMessage("server_error")),
+          );
         }
       });
     });

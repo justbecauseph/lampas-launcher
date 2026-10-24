@@ -18,18 +18,18 @@
       <div class="flex items-center gap-2 app-drag">
         <span class="titlebar-name">Lampas Launcher</span>
         <span id="titlebar-version-badge" class="badge">v1.5.4</span>
-        <span id="titlebar-channel-badge" class="badge text-cyan-400"
-          >STABLE</span
+        <span id="titlebar-channel-badge" class="badge text-cyan-400 hidden"
+          >Stable</span
         >
         <span id="titlebar-nosync-badge" class="badge badge-mist hidden"
-          >NO SYNC</span
+          >Updates off</span
         >
         <div id="titlebar-game-status" class="badge">
           <span
             id="titlebar-status-dot"
             class="status-dot status-dot-idle"
           ></span>
-          <span id="titlebar-status-text">IDLE</span>
+          <span id="titlebar-status-text">Ready</span>
         </div>
       </div>
 
@@ -87,7 +87,7 @@
                   d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
                 />
               </svg>
-              <span>Client mods</span>
+              <span>Mods</span>
             </button>
 
             <button id="nav-console" class="nav-item">
@@ -104,7 +104,7 @@
                   d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                 />
               </svg>
-              <span>Console & logs</span>
+              <span>Logs</span>
             </button>
 
             <button id="nav-settings" class="nav-item">
@@ -166,8 +166,8 @@
             <button
               id="btn-logout"
               class="icon-btn"
-              title="Log out"
-              aria-label="Log out"
+              title="Sign out"
+              aria-label="Sign out"
             >
               <svg
                 class="w-4 h-4"
@@ -200,7 +200,7 @@
                 d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"
               />
             </svg>
-            <span id="btn-login-text">Log in</span>
+            <span id="btn-login-text">Sign in</span>
           </button>
 
           <!-- target="_blank" hands the URL to the window-open handler, which
@@ -376,12 +376,10 @@
                   aria-hidden="true"
                 ></span>
                 <span id="server-presence-state" class="presence-state"
-                  >Status unavailable</span
+                  >Status unknown</span
                 >
                 <span class="presence-sep" aria-hidden="true">·</span>
-                <span id="server-presence-count" class="presence-count"
-                  >— players</span
-                >
+                <span id="server-presence-count" class="presence-count"></span>
               </div>
               <div
                 id="server-presence-players"
@@ -389,7 +387,8 @@
                 aria-label="Players currently online"
               ></div>
               <p id="server-presence-detail" class="server-presence-detail">
-                Unable to verify server status right now. You can still launch.
+                Couldn't check the server just now. You can still start the
+                game.
               </p>
             </section>
 
@@ -449,7 +448,7 @@
                     class="btn-secondary"
                     type="button"
                   >
-                    Repair &amp; retry
+                    Repair and try again
                   </button>
                 </div>
               </div>
@@ -500,17 +499,17 @@
         >
           <div class="page-header">
             <div>
-              <h2 class="page-title">Client loadout</h2>
+              <h2 class="page-title">Mods</h2>
               <p class="page-description">
-                Tune optional client mods and keep your own additions across
-                pack syncs.
+                Turn optional mods on or off, and add your own. Mods you add
+                stay when the pack updates.
               </p>
             </div>
             <div class="flex items-center gap-2">
               <button
                 id="btn-add-mods"
                 class="btn-primary"
-                title="Add one or more local client mod JARs"
+                title="Add mod files (.jar) from your computer"
               >
                 <svg
                   class="w-3.5 h-3.5"
@@ -525,12 +524,12 @@
                     d="M12 4v16m8-8H4"
                   />
                 </svg>
-                <span id="btn-add-mods-label">Add local mods</span>
+                <span id="btn-add-mods-label">Add your mods</span>
               </button>
               <button
                 id="btn-repair-pack"
                 class="btn-secondary"
-                title="Force check and repair all files, assets, and libraries"
+                title="Check every game file and replace anything missing or damaged"
               >
                 <svg
                   class="w-3.5 h-3.5"
@@ -551,7 +550,7 @@
                     d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
                   />
                 </svg>
-                <span>Repair pack</span>
+                <span>Repair game files</span>
               </button>
               <button id="btn-verify-pack" class="btn-secondary">
                 <svg
@@ -567,7 +566,7 @@
                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                   />
                 </svg>
-                <span>Verify integrity</span>
+                <span>Check files</span>
               </button>
               <button id="btn-mods-open-dir" class="btn-secondary">
                 <svg
@@ -583,7 +582,7 @@
                     d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
                   />
                 </svg>
-                <span>Open pack folder</span>
+                <span>Open mods folder</span>
               </button>
             </div>
           </div>
@@ -593,7 +592,7 @@
             <div class="flex-1 min-h-0 flex flex-col space-y-3">
               <div class="flex items-center justify-between flex-shrink-0">
                 <h4 class="eyebrow flex items-center gap-2">
-                  <span>Installed mods & features</span>
+                  <span>Installed mods</span>
                   <span id="mods-filtered-count" class="badge">0</span>
                 </h4>
                 <div class="w-64">
@@ -619,8 +618,8 @@
                 <button class="mod-filter-pill" data-filter="shader">
                   Shaders
                 </button>
-                <button class="mod-filter-pill" data-filter="client">
-                  Client-only
+                <button class="mod-filter-pill" data-filter="optional">
+                  Optional
                 </button>
                 <button class="mod-filter-pill" data-filter="disabled">
                   Disabled
@@ -642,7 +641,7 @@
                   Utility
                 </button>
                 <span class="pill-divider" aria-hidden="true"></span>
-                <button class="mod-filter-pill" data-filter="both">
+                <button class="mod-filter-pill" data-filter="required">
                   Required
                 </button>
               </div>
@@ -652,14 +651,13 @@
                 class="mod-drop-zone flex items-center justify-between flex-shrink-0"
               >
                 <div class="flex items-center gap-3">
-                  <div id="drop-mark" class="drop-mark">JAR</div>
+                  <div id="drop-mark" class="drop-mark">.jar</div>
                   <div>
                     <div id="drop-title" class="text-sm text-slate-200">
-                      Drop client mod JARs here
+                      Drop mod files (.jar) here
                     </div>
                     <div id="drop-hint" class="text-xs text-slate-500">
-                      Local additions stay yours and are never removed by
-                      synchronization.
+                      Mods you add here stay when the pack updates.
                     </div>
                   </div>
                 </div>
@@ -684,7 +682,7 @@
         >
           <div class="console-header">
             <div class="console-title-group">
-              <h2 class="page-title">Console</h2>
+              <h2 class="page-title">Logs</h2>
               <div
                 id="console-game-status"
                 class="console-status console-status-idle"
@@ -693,7 +691,7 @@
                   id="console-status-dot"
                   class="status-dot status-dot-idle"
                 ></span>
-                <span id="console-status-text">IDLE</span>
+                <span id="console-status-text">Not running</span>
               </div>
               <span id="console-count" class="console-count">0 lines</span>
             </div>
@@ -716,14 +714,14 @@
                 <button
                   id="btn-open-log-file"
                   class="toolbar-btn"
-                  title="Open the launcher log file on disk"
+                  title="Open the launcher's log file"
                 >
                   Launcher log
                 </button>
                 <button
                   id="btn-open-minecraft-log"
                   class="toolbar-btn"
-                  title="Open Minecraft's latest.log on disk"
+                  title="Open Minecraft's log file"
                 >
                   Minecraft log
                 </button>
@@ -731,14 +729,14 @@
                 <button
                   id="btn-copy-logs"
                   class="toolbar-btn"
-                  title="Copy console output to clipboard"
+                  title="Copy the log"
                 >
                   Copy
                 </button>
                 <button
                   id="btn-clear-logs"
                   class="toolbar-btn"
-                  title="Clear console output"
+                  title="Clear the log"
                 >
                   Clear
                 </button>
@@ -900,11 +898,11 @@
               <summary class="settings-card-title">Advanced</summary>
 
               <div class="settings-row">
-                <span class="settings-label">Release channel</span>
+                <span class="settings-label">Pack version</span>
                 <div
                   class="channel-group"
                   role="group"
-                  aria-label="Release channel"
+                  aria-label="Pack version"
                 >
                   <button class="channel-btn active" data-channel="stable">
                     Stable
@@ -913,7 +911,7 @@
                   <button class="channel-btn" data-channel="dev">Dev</button>
                 </div>
                 <p class="settings-help">
-                  Beta and Dev get pack changes early and may be unstable.
+                  Beta and Dev get changes early and can break.
                 </p>
               </div>
 
@@ -922,7 +920,7 @@
                   <label
                     for="setting-nosync"
                     class="settings-label cursor-pointer"
-                    >Skip pack updates (no sync)</label
+                    >Don't update the pack</label
                   >
                   <p class="settings-help">
                     Launch with the files already on disk. You may be unable to
@@ -947,14 +945,14 @@
                   placeholder="-Dexample=value -XX:+UseStringDeduplication"
                 ></textarea>
                 <p class="settings-help">
-                  Added after the launcher's memory and GC defaults. Quote
-                  values that contain spaces.
+                  For advanced users. Added after the launcher's own settings.
+                  Put quotes around values with spaces.
                 </p>
               </div>
 
               <div class="settings-row">
                 <label for="setting-portal" class="settings-label"
-                  >Portal API endpoint</label
+                  >Lampas website address</label
                 >
                 <input
                   id="setting-portal"
@@ -975,11 +973,11 @@
               <dl class="about-grid">
                 <dt>Launcher</dt>
                 <dd id="about-launcher-version">—</dd>
-                <dt>Modpack</dt>
+                <dt>Pack</dt>
                 <dd id="about-pack-version">Not installed</dd>
                 <dt>Minecraft</dt>
                 <dd id="about-minecraft-version">—</dd>
-                <dt>Fabric Loader</dt>
+                <dt>Mod loader (Fabric)</dt>
                 <dd id="runtime-loader-version">—</dd>
               </dl>
               <nav class="legal-links" aria-label="Legal">
@@ -1009,8 +1007,8 @@
           <p class="eyebrow">First-time setup</p>
           <h3 class="modal-title">Choose where to install Minecraft</h3>
           <p class="modal-text">
-            Lampas will store Minecraft, mods, saves, resource packs and its
-            runtime here.
+            Lampas will keep Minecraft, mods, worlds, resource packs and Java
+            here.
           </p>
         </div>
 
@@ -1056,7 +1054,7 @@
             <h3 class="modal-title">Move the Minecraft folder?</h3>
             <p class="modal-text">
               This moves Minecraft, mods, worlds, screenshots, resource packs
-              and launcher-managed runtime files.
+              and Java.
             </p>
           </div>
 
@@ -1091,9 +1089,7 @@
         <div id="move-modal-progress-view" class="hidden space-y-4">
           <div>
             <h3 class="modal-title">Moving the Minecraft folder…</h3>
-            <p id="move-progress-phase" class="modal-text">
-              Preparing relocation…
-            </p>
+            <p id="move-progress-phase" class="modal-text">Getting ready…</p>
           </div>
 
           <div class="space-y-2">
@@ -1117,8 +1113,7 @@
           </div>
 
           <div class="notice">
-            Please keep the launcher open until relocation and verification
-            complete.
+            Keep the launcher open until the move finishes.
           </div>
         </div>
       </div>

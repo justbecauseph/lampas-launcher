@@ -71,7 +71,7 @@ describe("launcher settings", () => {
       "-XX:+UseStringDeduplication",
     ]);
     expect(() => parseJavaArgs('-Dlabel="unfinished')).toThrow(
-      "unclosed quote",
+      "A quote in the Java arguments isn't closed.",
     );
   });
 
