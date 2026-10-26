@@ -6,7 +6,7 @@ Technical reference for building, releasing and maintaining Lampas Launcher. For
 
 - **Windows (x64):** Windows 10 and 11. GitHub Releases ship an NSIS installer and a portable `.exe`. The Microsoft Store AppX needs Windows 10 version 1809 (build 17763) or later (`appx.minVersion` `10.0.17763.0`).
 - **Linux (x64):** AppImage and `.tar.gz` for glibc distributions.
-- **Bun** `1.4.2` (pinned in CI), **Electron** `44.7.0`, **Vite** `^6.2.0` (renderer bundler), **TypeScript** `^5.8.2`, **electron-builder** `^26.15.3`.
+- **Bun** `1.4.2` (pinned in CI), **Electron** `44.9.3`, **Vite** `^6.4.5` (renderer bundler), **TypeScript** `^5.8.2`, **electron-builder** `^26.15.3`.
 - **Node.js** is not pinned. CI uses the runner's preinstalled `node` for the Electron install script, the fuse check and the packaged workflow test.
 
 A Bun override pins electron-builder's `app-builder-lib` to `@electron/get` `5.1.0`, which removes the vulnerable `got`/`cacheable-request`/`http-cache-semantics` chain. Direct networking with default checksums is the intended configuration; custom Got proxy, TLS or `downloadOptions` settings are untested.
@@ -68,7 +68,7 @@ Windows redirects files and folders that a Store (MSIX) app creates under `%APPD
 
 The launcher handles this as follows:
 
-- The default game folder for Store installs is `LocalCache\.minecraft-lampas` in the package folder, written directly so every program sees it. Windows deletes it on uninstall. The Play footer shows it as **Launcher storage**, and first-run setup explains it.
+- The default game folder for Store installs is `LocalCache\.minecraft-lampas` in the package folder, written directly so every program sees it. Windows deletes it on uninstall. The Play footer shows it as **Default location**, and first-run setup explains it.
 - If a configured game folder under AppData has a redirected copy that holds an install, the launcher switches to that copy's real path at startup and again before launch (`resolveStoreGameDir`).
 - Paths opened in Explorer or Notepad (game folder, mods, logs) go through `toExternalPath`, which picks the redirected copy when one exists.
 - A Store install can't move its game folder into AppData, or create a new one there during setup. Setup can still adopt an AppData folder that already exists for real, such as one left by a non-Store build.

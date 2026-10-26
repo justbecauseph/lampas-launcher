@@ -64,7 +64,7 @@ No. Updates never replace your worlds, screenshots, logs, game options or server
 
 ### "Where are my game files with the Microsoft Store version?"
 
-By default, in the launcher's own storage, shown as **Launcher storage** at the bottom of the Play tab. Windows deletes that storage, including your worlds, when you uninstall the launcher. To keep your files after an uninstall, choose another folder during setup or move the game folder in Settings, for example to another drive.
+By default, in the launcher's own storage, shown as **Default location** at the bottom of the Play tab. Windows deletes that storage, including your worlds, when you uninstall the launcher. To keep your files after an uninstall, choose another folder during setup or move the game folder in Settings, for example to another drive.
 
 ### "Does closing the launcher close Minecraft?"
 
