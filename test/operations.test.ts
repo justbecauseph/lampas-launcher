@@ -90,6 +90,36 @@ describe("Phase 1 — OperationCoordinator & Mutual Exclusion", () => {
     ).toThrow(GameRunningConflictError);
   });
 
+  test("assertCanMutateWhileGameRuns skips only the game-running conflict", () => {
+    (GameRunner as any).runningProcess = { killed: false };
+    expect(() =>
+      OperationCoordinator.assertCanMutateWhileGameRuns("update configuration"),
+    ).not.toThrow();
+    expect(() =>
+      OperationCoordinator.assertCanMutate("update configuration"),
+    ).toThrow(GameRunningConflictError);
+
+    // An active operation still rejects the change, even though the game runs.
+    (GameRunner as any).runningProcess = null;
+    const lease = OperationCoordinator.acquire("sync");
+    (GameRunner as any).runningProcess = { killed: false };
+    expect(() =>
+      OperationCoordinator.assertCanMutateWhileGameRuns("update configuration"),
+    ).toThrow(OperationBusyError);
+    lease.release();
+  });
+
+  test("assertCanMutateWhileGameRuns still rejects while mutations are blocked", () => {
+    OperationCoordinator.blockMutations(
+      "pack move journal could not be recovered",
+    );
+    expect(() =>
+      OperationCoordinator.assertCanMutateWhileGameRuns("update configuration"),
+    ).toThrow(
+      "Cannot perform 'update configuration': launcher operations are blocked due to an unresolved startup recovery failure: pack move journal could not be recovered",
+    );
+  });
+
   test("cannot acquire installation operation when game is running", () => {
     (GameRunner as any).runningProcess = { killed: false };
     expect(() => OperationCoordinator.acquire("sync")).toThrow(

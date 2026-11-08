@@ -1155,6 +1155,7 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "javaPath",
   "javaArgs",
   "externalImages",
+  "closeOnGameStart",
 ]);
 
 export function validateConfigSet(payload: unknown): UpdateSettingsDto {
@@ -1227,6 +1228,13 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
       throw new IpcValidationError("externalImages must be a boolean.");
     }
     sanitized.externalImages = raw.externalImages;
+  }
+
+  if (raw.closeOnGameStart !== undefined) {
+    if (typeof raw.closeOnGameStart !== "boolean") {
+      throw new IpcValidationError("closeOnGameStart must be a boolean.");
+    }
+    sanitized.closeOnGameStart = raw.closeOnGameStart;
   }
 
   if (raw.javaPath !== undefined) {

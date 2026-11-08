@@ -40,6 +40,8 @@ const ipcListeners = new Map<string, Function>();
 const openedPaths: string[] = [];
 const openedExternals: string[] = [];
 const interceptedProcesses: Array<{ command: string; args: any[] }> = [];
+// Mock children by spawn order, so tests can write game output and exit them.
+const spawnedChildren: Array<{ command: string; proc: any }> = [];
 
 function createMockChildProcess(command: string, args: any[] = []) {
   interceptedProcesses.push({ command, args });
@@ -52,6 +54,7 @@ function createMockChildProcess(command: string, args: any[] = []) {
   proc.kill = () => true;
   proc.unref = () => {};
   proc.ref = () => {};
+  spawnedChildren.push({ command, proc });
   process.nextTick(() => {
     proc.emit("spawn");
   });
@@ -279,6 +282,8 @@ function getValidEvent(overrides: any = {}) {
   };
 }
 
+const mockAppQuit = mock(() => {});
+
 const mockShell = {
   openPath: mock(async (targetPath: string) => {
     openedPaths.push(targetPath);
@@ -376,7 +381,7 @@ mock.module("electron", () => ({
     getVersion: () => "1.4.0",
     whenReady: () => readyPromise,
     on: () => {},
-    quit: () => {},
+    quit: mockAppQuit,
   },
   BrowserWindow: MockBrowserWindow,
   ipcMain: {
@@ -588,7 +593,7 @@ try {
   });
 
   // Import production main.ts to register IPC channels
-  await import("../src/main");
+  const mainMod = await import("../src/main");
 
   // Signal readiness and await deterministic registration of all 39 handles + 1 listener
   readyResolver!();
@@ -4905,6 +4910,254 @@ try {
       }
     },
   );
+
+  // 50b. [closeOnGameStart] Close timing and the config:set guard while Minecraft runs, driven through the real game:launch handler.
+  // The delay is shortened through the test-only setter; the real value is 15 s.
+  {
+    const closeJava = "C:\\Java25\\bin\\java.exe";
+    const closeGameDir = path.join(testRoot, "launch-admission-game");
+    const soundEngineLine =
+      "[12:00:00] [Sound engine/INFO]: Sound engine started";
+    const soundSystemLine =
+      "[12:00:00] [Sound engine/ERROR]: Error starting SoundSystem. Turning off sounds & music";
+    const closeDelayMs = 25;
+    // Each wait spans several delays, so the launcher's timer fires inside it.
+    const closeWaitMs = closeDelayMs * 6;
+    const sleepFor = (ms: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, ms));
+    const gameChildren = () =>
+      spawnedChildren
+        .filter((entry) => entry.command === closeJava)
+        .map((entry) => entry.proc);
+    const quitCount = () => mockAppQuit.mock.calls.length;
+    const writeGameOutput = (child: any, line: string) => {
+      child.stdout.emit("data", Buffer.from(`${line}\n`, "utf-8"));
+    };
+    // Starts Minecraft through game:launch and returns its mock child process.
+    const startGame = async (): Promise<any> => {
+      const before = gameChildren().length;
+      await ipcHandlers.get("game:launch")!({});
+      const children = gameChildren();
+      if (children.length !== before + 1 || !GameRunner.isGameRunning()) {
+        throw new Error("Expected game:launch to start one Minecraft process");
+      }
+      return children[children.length - 1];
+    };
+
+    const javaSpy = spyOn(
+      JavaRuntimeManager,
+      "ensureJava25",
+    ).mockImplementation(async () => closeJava);
+    const bootstrapSpy = spyOn(
+      MinecraftBootstrap,
+      "prepareGameEnvironment",
+    ).mockImplementation(async () => ({
+      classpath: ["C:\\Game\\libraries\\fabric.jar"],
+      mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      assetIndex: "26.2",
+    }));
+
+    try {
+      mainMod.setCloseAfterGameStartDelayForTesting(closeDelayMs);
+
+      // Same installed pack and signed-in session as the launch-admission test.
+      const lampasDir = path.join(closeGameDir, ".lampas");
+      fs.mkdirSync(lampasDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(lampasDir, "release.json"),
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            pack: "Lampas 2",
+            version: "2.0.0",
+            syncGeneration: "gen-1",
+            minecraft: "26.2",
+            loader: { type: "fabric", version: "0.19.3" },
+            launch: {},
+            minimumLauncherVersion: "1.0.0",
+            protocol: 3,
+            created: "2026-01-01T00:00:00.000Z",
+            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
+          },
+          null,
+          2,
+        ),
+      );
+      fs.writeFileSync(
+        path.join(lampasDir, "installation.json"),
+        JSON.stringify({
+          pack: "Lampas 2",
+          version: "2.0.0",
+          syncGeneration: "gen-1",
+          files: {},
+        }),
+      );
+      const closeMinecraftToken = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ sub: "test", exp: 4102444800 })).toString("base64url")}.signature`;
+      ConfigManager.set({ gameDir: closeGameDir, noSync: false });
+      ConfigManager.establishSession(originAPortal, {
+        token: "valid-launch-token",
+        refreshToken: "valid-launch-refresh",
+        minecraftAccessToken: closeMinecraftToken,
+      });
+
+      await runTest(
+        "[closeOnGameStart] off: the game start line leaves the launcher open",
+        async () => {
+          ConfigManager.set({ closeOnGameStart: false });
+          mockAppQuit.mockClear();
+          const child = await startGame();
+          try {
+            writeGameOutput(child, soundEngineLine);
+            await sleepFor(closeWaitMs);
+            if (quitCount() !== 0) {
+              throw new Error(
+                `Expected no app.quit with closeOnGameStart off, got ${quitCount()}`,
+              );
+            }
+          } finally {
+            child.emit("exit", 0);
+          }
+        },
+      );
+
+      await runTest(
+        "[closeOnGameStart] on: app.quit runs once after the start line, even when the line repeats",
+        async () => {
+          ConfigManager.set({ closeOnGameStart: true });
+          mockAppQuit.mockClear();
+          const child = await startGame();
+          try {
+            writeGameOutput(child, soundEngineLine);
+            writeGameOutput(child, soundEngineLine);
+            if (quitCount() !== 0) {
+              throw new Error(
+                `Expected no app.quit before the delay, got ${quitCount()}`,
+              );
+            }
+            await sleepFor(closeWaitMs);
+            if (quitCount() !== 1) {
+              throw new Error(
+                `Expected exactly one app.quit after the delay, got ${quitCount()}`,
+              );
+            }
+            writeGameOutput(child, soundSystemLine);
+            writeGameOutput(child, soundEngineLine);
+            await sleepFor(closeWaitMs);
+            if (quitCount() !== 1) {
+              throw new Error(
+                `Expected app.quit to stay at one call, got ${quitCount()}`,
+              );
+            }
+          } finally {
+            child.emit("exit", 0);
+          }
+        },
+      );
+
+      await runTest(
+        "[closeOnGameStart] on: exit before the delay cancels the close, including for a later launch",
+        async () => {
+          ConfigManager.set({ closeOnGameStart: true });
+          mockAppQuit.mockClear();
+          const first = await startGame();
+          let second: any = null;
+          try {
+            writeGameOutput(first, soundEngineLine);
+            first.emit("exit", 0);
+            await sleepFor(closeWaitMs);
+            if (quitCount() !== 0) {
+              throw new Error(
+                `Expected no app.quit after the game exited, got ${quitCount()}`,
+              );
+            }
+
+            // Minecraft runs again, but this launch's start line has not arrived.
+            second = await startGame();
+            await sleepFor(closeWaitMs);
+            if (quitCount() !== 0) {
+              throw new Error(
+                `Expected no app.quit before the new launch's start line, got ${quitCount()}`,
+              );
+            }
+          } finally {
+            first.emit("exit", 0);
+            second?.emit("exit", 0);
+          }
+        },
+      );
+
+      await runTest(
+        "[closeOnGameStart] config:set changes only closeOnGameStart while Minecraft runs",
+        async () => {
+          ConfigManager.set({ closeOnGameStart: true });
+          const child = await startGame();
+          try {
+            const dto = await ipcHandlers.get("config:set")!(
+              {},
+              { closeOnGameStart: false },
+            );
+            if (
+              dto.closeOnGameStart !== false ||
+              ConfigManager.get().closeOnGameStart !== false
+            ) {
+              throw new Error(
+                `Expected closeOnGameStart saved as false while the game runs, got ${JSON.stringify(dto)}`,
+              );
+            }
+            if (!GameRunner.isGameRunning()) {
+              throw new Error("Expected the game to keep running");
+            }
+          } finally {
+            child.emit("exit", 0);
+          }
+        },
+      );
+
+      await runTest(
+        "[closeOnGameStart] config:set still rejects other settings while Minecraft runs",
+        async () => {
+          ConfigManager.set({ closeOnGameStart: true, noSync: false });
+          const child = await startGame();
+          try {
+            const configSet = ipcHandlers.get("config:set")!;
+            for (const patch of [
+              { noSync: true },
+              { closeOnGameStart: false, noSync: true },
+            ]) {
+              let rejection: any = null;
+              try {
+                await configSet({}, patch);
+              } catch (e: any) {
+                rejection = e;
+              }
+              if (!rejection?.message?.includes("while Minecraft is running")) {
+                throw new Error(
+                  `Expected a game-running rejection for ${JSON.stringify(patch)}, got: ${rejection?.message ?? "no error"}`,
+                );
+              }
+            }
+            const current = ConfigManager.get();
+            if (current.noSync !== false || current.closeOnGameStart !== true) {
+              throw new Error(
+                `Rejected payload changed settings: noSync=${current.noSync}, closeOnGameStart=${current.closeOnGameStart}`,
+              );
+            }
+          } finally {
+            child.emit("exit", 0);
+            ConfigManager.set({ closeOnGameStart: false });
+          }
+        },
+      );
+    } finally {
+      mainMod.setCloseAfterGameStartDelayForTesting(null);
+      javaSpy.mockRestore();
+      bootstrapSpy.mockRestore();
+      GameRunner.resetForTesting();
+      ConfigManager.set({ closeOnGameStart: false });
+      mockAppQuit.mockClear();
+    }
+  }
 
   // 51. [Phase 2 Gate] Renderer permission lockdown and error sanitization
   await runTest(

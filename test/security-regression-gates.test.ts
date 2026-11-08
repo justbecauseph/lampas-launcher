@@ -454,6 +454,9 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     expect(() => validateConfigSet({ noSync: "false" as any })).toThrow(
       "noSync must be a boolean",
     );
+    expect(() =>
+      validateConfigSet({ closeOnGameStart: "true" as any }),
+    ).toThrow("closeOnGameStart must be a boolean");
     expect(() => validateConfigSet({ javaPath: 123 as any })).toThrow(
       "javaPath must be a string",
     );
@@ -467,6 +470,7 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
       selectedChannel: "beta",
       allocatedRamGb: 8,
       noSync: true,
+      closeOnGameStart: true,
       javaPath: "C:\\Java\\bin\\java.exe",
       javaArgs: "-Xmx8G -XX:+UseG1GC",
     });
@@ -475,6 +479,7 @@ describe("Phase 2 Regression Gate — IPC Narrowing & Renderer Lockdown (SEC-02)
     expect(sanitized.selectedChannel).toBe("beta");
     expect(sanitized.allocatedRamGb).toBe(8);
     expect(sanitized.noSync).toBe(true);
+    expect(sanitized.closeOnGameStart).toBe(true);
     expect(sanitized.javaPath).toBe("C:\\Java\\bin\\java.exe");
     expect(sanitized.javaArgs).toBe("-Xmx8G -XX:+UseG1GC");
   });

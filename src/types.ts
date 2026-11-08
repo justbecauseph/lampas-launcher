@@ -55,6 +55,7 @@ export interface LauncherConfig {
   customShaderPacks?: CustomShaderPack[];
   noSync?: boolean;
   externalImages?: boolean;
+  closeOnGameStart?: boolean;
   token?: string;
   refreshToken?: string;
   minecraftAccessToken?: string;
@@ -281,6 +282,7 @@ export interface RendererSettingsDto {
   customClientMods?: CustomClientMod[];
   noSync?: boolean;
   externalImages: boolean;
+  closeOnGameStart: boolean;
 }
 
 export interface ModCatalogEntry {
@@ -331,6 +333,7 @@ export interface UpdateSettingsDto {
   javaPath?: string;
   javaArgs?: string;
   externalImages?: boolean;
+  closeOnGameStart?: boolean;
 }
 
 export interface ClearCredentialsResult {

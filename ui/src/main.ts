@@ -114,6 +114,7 @@ async function startApp(): Promise<void> {
     gameDir: "",
     noSync: false,
     externalImages: true,
+    closeOnGameStart: false,
   };
 
   // Initialize Console View

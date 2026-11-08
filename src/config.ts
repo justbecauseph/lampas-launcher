@@ -147,6 +147,7 @@ const DEFAULT_CONFIG: LauncherConfig = {
   customShaderPacks: [],
   noSync: false,
   externalImages: true,
+  closeOnGameStart: false,
 };
 
 import {
@@ -240,6 +241,7 @@ const KNOWN_CONFIG_KEY_LIST = [
   "customShaderPacks",
   "noSync",
   "externalImages",
+  "closeOnGameStart",
 ] as const satisfies readonly PersistedConfigKey[];
 
 // Compile-time check: a key added to LauncherConfig must also be listed above,
@@ -340,6 +342,7 @@ function sanitizeLoadedConfig(parsed: unknown): {
     "gameDirConfigured",
     "noSync",
     "externalImages",
+    "closeOnGameStart",
   ] as const) {
     if (!has(key)) continue;
     const v = parsed[key];
@@ -543,6 +546,7 @@ export class ConfigManager {
 
     loaded.noSync = Boolean(loaded.noSync);
     loaded.externalImages = Boolean(loaded.externalImages);
+    loaded.closeOnGameStart = Boolean(loaded.closeOnGameStart);
     this.cachedConfig = loaded;
     if (gameDirRedirected) {
       try {

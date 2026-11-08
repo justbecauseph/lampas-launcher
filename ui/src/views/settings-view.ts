@@ -116,6 +116,9 @@ export function initSettingsView(options: SettingsViewOptions): {
   const settingExternalImages = document.getElementById(
     "setting-external-images",
   ) as HTMLInputElement | null;
+  const settingCloseOnGameStart = document.getElementById(
+    "setting-close-on-game-start",
+  ) as HTMLInputElement | null;
   const channelBtns =
     document.querySelectorAll<HTMLButtonElement>(".channel-btn");
   const titlebarChannelBadge = document.getElementById(
@@ -362,6 +365,8 @@ export function initSettingsView(options: SettingsViewOptions): {
     if (settingJavaArgs) settingJavaArgs.value = config.javaArgs || "";
     if (settingExternalImages)
       settingExternalImages.checked = Boolean(config.externalImages);
+    if (settingCloseOnGameStart)
+      settingCloseOnGameStart.checked = Boolean(config.closeOnGameStart);
 
     updateNoSyncUI(config.noSync);
     applyChannel(config.selectedChannel || "stable");
@@ -457,6 +462,27 @@ export function initSettingsView(options: SettingsViewOptions): {
         flashSaved();
       } catch (err: any) {
         settingExternalImages.checked = Boolean(currentConfig?.externalImages);
+        showToast(
+          `Couldn't change this setting: ${formatFriendlyError(err)}`,
+          "error",
+        );
+      }
+    };
+  }
+
+  if (settingCloseOnGameStart) {
+    settingCloseOnGameStart.onchange = async () => {
+      try {
+        const updated = await window.lampas.config.set({
+          closeOnGameStart: settingCloseOnGameStart.checked,
+        });
+        currentConfig = updated;
+        onConfigChanged(updated);
+        flashSaved();
+      } catch (err: any) {
+        settingCloseOnGameStart.checked = Boolean(
+          currentConfig?.closeOnGameStart,
+        );
         showToast(
           `Couldn't change this setting: ${formatFriendlyError(err)}`,
           "error",

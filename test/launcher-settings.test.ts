@@ -230,6 +230,23 @@ describe("launcher settings", () => {
     expect(ConfigManager.get().externalImages).toBe(true);
   });
 
+  test("closing the launcher once Minecraft starts is off by default", () => {
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().closeOnGameStart).toBe(false);
+  });
+
+  test("closeOnGameStart set to true persists across re-reading from disk", () => {
+    ConfigManager.set({ closeOnGameStart: true });
+    expect(ConfigManager.get().closeOnGameStart).toBe(true);
+
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().closeOnGameStart).toBe(true);
+
+    ConfigManager.set({ closeOnGameStart: false });
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().closeOnGameStart).toBe(false);
+  });
+
   test("noSync defaults to false (off by default) and toggles cleanly", () => {
     ConfigManager.resetForTesting();
     // Default config check
@@ -379,6 +396,17 @@ describe("config.json shape validation on load", () => {
     }
   });
 
+  test("drops a non-boolean closeOnGameStart and loads the default off", () => {
+    for (const bad of ["yes", "true", 1, 0, null, ["true"]]) {
+      expect(loadFromDisk({ closeOnGameStart: bad }).closeOnGameStart).toBe(
+        false,
+      );
+    }
+    expect(loadFromDisk({ closeOnGameStart: true }).closeOnGameStart).toBe(
+      true,
+    );
+  });
+
   test("does not carry unknown keys onto the loaded config", () => {
     // Raw JSON, because an object literal's __proto__ would not serialize.
     const config = loadFromDisk(
@@ -442,6 +470,7 @@ describe("config.json shape validation on load", () => {
       customShaderPacks: [{ filename: "Shaders.zip", addedAt, size: 99 }],
       noSync: true,
       externalImages: false,
+      closeOnGameStart: true,
     };
 
     expect(loadFromDisk(valid)).toEqual(valid);

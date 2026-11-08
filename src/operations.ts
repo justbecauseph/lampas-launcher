@@ -208,11 +208,32 @@ export class OperationCoordinator {
    * Called by ClientModManager and settings modifiers.
    */
   static assertCanMutate(operationName = "modify installation"): void {
+    OperationCoordinator.assertNotBlocked(operationName);
+    OperationCoordinator.assertNotBusy(operationName);
+    if (GameRunner.isGameRunning()) {
+      throw new GameRunningConflictError(operationName);
+    }
+  }
+
+  /**
+   * Like assertCanMutate, but allows Minecraft to be running. Only for changes
+   * the running game does not read, such as the closeOnGameStart setting.
+   * Startup-recovery blocks and active operations still reject the change.
+   */
+  static assertCanMutateWhileGameRuns(operationName: string): void {
+    OperationCoordinator.assertNotBlocked(operationName);
+    OperationCoordinator.assertNotBusy(operationName);
+  }
+
+  private static assertNotBlocked(operationName: string): void {
     if (blockedReason) {
       throw new Error(
         `Cannot perform '${operationName}': launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`,
       );
     }
+  }
+
+  private static assertNotBusy(operationName: string): void {
     if (activeOperation && !activeOperation.settled) {
       throw new OperationBusyError(
         {
@@ -223,9 +244,6 @@ export class OperationCoordinator {
         },
         operationName,
       );
-    }
-    if (GameRunner.isGameRunning()) {
-      throw new GameRunningConflictError(operationName);
     }
   }
 

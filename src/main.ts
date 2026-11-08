@@ -42,6 +42,7 @@ import {
   safeSend as safeSendToWindow,
 } from "./operations";
 import { BoundedLogBatchTransport } from "./game-log-stream";
+import { createGameStartWatcher } from "./game-start-watcher";
 import { CosmeticImageBroker, createModIconResolver } from "./cosmetic-images";
 import {
   classifyJavaArgs,
@@ -92,7 +93,78 @@ function toRendererSettingsDto(config: LauncherConfig): RendererSettingsDto {
     customClientMods: config.customClientMods,
     noSync: config.noSync,
     externalImages: Boolean(config.externalImages),
+    closeOnGameStart: Boolean(config.closeOnGameStart),
   };
+}
+
+/**
+ * Settings changes are refused while Minecraft runs, except a payload that is
+ * only closeOnGameStart: the launcher reads that setting alone, so the player
+ * can change it during the load. Any other key keeps the full guard.
+ */
+function assertCanUpdateSettings(payload: UpdateSettingsDto): void {
+  const keys = Object.keys(payload);
+  if (keys.length === 1 && keys[0] === "closeOnGameStart") {
+    OperationCoordinator.assertCanMutateWhileGameRuns("update configuration");
+    return;
+  }
+  OperationCoordinator.assertCanMutate("update configuration");
+}
+
+/**
+ * Wait between the game start marker and closing the launcher. The marker
+ * comes near the end of the first resource reload, before the auto-join to the
+ * server, so the wait lets a crash during the join still show in the launcher.
+ */
+const CLOSE_AFTER_GAME_START_DELAY_MS = 15_000;
+let closeAfterGameStartDelayMs = CLOSE_AFTER_GAME_START_DELAY_MS;
+let closeAfterGameStartTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Test-only: replaces the wait before closing, so the boundary harness does not
+ * sleep for 15 s. Pass null to restore the default.
+ */
+export function setCloseAfterGameStartDelayForTesting(ms: number | null): void {
+  closeAfterGameStartDelayMs = ms ?? CLOSE_AFTER_GAME_START_DELAY_MS;
+}
+
+/**
+ * Starts the wait that ends in closing the launcher. The setting and the game
+ * state are checked when the wait ends, not here, so a change made during the
+ * wait still applies.
+ */
+function scheduleCloseAfterGameStart(): void {
+  cancelCloseAfterGameStart();
+  closeAfterGameStartTimer = setTimeout(() => {
+    closeAfterGameStartTimer = null;
+    closeLauncherAfterGameStart();
+  }, closeAfterGameStartDelayMs);
+}
+
+function cancelCloseAfterGameStart(): void {
+  if (closeAfterGameStartTimer === null) return;
+  clearTimeout(closeAfterGameStartTimer);
+  closeAfterGameStartTimer = null;
+}
+
+/**
+ * Quits the launcher when the wait ends, if the player has turned on
+ * closeOnGameStart and Minecraft is still running. The game is detached, so it
+ * keeps running and the next launcher start adopts it.
+ */
+function closeLauncherAfterGameStart(): void {
+  if (!ConfigManager.get().closeOnGameStart) return;
+  if (!GameRunner.isGameRunning()) return;
+  if (OperationCoordinator.isBusy()) {
+    LauncherLogger.info(
+      "Minecraft has started, but the launcher stays open because another operation is running.",
+    );
+    return;
+  }
+  LauncherLogger.info(
+    "Minecraft has started; closing the launcher as set in Settings",
+  );
+  app.quit();
 }
 
 const cosmeticImageBroker = new CosmeticImageBroker({
@@ -678,7 +750,7 @@ app.whenReady().then(async () => {
     "config:set",
     IpcSchemas.configSet,
     async (event, newConfig) => {
-      OperationCoordinator.assertCanMutate("update configuration");
+      assertCanUpdateSettings(newConfig);
 
       // Privileged setting: javaPath
       if (
@@ -742,7 +814,7 @@ app.whenReady().then(async () => {
       }
 
       // Recheck operation coordination after asynchronous approval
-      OperationCoordinator.assertCanMutate("update configuration");
+      assertCanUpdateSettings(newConfig);
       const updatedConfig = ConfigManager.set(newConfig);
       if (!updatedConfig.externalImages) cosmeticImageBroker.clear();
       return toRendererSettingsDto(updatedConfig);
@@ -1368,6 +1440,7 @@ app.whenReady().then(async () => {
   );
   registerSecureHandler("game:launch", IpcSchemas.noArgs, async () => {
     const op = OperationCoordinator.acquire("launch", "Launch Minecraft");
+    cancelCloseAfterGameStart();
     try {
       const refreshed = await LauncherAuth.refreshSession();
       if (!refreshed.valid || !refreshed.user) {
@@ -1375,12 +1448,15 @@ app.whenReady().then(async () => {
       }
       const user = refreshed.user;
       LauncherLogger.info("Initiating authenticated game launch");
+      const onGameStarted = createGameStartWatcher(scheduleCloseAfterGameStart);
       return await GameRunner.launchGame(
         user,
         (log) => {
           logTransport?.push(log);
+          onGameStarted(log);
         },
         (code) => {
+          cancelCloseAfterGameStart();
           logTransport?.flushSession();
           LauncherLogger.info(`Minecraft process exited with code ${code}`);
           safeSend("game:exit", code);
