@@ -204,6 +204,7 @@ export function validateFabricRuntimeMetadata(
   }
 
   const validatedLibraries: FabricLibraryDefinition[] = [];
+  let missingChecksumLib: string | undefined;
   for (let i = 0; i < raw.libraries.length; i++) {
     const lib = raw.libraries[i];
     if (!lib || typeof lib !== "object") {
@@ -250,11 +251,10 @@ export function validateFabricRuntimeMetadata(
 
     // Every library is a managed executable artifact.  A metadata response or
     // cache entry without a usable digest cannot establish the identity of the
-    // bytes that Minecraft will load, so it must fail closed.
+    // bytes that Minecraft will load, so it must fail closed. The error is
+    // thrown after the loop so that every other check still runs first.
     if (lib.sha256 === undefined && lib.sha1 === undefined) {
-      throw new FabricChecksumMissingError(
-        `[FabricMeta] Library '${lib.name}' is missing an expected SHA-1 or SHA-256 checksum.`,
-      );
+      missingChecksumLib ??= lib.name;
     }
 
     validatedLibraries.push({
@@ -263,6 +263,12 @@ export function validateFabricRuntimeMetadata(
       sha256: lib.sha256 ? lib.sha256.toLowerCase() : undefined,
       sha1: lib.sha1 ? lib.sha1.toLowerCase() : undefined,
     });
+  }
+
+  if (missingChecksumLib !== undefined) {
+    throw new FabricChecksumMissingError(
+      `[FabricMeta] Library '${missingChecksumLib}' is missing an expected SHA-1 or SHA-256 checksum.`,
+    );
   }
 
   return {
