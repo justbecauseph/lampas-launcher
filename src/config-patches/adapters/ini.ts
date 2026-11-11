@@ -44,7 +44,7 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          const secMatch = line.match(/^\s*\[([^\]]+)\]\s*$/);
+          const secMatch = line.match(/^\s*\[([^\]]+)\]\s*(?:[;#].*)?$/);
           if (secMatch) {
             if (inSection && !keyFound) {
               insertIndex = newLines.length;
@@ -110,7 +110,7 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
         const newLines: string[] = [];
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          const secMatch = line.match(/^\s*\[([^\]]+)\]\s*$/);
+          const secMatch = line.match(/^\s*\[([^\]]+)\]\s*(?:[;#].*)?$/);
           if (secMatch) {
             inSection = section
               ? secMatch[1].toLowerCase() === section.toLowerCase()
