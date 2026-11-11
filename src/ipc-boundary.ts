@@ -308,6 +308,7 @@ export function classifyJavaArgs(tokens: string[]): JavaArgClassification {
         }
         return operand;
       }
+      recordLaunchTargetViolation(optName, `Missing operand for '${optName}'`);
       return null;
     };
 
