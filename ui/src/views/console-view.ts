@@ -209,7 +209,7 @@ export function initConsoleView(
         consoleStatusText.innerText =
           textOverride || (state === "syncing" ? "Updating…" : "Starting…");
         consoleGameStatus.className = "console-status console-status-busy";
-        if (btnConsoleStop) btnConsoleStop.classList.remove("hidden");
+        if (btnConsoleStop) btnConsoleStop.classList.add("hidden");
       } else {
         consoleStatusDot.className = "status-dot status-dot-idle";
         consoleStatusText.innerText = textOverride || "Not running";
