@@ -166,6 +166,27 @@ hypixelOnlyChatTabs=true
     expect(propRemoved.output).toBe("# header\r\nother=2\r\n");
   });
 
+  test("Properties: a value ending in an odd number of backslashes is rejected", () => {
+    const fixture = "key=1\nother=2\nthird=3\n";
+
+    // A single trailing backslash would continue onto the next line and swallow it on reapply.
+    expect(() =>
+      propertiesAdapter.apply(fixture, [
+        { op: "set", path: ["key"], value: "C:\\Games\\" },
+      ]),
+    ).toThrow(/odd number of backslashes/);
+
+    // An even run is a literal backslash pair, so the value is written and reapplies unchanged.
+    const even = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["key"], value: "C:\\Games\\\\" },
+    ]);
+    expect(even.output).toBe("key=C:\\Games\\\\\nother=2\nthird=3\n");
+    const reApply = propertiesAdapter.apply(even.output, [
+      { op: "set", path: ["key"], value: "C:\\Games\\\\" },
+    ]);
+    expect(reApply.changed).toBe(false);
+  });
+
   test("INI: preserves section headers, comments, and spacing", () => {
     const iniFixture = `; Global INI settings
 app_name = Lampas

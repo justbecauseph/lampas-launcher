@@ -14,6 +14,9 @@ function endsWithContinuation(line: string): boolean {
 // Groups physical lines into logical lines, so a key and its continuation lines
 // are replaced or removed together. Comment and blank lines never continue.
 function groupLogicalLines(lines: string[]): string[][] {
+  // The empty element after a final newline is not a physical line.
+  const physicalCount =
+    lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
   const groups: string[][] = [];
   for (let i = 0; i < lines.length; i++) {
     const group = [lines[i]];
@@ -23,7 +26,7 @@ function groupLogicalLines(lines: string[]): string[][] {
       !trimmed.startsWith("!") &&
       trimmed !== ""
     ) {
-      while (i + 1 < lines.length && endsWithContinuation(lines[i])) {
+      while (i + 1 < physicalCount && endsWithContinuation(lines[i])) {
         i++;
         group.push(lines[i]);
       }
@@ -66,6 +69,13 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
 
       if (op.op === "set") {
         const targetVal = String(op.value);
+        // Written verbatim, a trailing odd backslash would join the next line,
+        // and a newline would split the value across lines.
+        if (endsWithContinuation(targetVal) || /[\r\n]/.test(targetVal)) {
+          throw new Error(
+            `Properties value for '${key}' contains a line break or ends in an odd number of backslashes`,
+          );
+        }
         const newLines = groupLogicalLines(lines).flatMap((group) => {
           const line = group[0];
           const trimmed = line.trim();
