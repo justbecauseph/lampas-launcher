@@ -127,8 +127,8 @@ export function initPlayView(options: PlayViewOptions): {
       else btnPlay.classList.remove("btn-running");
     }
     if (btnStop) {
-      if (state === "idle") btnStop.classList.add("hidden");
-      else btnStop.classList.remove("hidden");
+      if (state === "running") btnStop.classList.remove("hidden");
+      else btnStop.classList.add("hidden");
     }
     if (state === "idle" || state === "running") {
       progressContainer?.classList.add("hidden");
