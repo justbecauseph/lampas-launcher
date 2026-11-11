@@ -574,10 +574,14 @@ export async function downloadVerified(
       `[Download Request] GET ${safeUrl} -> ${destName} (attempt ${attempt}/${attempts})`,
     );
     const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      options.timeoutMs || 60_000,
-    );
+    // The timeout is idle, not a total deadline: it is re-armed when headers
+    // arrive and on every body chunk, so only a stall aborts the attempt.
+    const idleTimeoutMs = options.timeoutMs || 60_000;
+    let timer = setTimeout(() => controller.abort(), idleTimeoutMs);
+    const rearmIdleTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(), idleTimeoutMs);
+    };
     const merged = mergeAbortSignals(signal, controller);
 
     try {
@@ -590,6 +594,7 @@ export async function downloadVerified(
           maxRedirects: options.maxRedirects,
         },
       );
+      rearmIdleTimer();
       if (!response.ok || !response.body) {
         const durationMs = Date.now() - startTime;
         LauncherLogger.log(
@@ -601,7 +606,11 @@ export async function downloadVerified(
       }
       const responseBody = response.body;
       const bytes = await streamVerified(
-        () => Readable.fromWeb(responseBody as any),
+        () => {
+          const body = Readable.fromWeb(responseBody as any);
+          body.on("data", rearmIdleTimer);
+          return body;
+        },
         destination,
         { ...options, signal: merged.signal },
         async () => {
