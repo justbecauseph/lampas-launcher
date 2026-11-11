@@ -761,7 +761,7 @@ export class GameRunner {
     }
 
     const proc = this.runningProcess;
-    if (!proc || proc.killed) {
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
       return;
     }
 
@@ -788,7 +788,8 @@ export class GameRunner {
     if (
       result === "timeout" &&
       this.runningProcess &&
-      !this.runningProcess.killed
+      this.runningProcess.exitCode === null &&
+      this.runningProcess.signalCode === null
     ) {
       try {
         this.runningProcess.kill("SIGKILL");

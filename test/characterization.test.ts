@@ -91,6 +91,8 @@ describe("Phase 0 Characterization — Operation Settlement & Guard Gaps (F07, F
   test("GameRunner.killGame retains runningProcess until actual exit settlement (Phase 1 Fix F08)", () => {
     const proc = new EventEmitter() as any;
     proc.killed = false;
+    proc.exitCode = null;
+    proc.signalCode = null;
     proc.kill = () => {
       proc.killed = true;
     };

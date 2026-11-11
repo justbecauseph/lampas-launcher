@@ -100,6 +100,8 @@ describe("Phase 1 Regression Gate — Guarded Mod Mutators (F08)", () => {
     // isGameRunning() must stay true until child process emits exit
     const fakeProc: any = {
       killed: false,
+      exitCode: null,
+      signalCode: null,
       kill: () => {
         fakeProc.killed = true;
       },
