@@ -1006,7 +1006,7 @@ export class GameDirectoryManager {
     if (fs.existsSync(journalPath)) {
       throw new Error(
         `Cannot start a directory move: an unfinished move journal exists at '${journalPath}'. ` +
-          `Resolve it through startup move recovery before moving again.`,
+          `Restart the launcher to finish or roll back the previous move.`,
       );
     }
 
@@ -1084,6 +1084,11 @@ export class GameDirectoryManager {
         LauncherLogger.error(
           `Direct rename failed with fatal error (${renameErr.code || renameErr.message}): ${renameErr.message}`,
         );
+        // rename is atomic and no staging folder exists yet, so the source is still
+        // the only copy. Remove the journal so a retry in this session can start.
+        try {
+          await fs.promises.unlink(journalPath);
+        } catch {}
         throw renameErr;
       }
     }
@@ -1330,11 +1335,26 @@ export class GameDirectoryManager {
         // marker-checked staging folder and the journal now; a journal left in
         // "finalizing" would make the next start try to promote it.
         if (!fs.existsSync(target)) {
-          await authorizeAndRemoveStaging(journalData);
-          if (fs.existsSync(journalPath)) {
-            try {
-              await fs.promises.unlink(journalPath);
-            } catch {}
+          const removed = await authorizeAndRemoveStaging(journalData);
+          if (removed || !fs.existsSync(journalData.staging)) {
+            if (fs.existsSync(journalPath)) {
+              try {
+                await fs.promises.unlink(journalPath);
+              } catch {}
+            }
+          } else {
+            // Staging could not be removed (for example, a lock inside it). Rewrite the
+            // journal to a pre-finalize phase so startup recovery discards staging and
+            // keeps the source. The in-memory phase stays "finalizing" so the outer
+            // catch does not delete this journal.
+            writeAtomicFileSync(
+              journalPath,
+              JSON.stringify(
+                { ...journalData, phase: "verifying", stagingVerified: false },
+                null,
+                2,
+              ),
+            );
           }
         }
         throw promoteErr;

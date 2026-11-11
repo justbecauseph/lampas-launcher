@@ -727,6 +727,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       ).rejects.toThrow("EPERM");
       expect(fs.existsSync(path.join(sourceDir, "options.txt"))).toBe(true);
       expect(fs.existsSync(targetDir)).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "directory-move.json"))).toBe(
+        false,
+      );
       expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
     } finally {
       GameDirectoryManager.resetForTesting();
@@ -961,6 +964,81 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       ).toBe("keep-me");
       expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
     } finally {
+      renameSpy.mockRestore();
+      GameDirectoryManager.resetForTesting();
+    }
+  });
+
+  test("Phase 5: promotion failure that cannot remove staging keeps a verifying journal and recovery keeps the source", async () => {
+    const sourceDir = path.join(testRoot, "promote-unremovable-source");
+    const targetDir = path.join(testRoot, "promote-unremovable-target");
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "options.txt"), "keep-me");
+
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
+    // Force copy fallback
+    GameDirectoryManager._renameFn = () => {
+      const err: any = new Error("EXDEV");
+      err.code = "EXDEV";
+      throw err;
+    };
+
+    const realRename = fs.promises.rename.bind(fs.promises);
+    const realRm = fs.promises.rm.bind(fs.promises);
+    let stagingPath: string | undefined;
+    const renameSpy = spyOn(fs.promises, "rename").mockImplementation(
+      async (src, dest) => {
+        if (path.resolve(String(dest)) !== path.resolve(targetDir)) {
+          return realRename(src, dest);
+        }
+        stagingPath = String(src);
+        const err: any = new Error("EPERM: operation not permitted, rename");
+        err.code = "EPERM";
+        throw err;
+      },
+    );
+    // A lock inside the staging folder: removal fails and leaves the folder in place.
+    const rmSpy = spyOn(fs.promises, "rm").mockImplementation(
+      async (p, options) => {
+        if (
+          stagingPath !== undefined &&
+          path.resolve(String(p)) === path.resolve(stagingPath)
+        ) {
+          const err: any = new Error("EBUSY: resource busy or locked");
+          err.code = "EBUSY";
+          throw err;
+        }
+        return realRm(p, options);
+      },
+    );
+
+    try {
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("EPERM");
+      expect(stagingPath).toBeDefined();
+      expect(fs.existsSync(stagingPath!)).toBe(true);
+      expect(fs.existsSync(targetDir)).toBe(false);
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf-8"));
+      expect(journal.phase).toBe("verifying");
+      expect(journal.stagingVerified).toBe(false);
+      expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
+
+      // Once the lock is gone, startup recovery discards the staging copy and keeps the source.
+      rmSpy.mockRestore();
+      await GameDirectoryManager.recoverInterruptedMove();
+      expect(fs.existsSync(stagingPath!)).toBe(false);
+      expect(fs.existsSync(journalPath)).toBe(false);
+      expect(fs.existsSync(targetDir)).toBe(false);
+      expect(
+        fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8"),
+      ).toBe("keep-me");
+      expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
+    } finally {
+      rmSpy.mockRestore();
       renameSpy.mockRestore();
       GameDirectoryManager.resetForTesting();
     }
