@@ -385,7 +385,7 @@ export class ClientModManager {
       return { sourcePath, filename, destination, destinationExisted };
     });
 
-    const created: string[] = [];
+    let created: string[] = [];
     try {
       for (const file of selected) {
         if (!file.destinationExisted) created.push(file.destination);
@@ -399,7 +399,8 @@ export class ClientModManager {
       }
 
       // Config entries and disabled copies change only after every copy has
-      // succeeded, so a rollback never has to restore a deleted disabled mod.
+      // succeeded. A deleted disabled copy leaves the new enabled file as the
+      // mod's only file, so a rollback keeps that file.
       for (const { filename, destination } of selected) {
         const existing = mods.find(
           (mod) => mod.filename.toLowerCase() === filename.toLowerCase(),
@@ -408,6 +409,7 @@ export class ClientModManager {
           const disabledPath = modPath(config.gameDir, filename, false);
           if (fs.existsSync(disabledPath)) {
             fs.rmSync(disabledPath, { force: true });
+            created = created.filter((target) => target !== destination);
           }
           existing.enabled = true;
           existing.addedAt = new Date().toISOString();
