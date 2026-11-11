@@ -429,7 +429,11 @@ export function initModsView(options: ModsViewOptions): () => void {
     // Delegated toggle change with rollback on failure
     modsGrid.addEventListener("change", async (e) => {
       const target = e.target as HTMLInputElement;
-      if (!target.classList.contains("js-mod-toggle") || isMutating) return;
+      if (!target.classList.contains("js-mod-toggle")) return;
+      if (isMutating) {
+        target.checked = !target.checked;
+        return;
+      }
 
       const isOfficial = target.dataset.source === "official";
       const modId = target.dataset.id || "";
