@@ -715,6 +715,8 @@ export async function writeAtomicFile(
     } else {
       await handle.writeFile(content);
     }
+    // Flush before the rename so a crash cannot publish a file with missing bytes.
+    await handle.sync();
     handleCloseAttempted = true;
     try {
       await handle.close();

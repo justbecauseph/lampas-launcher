@@ -100,50 +100,55 @@ afterAll(() => {
   }
 });
 
+/** Serves channel 2.0.0 with an empty client manifest and the given Fabric loader version. */
+function serveEmptyPack(loaderVersion = "0.99.123-test") {
+  return Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/v1/channels/stable") {
+        return Response.json({
+          channel: "stable",
+          version: "2.0.0",
+          release: "/api/v1/releases/2.0.0",
+        });
+      }
+      if (url.pathname === "/api/v1/releases/2.0.0") {
+        return Response.json({
+          schemaVersion: 1,
+          pack: "Lampas 2",
+          version: "2.0.0",
+          minecraft: "26.2",
+          loader: { type: "fabric", version: loaderVersion },
+          minimumLauncherVersion: "1.0.0",
+          protocol: 3,
+          created: "2026-01-01T00:00:00Z",
+          clientManifest: "/api/v1/releases/2.0.0/client-manifest",
+          serverManifest: "/api/v1/releases/2.0.0/server-manifest",
+        });
+      }
+      if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
+        return Response.json({
+          schemaVersion: 2,
+          pack: "Lampas 2",
+          version: "2.0.0",
+          target: "client",
+          minecraft: "26.2",
+          loader: { type: "fabric", version: loaderVersion },
+          protocol: 3,
+          files: [],
+          mods: [],
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  });
+}
+
 describe("LauncherSync.repairInstallation runtime forwarding (PLAN.md Part E & Section 47)", () => {
   test("Repair forwards the exact runtime (0.99.123-test) returned by Sync and does not inject 0.19.3", async () => {
     const sentinelVersion = "0.99.123-test";
-    const server = Bun.serve({
-      port: 0,
-      fetch(req) {
-        const url = new URL(req.url);
-        if (url.pathname === "/api/v1/channels/stable") {
-          return Response.json({
-            channel: "stable",
-            version: "2.0.0",
-            release: "/api/v1/releases/2.0.0",
-          });
-        }
-        if (url.pathname === "/api/v1/releases/2.0.0") {
-          return Response.json({
-            schemaVersion: 1,
-            pack: "Lampas 2",
-            version: "2.0.0",
-            minecraft: "26.2",
-            loader: { type: "fabric", version: sentinelVersion },
-            minimumLauncherVersion: "1.0.0",
-            protocol: 3,
-            created: "2026-01-01T00:00:00Z",
-            clientManifest: "/api/v1/releases/2.0.0/client-manifest",
-            serverManifest: "/api/v1/releases/2.0.0/server-manifest",
-          });
-        }
-        if (url.pathname === "/api/v1/releases/2.0.0/client-manifest") {
-          return Response.json({
-            schemaVersion: 2,
-            pack: "Lampas 2",
-            version: "2.0.0",
-            target: "client",
-            minecraft: "26.2",
-            loader: { type: "fabric", version: sentinelVersion },
-            protocol: 3,
-            files: [],
-            mods: [],
-          });
-        }
-        return new Response("Not Found", { status: 404 });
-      },
-    });
+    const server = serveEmptyPack(sentinelVersion);
 
     ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
       token: "mock-token",
@@ -172,6 +177,54 @@ describe("LauncherSync.repairInstallation runtime forwarding (PLAN.md Part E & S
       // Verify JavaRuntimeManager was also called in full mode
       expect(javaCalls.length).toBe(1);
       expect(javaCalls[0].mode).toBe("full");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("repair rebuilds a malformed installation.json and replaces a malformed sync-safety.json", async () => {
+    const stateDir = path.join(gameDir, ".lampas");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "installation.json"), "{ malformed");
+    fs.writeFileSync(path.join(stateDir, "sync-safety.json"), "{ malformed");
+    const server = serveEmptyPack();
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
+
+    try {
+      const result = await LauncherSync.repairInstallation(() => {});
+      expect(result.success).toBe(true);
+
+      const state = JSON.parse(
+        fs.readFileSync(path.join(stateDir, "installation.json"), "utf-8"),
+      );
+      expect(state).toMatchObject({
+        version: "2.0.0",
+        releaseVersion: "2.0.0",
+      });
+      expect(fs.existsSync(path.join(stateDir, "sync-safety.json"))).toBe(
+        false,
+      );
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a sync outside repair still blocks on a malformed installation.json", async () => {
+    const stateFile = path.join(gameDir, ".lampas", "installation.json");
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, "{ malformed");
+    const server = serveEmptyPack();
+    ConfigManager.establishSession(`http://127.0.0.1:${server.port}`, {
+      token: "mock-token",
+    });
+
+    try {
+      await expect(LauncherSync.syncClient(() => {})).rejects.toThrow(
+        /Installation state is malformed/,
+      );
+      expect(fs.readFileSync(stateFile, "utf-8")).toBe("{ malformed");
     } finally {
       server.stop(true);
     }
