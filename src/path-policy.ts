@@ -56,6 +56,7 @@ const DOS_DEVICE_REGEX = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const ADS_REGEX = /:/;
 
 // Forbidden control characters (NUL through 0x1F)
+// oxlint-disable-next-line no-control-regex -- intentionally matches control characters
 const CONTROL_CHAR_REGEX = /[\x00-\x1f]/;
 
 /**
@@ -283,9 +284,9 @@ export function isPathProtected(relPath: string): boolean {
   );
 }
 
-const OPTIONS_KEYBIND_KEY_PATTERN = /^key_[A-Za-z0-9_.\-]+$/;
+const OPTIONS_KEYBIND_KEY_PATTERN = /^key_[A-Za-z0-9_.-]+$/;
 const OPTIONS_KEYBIND_VALUE_PATTERN =
-  /^key\.(keyboard|mouse)\.[A-Za-z0-9_.\-]+$/;
+  /^key\.(keyboard|mouse)\.[A-Za-z0-9_.-]+$/;
 
 /**
  * The one config-patch exception to PROTECTED_PLAYER_DATA: a pack may rebind
@@ -797,7 +798,6 @@ export function validateManifestMetadata(
   }
 
   const destinationMap = new Map<string, any>();
-  const isWindows = process.platform === "win32";
 
   for (const file of files) {
     if (!file || typeof file !== "object") {

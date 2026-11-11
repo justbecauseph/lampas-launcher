@@ -232,7 +232,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     const prevWindow = (globalThis as any).window;
     (globalThis as any).document = {
       getElementById: (id: string) => elements.get(id) || null,
-      createElement: (tag: string) => new MockEl(""),
+      createElement: (_tag: string) => new MockEl(""),
     };
     (globalThis as any).window = {
       lampas: {
@@ -355,7 +355,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     (globalThis as any).document = {
       getElementById: (id: string) => elements.get(id) || null,
       querySelectorAll: () => [],
-      createElement: (tag: string) => new MockEl(""),
+      createElement: (_tag: string) => new MockEl(""),
     };
     (globalThis as any).window = {
       lampas: {
@@ -508,7 +508,7 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
     (globalThis as any).document = {
       getElementById: (id: string) => elements.get(id) || null,
       querySelectorAll: () => [],
-      createElement: (tag: string) => new MockEl(""),
+      createElement: (_tag: string) => new MockEl(""),
     };
 
     (globalThis as any).window = {

@@ -298,7 +298,7 @@ export class LauncherLoggerService {
   }
 
   log(
-    level: "INFO" | "WARN" | "ERROR" | "CHAT" | string,
+    level: "INFO" | "WARN" | "ERROR" | "CHAT" | (string & {}),
     message: string,
   ): void {
     const sanitizedMessage = LauncherLoggerService.sanitize(message);
@@ -525,7 +525,7 @@ export class LauncherLoggerService {
     return this.closePromise;
   }
 
-  logApiRequest(method: string, url: string, payload?: any): void {
+  logApiRequest(method: string, url: string, _payload?: any): void {
     this.log("INFO", `[HTTP Request] ${method.toUpperCase()} ${url}`);
   }
 
@@ -534,7 +534,7 @@ export class LauncherLoggerService {
     url: string,
     status: number,
     durationMs: number,
-    responseData?: any,
+    _responseData?: any,
   ): void {
     const level = status >= 400 ? "ERROR" : "INFO";
     this.log(
@@ -561,7 +561,6 @@ export class LauncherLoggerService {
     if (data === undefined || data === null) return "";
 
     try {
-      let text: string;
       if (typeof data === "string") {
         // Redaction is ALWAYS performed BEFORE truncation!
         const sanitized = LauncherLoggerService.sanitize(data);
@@ -674,7 +673,7 @@ export class LauncherLogger {
   }
 
   static log(
-    level: "INFO" | "WARN" | "ERROR" | "CHAT" | string,
+    level: "INFO" | "WARN" | "ERROR" | "CHAT" | (string & {}),
     message: string,
   ): void {
     defaultInstance.log(level, message);

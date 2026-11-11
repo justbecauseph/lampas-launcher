@@ -200,6 +200,7 @@ class MockWebContents {
   }
   emit(event: string, ...args: any[]) {
     const list = this.listeners.get(event) || [];
+    // oxlint-disable-next-line unicorn/no-useless-spread -- the copy keeps listeners added during emit from running in this pass
     for (const fn of [...list]) {
       fn(...args);
     }
@@ -512,7 +513,6 @@ try {
     IpcSecurityError,
     IpcValidationError,
     UserCancelledError,
-    OperationConflictError,
     InstallationStateError,
     ModPolicyError,
     isPrivilegedJavaArg,
@@ -1858,7 +1858,7 @@ try {
             sessionPortalUrl: attackerPortal,
           },
         );
-      } catch (err: any) {
+      } catch {
         rejectedForgery = true;
       }
       if (!rejectedForgery) {
@@ -3094,7 +3094,7 @@ try {
         let threw = false;
         try {
           await configHandler({}, p);
-        } catch (e: any) {
+        } catch {
           threw = true;
         }
         if (!threw)
@@ -3242,7 +3242,7 @@ try {
       threw = false;
       try {
         await addPathsHandler({}, []);
-      } catch (e: any) {
+      } catch {
         threw = true;
       }
       if (!threw)
@@ -3945,6 +3945,7 @@ try {
           throw new Error("Expected destroyed sender frame to fail closed");
 
         // 7. Destroyed WebContents fails closed
+        // oxlint-disable-next-line typescript/unbound-method -- saved to restore the original after the test
         const origIsDestroyed = win.webContents.isDestroyed;
         win.webContents.isDestroyed = () => true;
         let destroyedWebContentsThrew = false;
@@ -4182,6 +4183,7 @@ try {
       // A. Snapshot frame detached after deferred dialog
       const snapshotDetached = IpcBoundary.createApprovalSnapshot(event as any);
       snapshotDetached.frame = {
+        // oxlint-disable-next-line typescript/no-misused-spread -- senderFrame in this test is a plain object, so the spread copies all of it
         ...snapshotDetached.frame,
         detached: true,
       } as any;
@@ -4585,7 +4587,7 @@ try {
       // 11. Intended TTL constant verification (60 seconds)
       if (APPROVAL_TTL_MS !== 60_000) {
         throw new Error(
-          `Expected APPROVAL_TTL_MS to be 60000ms (60s), got ${APPROVAL_TTL_MS}`,
+          `Expected APPROVAL_TTL_MS to be 60000ms (60s), got ${String(APPROVAL_TTL_MS)}`,
         );
       }
     },
@@ -6193,7 +6195,7 @@ try {
         ),
       ]);
 
-      const statuses = [resA.status, resB.status].sort();
+      const statuses = [resA.status, resB.status].sort((x, y) => x - y);
       if (statuses[0] !== 200 || statuses[1] !== 409) {
         throw new Error(
           `Expected statuses [200, 409], got: [${resA.status}, ${resB.status}]`,

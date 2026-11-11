@@ -28,7 +28,10 @@ export function formatFriendlyError(
   if (!err) return fallbackMessage;
 
   const raw =
-    typeof err === "string" ? err : (err as any)?.message || String(err);
+    typeof err === "string"
+      ? err
+      : // oxlint-disable-next-line typescript/no-base-to-string -- String(err) is the existing fallback text for non-Error values; a different conversion would change the message shown
+        (err as any)?.message || String(err);
   const clean = stripErrorPrefixes(raw);
 
   // Generic failure from the main process

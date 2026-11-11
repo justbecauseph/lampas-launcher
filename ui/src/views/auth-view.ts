@@ -18,7 +18,7 @@ export function initAuthView(options: AuthViewOptions): {
   getCurrentUser: () => RendererUserProfile | null;
   dispose: () => void;
 } {
-  const { showToast, getPortalUrl, externalImages, onUserChanged } = options;
+  const { showToast, externalImages, onUserChanged } = options;
 
   const btnLogin = document.getElementById(
     "btn-login",

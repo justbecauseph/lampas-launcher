@@ -213,6 +213,7 @@ export function normalizePortalUrl(url?: string): string {
   }
 
   // Reject control characters immediately
+  // oxlint-disable-next-line no-control-regex -- intentionally matches control characters
   if (/[\x00-\x1f\x7f]/.test(raw)) {
     throw new PortalPolicyError(
       "Portal URL contains invalid control characters.",
@@ -319,6 +320,7 @@ export function validateWebUrl(urlStr: string): string {
   const trimmed = urlStr.trim();
 
   // Reject control characters
+  // oxlint-disable-next-line no-control-regex -- intentionally matches control characters
   if (/[\x00-\x1f\x7f]/.test(trimmed)) {
     throw new WebOpeningPolicyError(
       "Web URL contains invalid control characters.",

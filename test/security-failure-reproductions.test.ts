@@ -11,7 +11,6 @@ import {
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
-import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -49,7 +48,6 @@ mock.module("electron", () => ({
 }));
 
 let ConfigManager: any;
-let normalizePortalUrl: any;
 let LauncherAuth: any;
 let CredentialStore: any;
 let SessionManager: any;
@@ -58,7 +56,6 @@ let isValidMinecraftUuid: any;
 let validateDigestString: any;
 let validateManifestMetadata: any;
 let canonicalizeRelativePath: any;
-let resolveAndContainPath: any;
 let sanitizeInstallationState: any;
 let PathContainmentError: any;
 let checkPhysicalAncestry: any;
@@ -70,13 +67,10 @@ let validateMoveJournal: any;
 let MOVE_RECEIPT_FILENAME: any;
 let STAGING_MARKER_FILENAME: any;
 let RECOVERY_HOLD_FILENAME: any;
-let writeStagingMarker: any;
 let classifyMoveMetadata: any;
 let quarantineJournal: any;
 let ClientModManager: any;
-let LauncherSync: any;
 let reconcileRequiredResourcePacks: any;
-let reconcileConfigPatches: any;
 let OperationCoordinator: any;
 let replaceFile: any;
 let replaceFileSync: any;
@@ -107,7 +101,6 @@ beforeAll(async () => {
 
   const configMod = await import("../src/config");
   ConfigManager = configMod.ConfigManager;
-  normalizePortalUrl = configMod.normalizePortalUrl;
   PortalPolicy = configMod.PortalPolicy;
 
   const authMod = await import("../src/auth");
@@ -124,7 +117,6 @@ beforeAll(async () => {
   validateDigestString = pathPolicyMod.validateDigestString;
   validateManifestMetadata = pathPolicyMod.validateManifestMetadata;
   canonicalizeRelativePath = pathPolicyMod.canonicalizeRelativePath;
-  resolveAndContainPath = pathPolicyMod.resolveAndContainPath;
   sanitizeInstallationState = pathPolicyMod.sanitizeInstallationState;
   PathContainmentError = pathPolicyMod.PathContainmentError;
   checkPhysicalAncestry = pathPolicyMod.checkPhysicalAncestry;
@@ -138,21 +130,18 @@ beforeAll(async () => {
   MOVE_RECEIPT_FILENAME = gameDirMod.MOVE_RECEIPT_FILENAME;
   STAGING_MARKER_FILENAME = gameDirMod.STAGING_MARKER_FILENAME;
   RECOVERY_HOLD_FILENAME = gameDirMod.RECOVERY_HOLD_FILENAME;
-  writeStagingMarker = gameDirMod.writeStagingMarker;
   classifyMoveMetadata = gameDirMod.classifyMoveMetadata;
   quarantineJournal = gameDirMod.quarantineJournal;
 
   const clientModsMod = await import("../src/client-mods");
   ClientModManager = clientModsMod.ClientModManager;
 
-  const syncMod = await import("../src/sync");
-  LauncherSync = syncMod.LauncherSync;
+  await import("../src/sync");
 
   const rpMod = await import("../src/resource-packs");
   reconcileRequiredResourcePacks = rpMod.reconcileRequiredResourcePacks;
 
-  const cfgPatchMod = await import("../src/config-patches/reconciler");
-  reconcileConfigPatches = cfgPatchMod.reconcileConfigPatches;
+  await import("../src/config-patches/reconciler");
 
   const opsMod = await import("../src/operations");
   OperationCoordinator = opsMod.OperationCoordinator;
@@ -190,7 +179,6 @@ describe("Phase 3 Failure Path Reproductions", () => {
     // 1. Cancellation path
     const loginPromise1 = LauncherAuth.loginWithPortal();
     expect(LauncherAuth.activeLoginContext).not.toBeNull();
-    const epoch1 = LauncherAuth.activeLoginContext.epoch;
 
     LauncherAuth.cancelLogin();
     expect(LauncherAuth.activeLoginContext).toBeNull();
@@ -525,8 +513,8 @@ describe("Phase 3 Failure Path Reproductions", () => {
     mockStorage.available = false;
 
     // Step 3: Simulate catastrophic cleanup failure where unlink, truncate overwrite, and marker write all fail
-    const targetFile = CredentialStore.getCredentialsFilePath();
-    const markerFile = CredentialStore.getInvalidationMarkerPath();
+    CredentialStore.getCredentialsFilePath();
+    CredentialStore.getInvalidationMarkerPath();
     const origUnlink = fs.unlinkSync.bind(fs);
     const origWrite = fs.writeFileSync.bind(fs);
 
@@ -696,11 +684,8 @@ describe("Phase 3 Failure Path Reproductions", () => {
       CredentialStore.clearCredentials();
       ConfigManager.resetForTesting();
 
-      let loginErr: any = null;
       const loginPromise = LauncherAuth.loginWithPortal();
-      loginPromise.catch((err: any) => {
-        loginErr = err;
-      });
+      loginPromise.catch((_err: any) => {});
 
       const context = LauncherAuth.activeLoginContext;
       expect(context).not.toBeNull();
@@ -883,9 +868,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
   });
 
   test("Reproduce Defect 4b: Independent write failure path unlinks temp and fails cleanly", () => {
-    const origWrite = fs.writeSync.bind(fs);
+    fs.writeSync.bind(fs);
     const writeSpy = spyOn(fs, "writeSync").mockImplementation(
-      (...args: any[]) => {
+      (..._args: any[]) => {
         const err: any = new Error("EIO: I/O error during write");
         err.code = "EIO";
         throw err;
@@ -913,9 +898,9 @@ describe("Phase 3 Failure Path Reproductions", () => {
   });
 
   test("Reproduce Defect 4c: Independent flush failure path unlinks temp and fails cleanly", () => {
-    const origFsync = fs.fsyncSync.bind(fs);
+    fs.fsyncSync.bind(fs);
     const fsyncSpy = spyOn(fs, "fsyncSync").mockImplementation(
-      (...args: any[]) => {
+      (..._args: any[]) => {
         const err: any = new Error("EIO: I/O error during fsync");
         err.code = "EIO";
         throw err;
@@ -1006,14 +991,12 @@ describe("Phase 3 Failure Path Reproductions", () => {
     // Mock fetch for token exchange to hold at barrier
     const origFetch = globalThis.fetch;
     let exchangeStarted = false;
-    let exchangeDone = false;
 
     const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
       async (url: any, init: any) => {
         if (url.toString().includes("/api/v1/auth/exchange")) {
           exchangeStarted = true;
           await barrierPromise;
-          exchangeDone = true;
           return new Response(
             JSON.stringify({
               token: "late-token-should-not-publish",
@@ -1186,7 +1169,6 @@ describe("Phase 3 Failure Path Reproductions", () => {
     });
 
     let exchangeAStarted = false;
-    let exchangeBStarted = false;
     const origFetch = globalThis.fetch;
 
     const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
@@ -1210,7 +1192,6 @@ describe("Phase 3 Failure Path Reproductions", () => {
               { status: 200, headers: { "Content-Type": "application/json" } },
             );
           } else if (body.code === "code-B") {
-            exchangeBStarted = true;
             return new Response(
               JSON.stringify({
                 token: "token-B-active",
@@ -3407,7 +3388,7 @@ describe("Phase 4 Security Failure Reproductions (SEC-04, SEC-05)", () => {
 
     // Force staged copy fallback for moves
     const origRename = GameDirectoryManager._renameFn;
-    GameDirectoryManager._renameFn = (src: string, dest: string) => {
+    GameDirectoryManager._renameFn = (_src: string, _dest: string) => {
       const err: any = new Error("EXDEV: cross-device link not permitted");
       err.code = "EXDEV";
       throw err;

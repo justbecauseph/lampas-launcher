@@ -6,7 +6,7 @@ import * as os from "node:os";
 
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-ops-test-"));
 const userDataDir = path.join(testRoot, "user-data");
-const gameDir = path.join(testRoot, "game");
+path.join(testRoot, "game");
 
 mock.module("electron", () => ({
   app: {
@@ -316,7 +316,7 @@ describe("Phase 1 — GameRunner Lifecycle Invariants", () => {
     (GameRunner as any).runningProcess = fakeProc;
     expect(GameRunner.isGameRunning()).toBe(true);
 
-    GameRunner.killGame();
+    void GameRunner.killGame();
     // In Phase 1: runningProcess remains intact so isGameRunning is still true
     expect(GameRunner.isGameRunning()).toBe(true);
     expect(fakeProc.killed).toBe(true);
@@ -339,9 +339,9 @@ describe("Phase 1 — GameRunner Lifecycle Invariants", () => {
     };
 
     (GameRunner as any).runningProcess = fakeProc;
-    GameRunner.killGame();
-    GameRunner.killGame();
-    GameRunner.killGame();
+    void GameRunner.killGame();
+    void GameRunner.killGame();
+    void GameRunner.killGame();
 
     // Only one kill signal issued because proc.killed becomes true
     expect(killCount).toBe(1);

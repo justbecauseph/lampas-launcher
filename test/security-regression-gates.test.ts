@@ -48,7 +48,6 @@ let validateWebUrl: any;
 let LauncherAuth: any;
 let isPathProtected: any;
 let LauncherSync: any;
-let PathContainmentError: any;
 let GameDirectoryManager: any;
 let LauncherLogger: any;
 let LauncherLoggerService: any;
@@ -82,8 +81,7 @@ beforeAll(async () => {
   isPathProtected = syncMod.isPathProtected;
   LauncherSync = syncMod.LauncherSync;
 
-  const pathPolicyMod = await import("../src/path-policy");
-  PathContainmentError = pathPolicyMod.PathContainmentError;
+  await import("../src/path-policy");
 
   const gameDirMod = await import("../src/game-directory");
   GameDirectoryManager = gameDirMod.GameDirectoryManager;
@@ -1061,6 +1059,7 @@ describe("Phase 5 Regression Gate — Integrity Checks Fail Closed & Fallback Po
       loader: { type: "fabric" as const, version: "0.19.3" },
     };
     const fetchFn = async (input: string | URL | Request) => {
+      // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
       const url = input.toString();
       if (url.endsWith(".sha256") || url.endsWith(".sha1")) {
         return new Response("Not Found", { status: 404 });

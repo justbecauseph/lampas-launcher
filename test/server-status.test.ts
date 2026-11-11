@@ -63,6 +63,7 @@ describe("ServerStatusClient", () => {
     let requestedInit: RequestInit | undefined;
     const status = await ServerStatusClient.getStatus({
       fetchImpl: async (url, init) => {
+        // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
         requestedUrl = String(url);
         requestedInit = init;
         return response(validStatus);

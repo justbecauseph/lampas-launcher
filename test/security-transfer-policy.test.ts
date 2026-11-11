@@ -43,6 +43,7 @@ describe("Phase 5 transport and transfer limits", () => {
   test("authenticated metadata rejects redirects before issuing the second request", async () => {
     const requests: Array<{ url: string; authorization?: string }> = [];
     globalThis.fetch = (async (input, init) => {
+      // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
       const url = String(input);
       requests.push({
         url,
@@ -124,6 +125,7 @@ describe("Phase 5 transport and transfer limits", () => {
         cookie?: string;
       }> = [];
       globalThis.fetch = (async (input, init) => {
+        // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
         const url = String(input);
         const headers = new Headers(init?.headers);
         requests.push({

@@ -47,7 +47,9 @@ export function initConsoleView(
   ) as HTMLButtonElement | null;
   const consoleAutoscroll = (document.getElementById("console-autoscroll") ||
     document.getElementById("btn-autoscroll")) as
-    HTMLInputElement | HTMLButtonElement | null;
+    | HTMLInputElement
+    | HTMLButtonElement
+    | null;
   const btnConsoleStop = document.getElementById(
     "btn-console-stop",
   ) as HTMLButtonElement | null;

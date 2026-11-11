@@ -96,14 +96,15 @@ describe("Console View Auto-Scroll and Controls", () => {
 
     (globalThis as any).document = {
       getElementById: (id: string) => elements.get(id) || null,
-      createElement: (tag: string) => {
+      createElement: (_tag: string) => {
         const el = new MockDomElement();
         return el;
       },
     };
 
     let logBatchCallback:
-      ((batch: { entries: GameLogEntry[] }) => void) | null = null;
+      | ((batch: { entries: GameLogEntry[] }) => void)
+      | null = null;
     (globalThis as any).window = {
       lampas: {
         game: {
@@ -257,7 +258,7 @@ describe("Console View Auto-Scroll and Controls", () => {
     reg("console-count");
     reg("console-autoscroll");
     const btnConsoleStop = reg("btn-console-stop");
-    const consoleGameStatus = reg("console-game-status");
+    reg("console-game-status");
     const consoleStatusDot = reg("console-status-dot");
     const consoleStatusText = reg("console-status-text");
 

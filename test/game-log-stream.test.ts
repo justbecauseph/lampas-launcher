@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -503,9 +503,7 @@ describe("Phase 2 — UI Renderer DOM & Queue Invariants", () => {
     expect(retainedDisplayBytes).toBeLessThanOrEqual(MAX_DISPLAY_BYTES);
 
     // 2. Byte budget bound test: append 100 large 10 KB lines (total ~1 MB, exceeding 512 KB limit)
-    const largeLogs = Array.from({ length: 100 }, (_, i) =>
-      "X".repeat(10 * 1024),
-    );
+    const largeLogs = Array.from({ length: 100 }, () => "X".repeat(10 * 1024));
     renderLines(largeLogs);
 
     // Byte budget constraint (512 KB) must prune older lines even if child count < 1000!

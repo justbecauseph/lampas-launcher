@@ -17,7 +17,7 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { yamlAdapter } = await import("../src/config-patches/adapters/yaml");
 const { propertiesAdapter } =
   await import("../src/config-patches/adapters/properties");

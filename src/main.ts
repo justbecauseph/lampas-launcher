@@ -1,11 +1,4 @@
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  nativeImage,
-  shell,
-} from "electron";
+import { app, BrowserWindow, dialog, nativeImage, shell } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -65,7 +58,6 @@ import type {
   LauncherConfig,
   RendererUserProfile,
   RendererSettingsDto,
-  KnownLocationId,
   LaunchReadiness,
   UpdateSettingsDto,
   GameFilesRemovalResultDto,
@@ -227,7 +219,7 @@ function createWindow() {
     if (url.startsWith("http://") || url.startsWith("https://")) {
       try {
         const validUrl = validateWebUrl(url);
-        shell.openExternal(validUrl);
+        void shell.openExternal(validUrl);
       } catch (err: any) {
         LauncherLogger.warn(
           `[Window Open] Rejected URL: ${err?.message || err}`,
@@ -321,7 +313,7 @@ function createWindow() {
       );
       throw new Error(`Packaged renderer not found at: ${prodPath}`);
     }
-    mainWindow.loadFile(prodPath);
+    void mainWindow.loadFile(prodPath);
   } else {
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;
     if (devServerUrl) {
@@ -332,7 +324,7 @@ function createWindow() {
             parsed.hostname === "127.0.0.1") &&
           (parsed.protocol === "http:" || parsed.protocol === "https:")
         ) {
-          mainWindow.loadURL(devServerUrl);
+          void mainWindow.loadURL(devServerUrl);
         } else {
           throw new Error(
             `Refusing to load untrusted VITE_DEV_SERVER_URL: ${devServerUrl}`,
@@ -343,13 +335,13 @@ function createWindow() {
         throw err;
       }
     } else if (fs.existsSync(prodPath)) {
-      mainWindow.loadFile(prodPath);
+      void mainWindow.loadFile(prodPath);
     } else {
       const devFallback = path.join(__dirname, "../ui/index.html");
       if (!fs.existsSync(devFallback)) {
         throw new Error(`Renderer index.html not found at: ${devFallback}`);
       }
-      mainWindow.loadFile(devFallback);
+      void mainWindow.loadFile(devFallback);
     }
   }
 }
@@ -372,7 +364,7 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-app.whenReady().then(async () => {
+void app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return;
   LauncherLogger.init();
   LauncherLogger.info(
@@ -502,7 +494,11 @@ app.whenReady().then(async () => {
 
   // Helper: validate known location identifiers, expected types, physical ancestry, and canonical roots
   type KnownLocationId =
-    "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog";
+    | "gameDir"
+    | "modsDir"
+    | "logsDir"
+    | "launcherLog"
+    | "minecraftLog";
   const knownLocationIds: KnownLocationId[] = [
     "gameDir",
     "modsDir",

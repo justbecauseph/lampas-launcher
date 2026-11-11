@@ -33,7 +33,7 @@ let bootstrapCalls: Array<{
 
 let javaCalls: Array<{ gameDir: string; mode?: string }> = [];
 
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");

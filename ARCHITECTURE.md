@@ -16,7 +16,7 @@ A Bun override pins electron-builder's `app-builder-lib` to `@electron/get` `5.1
 ```bash
 bun install --frozen-lockfile
 bun run typecheck        # main/preload (tsconfig.json) and renderer (tsconfig.renderer.json)
-bun run format:check     # Prettier, as CI runs it
+bun run format:check     # Oxfmt (vp fmt), as CI runs it
 bun test                 # unit and integration tests
 bun run smoke            # Electron smoke test (assets, fonts, preload, execution)
 bun run benchmark        # warm sync, repair, move, logging, catalog search

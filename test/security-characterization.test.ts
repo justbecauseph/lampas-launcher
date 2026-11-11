@@ -8,7 +8,6 @@ import {
   mock,
   test,
 } from "bun:test";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -316,6 +315,7 @@ describe("Phase 5 Security Regression — SEC-06: Executable Verification Requir
     };
 
     const mockFetch = async (url: string | URL | Request) => {
+      // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
       const urlStr = url.toString();
       if (urlStr.endsWith(".sha256") || urlStr.endsWith(".sha1")) {
         return new Response("Not Found", { status: 404 });

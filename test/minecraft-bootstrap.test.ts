@@ -76,7 +76,7 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
       ];
 
       // Pre-allocated array slot assignment pattern used in MinecraftBootstrap
-      const results: string[] = new Array(items.length);
+      const results: string[] = Array.from<string>({ length: items.length });
       let nextIndex = 0;
       const concurrency = 3;
 
@@ -151,11 +151,9 @@ describe("MinecraftBootstrap (Phase 3B & 3C)", () => {
     });
     const sha1 = crypto.createHash("sha1").update(indexBody).digest("hex");
 
-    let serverRequests = 0;
     const server = Bun.serve({
       port: 0,
       fetch() {
-        serverRequests++;
         return new Response(indexBody);
       },
     });

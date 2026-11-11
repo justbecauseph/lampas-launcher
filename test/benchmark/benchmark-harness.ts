@@ -27,7 +27,7 @@ const { LauncherLogger } = await import("../../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../../src/config");
 const { LauncherSync } = await import("../../src/sync");
 const { GameDirectoryManager } = await import("../../src/game-directory");
-const { hashFile } = await import("../../src/file-transfer");
+await import("../../src/file-transfer");
 
 LauncherLogger.init();
 

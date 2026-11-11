@@ -68,7 +68,7 @@ export async function runBoundedPool<T, R>(
     options.signal.addEventListener("abort", onParentAbort, { once: true });
   }
 
-  const results: R[] = new Array(items.length);
+  const results: R[] = Array.from({ length: items.length });
   let nextIndex = 0;
   let firstError: unknown = null;
   let activeCount = 0;

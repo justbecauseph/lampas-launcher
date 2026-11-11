@@ -109,10 +109,14 @@ export function initSettingsView(options: SettingsViewOptions): {
   ) as HTMLInputElement | null;
   const settingJavaArgs = (document.getElementById("setting-java-args") ||
     document.getElementById("setting-javaargs")) as
-    HTMLInputElement | HTMLTextAreaElement | null;
+    | HTMLInputElement
+    | HTMLTextAreaElement
+    | null;
   const settingNoSync = (document.getElementById("setting-nosync") ||
     document.getElementById("btn-toggle-nosync")) as
-    HTMLInputElement | HTMLButtonElement | null;
+    | HTMLInputElement
+    | HTMLButtonElement
+    | null;
   const settingExternalImages = document.getElementById(
     "setting-external-images",
   ) as HTMLInputElement | null;

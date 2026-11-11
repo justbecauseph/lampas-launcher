@@ -841,9 +841,7 @@ describe("GameRunner launch flow & Quick Play", () => {
   });
 
   test("Phase 7: killGame is awaitable and waits for process exit/close resolution", async () => {
-    let childProc: any = null;
     mockSpawnHook = (proc) => {
-      childProc = proc;
       // Override kill to simulate delayed graceful termination
       proc.kill = (signal: string) => {
         proc.killed = true;

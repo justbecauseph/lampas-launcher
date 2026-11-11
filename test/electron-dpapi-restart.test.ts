@@ -48,7 +48,7 @@ describe("Phase 3 Native Evidence — Electron 45.3.0 Windows DPAPI Restart Hard
       );
     for (const line of lines) {
       const match = line.match(
-        /(?:^.*?\s+)?([A-Za-z0-9_\\\.\-\s]+?):(\((?:[A-Z0-9\(\)]+)\))/,
+        /(?:^.*?\s+)?([A-Za-z0-9_\\.\-\s]+?):(\((?:[A-Z0-9()]+)\))/,
       );
       if (match) {
         entries.push({ principal: match[1].trim(), rights: match[2].trim() });

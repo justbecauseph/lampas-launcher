@@ -150,15 +150,7 @@ const DEFAULT_CONFIG: LauncherConfig = {
   closeOnGameStart: false,
 };
 
-import {
-  normalizePortalUrl,
-  isExactLoopbackHost,
-  portalFetch,
-  PortalRedirectPolicyError,
-  PortalPolicyError,
-  PortalPolicy,
-  type DevelopmentPortalPolicy,
-} from "./portal-policy";
+import { normalizePortalUrl } from "./portal-policy";
 export {
   normalizePortalUrl,
   validateWebUrl,
@@ -180,31 +172,6 @@ function valuesEqual(a: any, b: any): boolean {
     return JSON.stringify(a) === JSON.stringify(b);
   }
   return false;
-}
-
-function formatConfigValue(key: string, value: any): string {
-  if (value === undefined || value === null) {
-    return "<unset>";
-  }
-  if (
-    key === "token" ||
-    key === "refreshToken" ||
-    key === "minecraftAccessToken"
-  ) {
-    return "[REDACTED]";
-  }
-  if (typeof value === "string") {
-    return value.length > 80
-      ? `"${value.slice(0, 77)}..."`
-      : JSON.stringify(value);
-  }
-  if (typeof value === "object") {
-    const serialized = JSON.stringify(value);
-    return serialized.length > 80
-      ? `${serialized.slice(0, 77)}...`
-      : serialized;
-  }
-  return String(value);
 }
 
 const CHANNELS: ReadonlyArray<LauncherConfig["selectedChannel"]> = [
@@ -565,7 +532,8 @@ export class ConfigManager {
     const current = { ...this.get() };
 
     // Security invariant: sessionPortalUrl cannot be forged or modified via generic set()
-    const attemptedSessionPortalForgery = "sessionPortalUrl" in newConfig;
+    // Evaluated for its effect only: throws on a non-object newConfig, as before.
+    void ("sessionPortalUrl" in newConfig);
     const sanitizedConfig = { ...newConfig };
     delete (sanitizedConfig as any).sessionPortalUrl;
     delete (sanitizedConfig as any).token;

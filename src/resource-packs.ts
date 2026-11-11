@@ -70,7 +70,7 @@ export function isValidServerAddress(server: string): boolean {
 
   // Hostname check (RFC 1123 / standard domains / localhost)
   const hostnameRegex =
-    /^([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])(\.([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9]))*$/;
+    /^([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(\.([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))*$/;
   if (hostnameRegex.test(host)) {
     return true;
   }
@@ -165,6 +165,7 @@ export async function reconcileRequiredResourcePacks(
   gameDir: string,
   options: ReconcileRequiredOptions,
 ): Promise<string[]> {
+  // oxlint-disable-next-line typescript/no-useless-default-assignment -- exported API; the defaults keep an omitted field from throwing, and current callers already pass arrays
   const { required = [], previousManaged = [] } = options;
 
   // 1. Real SHA-256 verification on required packs

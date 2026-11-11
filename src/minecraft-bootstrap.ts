@@ -836,7 +836,7 @@ export class MinecraftBootstrap {
         }
 
         const extractedFiles: string[] = [];
-        for (const [key, output] of Array.from(
+        for (const [, output] of Array.from(
           extractedNativeBytes.entries(),
         ).sort(([a], [b]) => a.localeCompare(b))) {
           const filename = output.name;

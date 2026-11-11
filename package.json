@@ -15,24 +15,21 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "benchmark": "bun test/benchmark/benchmark-harness.ts",
     "smoke": "bun test/smoke/electron-smoke.ts",
-    "dev": "concurrently \"tsc -w\" \"vite\" \"electron .\"",
-    "build": "tsc && vite build",
-    "format:check": "bunx prettier -c .",
-    "format": "bunx prettier -w .",
-    "package:dir": "tsc && vite build && electron-builder --dir --publish never",
-    "package:win": "tsc && vite build && electron-builder --win --publish never",
-    "package:msix": "tsc && vite build && electron-builder --win appx --publish never",
-    "package:appx": "tsc && vite build && electron-builder --win appx --publish never",
+    "dev": "concurrently \"tsc -w\" \"vp dev\" \"electron .\"",
+    "build": "tsc && vp build",
+    "format:check": "bunx vp fmt --check .",
+    "format": "bunx vp fmt .",
+    "package:dir": "tsc && vp build && electron-builder --dir --publish never",
+    "package:win": "tsc && vp build && electron-builder --win --publish never",
+    "package:msix": "tsc && vp build && electron-builder --win appx --publish never",
+    "package:appx": "tsc && vp build && electron-builder --win appx --publish never",
     "package:test": "pwsh scripts/package-and-test.ps1",
-    "package:linux": "tsc && vite build && electron-builder --linux --publish never",
-    "package:all": "tsc && vite build && electron-builder -mwl --publish never",
+    "package:linux": "tsc && vp build && electron-builder --linux --publish never",
+    "package:all": "tsc && vp build && electron-builder -mwl --publish never",
     "start": "electron .",
     "security:artifacts": "bun scripts/security-artifacts.ts",
     "security:fuses": "node scripts/verify-fuses.cjs",
-    "prepare": "husky"
-  },
-  "lint-staged": {
-    "**/*": "prettier --write --ignore-unknown"
+    "prepare": "vp config"
   },
   "dependencies": {
     "fflate": "^0.8.3",
@@ -46,11 +43,9 @@
     "concurrently": "^10.0.7",
     "electron": "45.3.0",
     "electron-builder": "^26.18.0",
-    "husky": "^9.1.7",
-    "lint-staged": "^17.6.0",
-    "prettier": "3.9.10",
     "typescript": "^7.0.2",
-    "vite": "^8.3.7"
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.5.1",
+    "vite-plus": "1.5.1"
   },
   "overrides": {
     "app-builder-lib": {
@@ -59,7 +54,8 @@
     },
     "@electron/universal": {
       "minimatch": "11.0.7"
-    }
+    },
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.5.1"
   },
   "trustedDependencies": [
     "electron"
@@ -134,5 +130,6 @@
       ],
       "category": "Game"
     }
-  }
+  },
+  "packageManager": "bun@1.4.4"
 }

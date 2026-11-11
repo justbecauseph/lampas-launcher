@@ -100,7 +100,7 @@ export function resolveRuntimeDefinition(
 
   if (releaseRuntime.loader.type !== manifestRuntime.loader.type) {
     throw new Error(
-      `Invalid Lampas release: release descriptor requires loader type '${releaseRuntime.loader.type}', client manifest requires loader type '${manifestRuntime.loader.type}'.`,
+      `Invalid Lampas release: release descriptor requires loader type '${String(releaseRuntime.loader.type)}', client manifest requires loader type '${String(manifestRuntime.loader.type)}'.`,
     );
   }
 

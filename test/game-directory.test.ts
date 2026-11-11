@@ -25,8 +25,7 @@ mock.module("electron", () => ({
   dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
-const { ConfigManager, getDefaultGameDir, getUserDataDir } =
-  await import("../src/config");
+const { ConfigManager, getDefaultGameDir } = await import("../src/config");
 const { GameDirectoryManager, writeStagingMarker } =
   await import("../src/game-directory");
 const { GameRunner } = await import("../src/game-runner");
@@ -246,6 +245,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
 
     // Mock isGameRunning
+    // oxlint-disable-next-line typescript/unbound-method -- saved to restore the original after the test
     const origIsRunning = GameRunner.isGameRunning;
     (GameRunner as any).isGameRunning = () => true;
 
@@ -825,6 +825,7 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     };
 
     // Spy on ConfigManager.set to throw during the directory move's config update
+    // oxlint-disable-next-line typescript/unbound-method -- saved to restore the original after the test
     const origSet = ConfigManager.set;
     let hasThrown = false;
     spyOn(ConfigManager, "set").mockImplementation((updates: any) => {

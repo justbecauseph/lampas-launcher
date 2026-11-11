@@ -109,7 +109,7 @@ export class LauncherUpdateChecker {
    */
   check(): Promise<LauncherUpdateInfo | null> {
     // Windows Store apps are updated by the Store; disable external update prompts.
-    if (Boolean((process as { windowsStore?: boolean }).windowsStore)) {
+    if ((process as { windowsStore?: boolean }).windowsStore) {
       return Promise.resolve(null);
     }
     if (

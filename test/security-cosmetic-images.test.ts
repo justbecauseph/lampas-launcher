@@ -91,6 +91,7 @@ describe("Phase 6 cosmetic image broker", () => {
     globalThis.fetch = (async (input, init) => {
       requests++;
       requestHeaders = new Headers(init?.headers);
+      // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
       expect(String(input)).toContain(
         "https://mc-heads.net/avatar/1234567890abcdef1234567890abcdef/64",
       );

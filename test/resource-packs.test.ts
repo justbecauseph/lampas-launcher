@@ -14,11 +14,9 @@ mock.module("electron", () => ({
 }));
 
 const {
-  ensureRequiredResourcePacks,
   reconcileRequiredResourcePacks,
   reconcileResourcePacks,
   verifyRequiredResourcePacks,
-  isValidServerAddress,
 } = await import("../src/resource-packs");
 import type { RequiredResourcePack } from "../src/types";
 

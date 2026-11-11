@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import {
-  OperationAbortedError,
   OperationSingleFlight,
   runBoundedPool,
   TaskConflictError,

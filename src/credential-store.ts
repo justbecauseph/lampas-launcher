@@ -26,7 +26,10 @@ export interface StoredCredentialRecord {
 }
 
 export type StorageBackendType =
-  "windows_dpapi" | "macos_keychain" | "linux_keyring" | "session_only";
+  | "windows_dpapi"
+  | "macos_keychain"
+  | "linux_keyring"
+  | "session_only";
 
 export interface SaveCredentialsResult {
   success: boolean;
@@ -381,7 +384,7 @@ export class CredentialStore {
       if (fs.existsSync(markerFile)) {
         try {
           fs.unlinkSync(markerFile);
-        } catch (markerErr: any) {
+        } catch {
           try {
             fs.unlinkSync(targetFile);
           } catch {}

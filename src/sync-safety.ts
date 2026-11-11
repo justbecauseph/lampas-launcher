@@ -286,7 +286,6 @@ export function clearSyncSafetyBlock(
     expectedCategory: "RESERVED_INTERNAL",
   });
   const marker = readMarker(filePath);
-  const effectiveBlock = marker ?? memoryBlock;
   if (
     (marker?.reason === "INTEGRITY" || memoryBlock?.reason === "INTEGRITY") &&
     !options.requireFullValidation

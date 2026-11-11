@@ -322,6 +322,7 @@ export class FabricMetaResolver {
     const customFetch =
       options?.fetchFn ||
       ((input: string | URL | Request, init?: RequestInit) =>
+        // oxlint-disable-next-line typescript/no-base-to-string -- String(input) is the existing URL conversion; another conversion would change the URL passed to fetchWithRedirectPolicy
         fetchWithRedirectPolicy(String(input), init, {
           kind: "public-metadata",
         }));

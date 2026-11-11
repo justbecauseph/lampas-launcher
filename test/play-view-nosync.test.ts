@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { initPlayView } from "../ui/src/views/play-view";
 import { initSettingsView } from "../ui/src/views/settings-view";
-import type { RendererUserProfile, RendererSettingsDto } from "../src/types";
+import type { RendererUserProfile } from "../src/types";
 
 class MockElement {
   value = "";
@@ -40,14 +40,14 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
     };
 
     const btnPlay = reg("btn-play");
-    const btnPlayText = reg("btn-play-text");
-    const btnPlaySpinner = reg("btn-play-spinner");
-    const btnStop = reg("btn-stop");
-    const progressContainer = reg("progress-container");
-    const progressFill = reg("progress-fill");
-    const progressMsg = reg("progress-msg");
-    const progressPercent = reg("progress-percent");
-    const titlebarStatusDot = reg("titlebar-status-dot");
+    reg("btn-play-text");
+    reg("btn-play-spinner");
+    reg("btn-stop");
+    reg("progress-container");
+    reg("progress-fill");
+    reg("progress-msg");
+    reg("progress-percent");
+    reg("titlebar-status-dot");
     const titlebarStatusText = reg("titlebar-status-text");
     const runtimeLoaderVersion = reg("runtime-loader-version");
     const runtimeMinecraftVersion = reg("runtime-minecraft-version");
@@ -61,7 +61,6 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
     let syncStartCalled = false;
     let syncRepairCalled = false;
     let gameLaunchCalled = false;
-    let launchedUser: any = null;
     let getInstalledRuntimeCalled = false;
 
     let exitCallback: any = null;
@@ -70,9 +69,8 @@ describe("Skip Pipeline (No Sync) Mode Verification", () => {
       lampas: {
         game: {
           isRunning: async () => false,
-          launch: async (user: any) => {
+          launch: async (_user: any) => {
             gameLaunchCalled = true;
-            launchedUser = user;
             return true;
           },
           onExit: (cb: any) => {

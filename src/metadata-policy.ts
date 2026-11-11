@@ -91,6 +91,7 @@ function stringValue(
     typeof value !== "string" ||
     value.length === 0 ||
     value.length > max ||
+    // oxlint-disable-next-line no-control-regex -- intentionally matches control characters
     /[\x00-\x1f\x7f]/.test(value)
   ) {
     fail(`${context} must be a non-empty string of at most ${max} characters.`);
@@ -102,6 +103,7 @@ function textValue(value: unknown, context: string, max = MAX_STRING): string {
   if (
     typeof value !== "string" ||
     value.length > max ||
+    // oxlint-disable-next-line no-control-regex -- intentionally matches control characters
     /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)
   ) {
     fail(`${context} must be text of at most ${max} characters.`);
@@ -384,12 +386,7 @@ export function validateReleaseDescriptor(
     release.minimumLauncherVersion,
     "release descriptor.minimumLauncherVersion",
   );
-  const protocol = integer(
-    release.protocol,
-    "release descriptor.protocol",
-    0,
-    255,
-  );
+  integer(release.protocol, "release descriptor.protocol", 0, 255);
   const created = stringValue(
     release.created,
     "release descriptor.created",
@@ -463,10 +460,10 @@ function validateMod(value: unknown, index: number): void {
     fail(`${context}.filename must be a basename.`);
   integer(mod.size, `${context}.size`);
   for (const field of ["description", "iconUrl", "sourceUrl"] as const) {
-    if (mod[field] !== undefined)
-      field.endsWith("Url")
-        ? urlValue(mod[field], `${context}.${field}`)
-        : textValue(mod[field], `${context}.${field}`, 4096);
+    if (mod[field] !== undefined) {
+      if (field.endsWith("Url")) urlValue(mod[field], `${context}.${field}`);
+      else textValue(mod[field], `${context}.${field}`, 4096);
+    }
   }
   if (mod.categories !== undefined) {
     boundedArray(mod.categories, `${context}.categories`);
@@ -927,7 +924,8 @@ export function isTransientMetadataFetchFailure(error: unknown): boolean {
       (status >= 500 && status <= 599)
     );
   const cause = candidate.cause as
-    { name?: string; message?: string } | undefined;
+    | { name?: string; message?: string }
+    | undefined;
   if (
     cause?.name === "SyntaxError" ||
     cause?.name === "MetadataValidationError" ||

@@ -31,7 +31,7 @@ mock.module("electron", () => ({
 const { app: mockedApp } = (await import("electron")) as {
   app: { isPackaged?: boolean };
 };
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 
@@ -71,7 +71,7 @@ afterAll(() => {
 describe("LauncherSync client sync integration", () => {
   test("replaces managed resource pack on hash change with same filename", async () => {
     const v1Content = Buffer.from("v1-resourcepack-content");
-    const v1Sha = crypto.createHash("sha256").update(v1Content).digest("hex");
+    crypto.createHash("sha256").update(v1Content).digest("hex");
 
     const v2Content = Buffer.from("v2-updated-resourcepack-content");
     const v2Sha = crypto.createHash("sha256").update(v2Content).digest("hex");

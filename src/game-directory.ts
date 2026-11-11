@@ -22,8 +22,6 @@ import {
   isSafeRelativePath,
   isValidDigestString,
   normalizePathKey,
-  PathContainmentError,
-  resolveAndContainPath,
 } from "./path-policy";
 import type {
   DirectoryMoveProgress,
@@ -380,27 +378,6 @@ export interface DirectoryMoveJournal {
     | "finalizing"
     | "cleaning";
   timestamp: string;
-  stagingVerified?: boolean;
-  stagingReceipt?: {
-    fileCount: number;
-    totalBytes: number;
-  };
-}
-
-interface AnyMoveJournal {
-  version?: number;
-  operationId?: string;
-  source: string;
-  target: string;
-  staging: string;
-  phase:
-    | "preparing"
-    | "renaming"
-    | "copying"
-    | "verifying"
-    | "finalizing"
-    | "cleaning";
-  timestamp?: string;
   stagingVerified?: boolean;
   stagingReceipt?: {
     fileCount: number;

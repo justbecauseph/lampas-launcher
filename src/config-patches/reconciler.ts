@@ -148,7 +148,7 @@ export async function reconcileConfigPatches(
 ): Promise<ReconcileResult> {
   const { gameDir, patches, prevState } = options;
   const appliedState: Record<string, AppliedConfigPatchState> = {
-    ...(prevState.appliedConfigPatches || {}),
+    ...prevState.appliedConfigPatches,
   };
 
   let appliedCount = 0;

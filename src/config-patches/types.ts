@@ -1,4 +1,4 @@
-import type { ConfigOperation, ConfigPatch } from "../types";
+import type { ConfigOperation } from "../types";
 
 export interface PatchResult {
   changed: boolean;

@@ -1199,7 +1199,9 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
       );
     }
     sanitized.selectedChannel = raw.selectedChannel as
-      "stable" | "beta" | "dev";
+      | "stable"
+      | "beta"
+      | "dev";
   }
 
   if (raw.allocatedRamGb !== undefined) {
@@ -1608,6 +1610,7 @@ export const IpcSchemas = {
 // ═══════════════════════════════════════════════════
 
 const PRESERVED_PATH_MARKER = "\u0001";
+// oxlint-disable-next-line no-control-regex -- intentionally matches control characters
 const PRESERVED_PATH_RESTORE = /\u0001P(\d+)\u0001/g;
 
 function escapeRegExp(value: string): string {

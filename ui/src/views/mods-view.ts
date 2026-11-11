@@ -389,9 +389,9 @@ export function initModsView(options: ModsViewOptions): () => void {
       const linkBtn = target.closest<HTMLButtonElement>(".js-source-link");
       if (linkBtn && linkBtn.dataset.sourceUrl) {
         if (window.lampas.utils.openSourcePage) {
-          window.lampas.utils.openSourcePage(linkBtn.dataset.sourceUrl);
+          void window.lampas.utils.openSourcePage(linkBtn.dataset.sourceUrl);
         } else {
-          window.lampas.utils.openPath(linkBtn.dataset.sourceUrl);
+          void window.lampas.utils.openPath(linkBtn.dataset.sourceUrl);
         }
         return;
       }

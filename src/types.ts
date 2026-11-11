@@ -18,7 +18,11 @@ export interface OnlineMinecraftPlayer {
 }
 
 export type MinecraftServerState =
-  "starting" | "online" | "stopping" | "offline" | "unknown";
+  | "starting"
+  | "online"
+  | "stopping"
+  | "offline"
+  | "unknown";
 
 export type PresenceFreshness = "live" | "stale" | "unavailable";
 
@@ -323,7 +327,11 @@ export interface SyncResult {
 }
 
 export type KnownLocationId =
-  "gameDir" | "modsDir" | "logsDir" | "launcherLog" | "minecraftLog";
+  | "gameDir"
+  | "modsDir"
+  | "logsDir"
+  | "launcherLog"
+  | "minecraftLog";
 
 export interface UpdateSettingsDto {
   portalUrl?: string;
@@ -347,7 +355,10 @@ export interface ClearCredentialsResult {
 
 export interface AuthStorageStatusDto {
   backend:
-    "windows_dpapi" | "linux_keyring" | "macos_keychain" | "session_only";
+    | "windows_dpapi"
+    | "linux_keyring"
+    | "macos_keychain"
+    | "session_only";
   sessionOnly: boolean;
   persistenceAvailable: boolean;
   sessionPersisted?: boolean;

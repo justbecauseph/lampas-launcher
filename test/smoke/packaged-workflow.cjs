@@ -430,7 +430,7 @@ async function run() {
     const sourceMod = path.join(userDataDir, "fixture-custom.jar");
 
     ConfigManager.resetForTesting();
-    const initial = ConfigManager.get();
+    ConfigManager.get();
     ConfigManager.set({
       portalUrl: portal,
       selectedChannel: "stable",

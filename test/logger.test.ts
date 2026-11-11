@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -244,6 +236,7 @@ describe("LauncherLogger persistent disk logging", () => {
     const ws = (logger as any).writeStream;
 
     let stderrOutput = "";
+    // oxlint-disable-next-line typescript/unbound-method -- saved to restore the original after the test
     const origStderrWrite = process.stderr.write;
     process.stderr.write = ((chunk: any) => {
       stderrOutput += String(chunk);
@@ -374,7 +367,9 @@ describe("LauncherLogger persistent disk logging", () => {
     await logger.close();
 
     let fallbackLogged = "";
+    // oxlint-disable-next-line typescript/unbound-method -- saved to restore the original after the test
     const origStderr = process.stderr.write;
+    // oxlint-disable-next-line typescript/unbound-method -- saved to restore the original after the test
     const origStdout = process.stdout.write;
     process.stderr.write = ((chunk: any) => {
       fallbackLogged += String(chunk);

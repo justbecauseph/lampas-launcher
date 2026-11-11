@@ -592,7 +592,7 @@ export class SessionManager {
       try {
         raw = fs.readFileSync(configPath, "utf-8");
         parsed = JSON.parse(raw);
-      } catch (parseErr: any) {
+      } catch {
         parsed = null;
       }
 

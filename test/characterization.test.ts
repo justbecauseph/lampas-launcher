@@ -27,7 +27,7 @@ mock.module("electron", () => ({
   dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager } = await import("../src/client-mods");
 const { GameRunner } = await import("../src/game-runner");
@@ -98,7 +98,7 @@ describe("Phase 0 Characterization — Operation Settlement & Guard Gaps (F07, F
     (GameRunner as any).runningProcess = proc;
     expect(GameRunner.isGameRunning()).toBe(true);
 
-    GameRunner.killGame();
+    void GameRunner.killGame();
     // In Phase 1: runningProcess is retained until exit/close event settlement
     expect(GameRunner.isGameRunning()).toBe(true);
     expect(proc.killed).toBe(true);

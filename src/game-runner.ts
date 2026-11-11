@@ -332,7 +332,9 @@ export class GameRunner {
         assertSyncSafetyAdmission({
           origin: normalizePortalUrl(activeConfig.portalUrl),
           channel: (activeConfig.selectedChannel || "stable") as
-            "stable" | "beta" | "dev",
+            | "stable"
+            | "beta"
+            | "dev",
           gameDir,
         });
       } catch {

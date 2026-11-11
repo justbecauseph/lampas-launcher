@@ -38,7 +38,7 @@ mock.module("electron", () => ({
   dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [] }) },
 }));
 
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { ClientModManager } = await import("../src/client-mods");
 const { GameRunner } = await import("../src/game-runner");
@@ -106,7 +106,7 @@ describe("Phase 1 Regression Gate — Guarded Mod Mutators (F08)", () => {
     };
     (GameRunner as any).runningProcess = fakeProc;
 
-    GameRunner.killGame();
+    void GameRunner.killGame();
     // In Phase 1, process state must not be immediately cleared before actual exit
     expect(GameRunner.isGameRunning()).toBe(true);
   });
@@ -147,7 +147,7 @@ describe("Phase 3 Regression Gate — Full Repair Asset & Native Invariants (F06
     let redownloaded = false;
     const server = Bun.serve({
       port: 0,
-      fetch(req) {
+      fetch(_req) {
         redownloaded = true;
         return new Response(responseBody, {
           headers: { "Content-Type": "application/json" },

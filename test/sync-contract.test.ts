@@ -26,7 +26,7 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 

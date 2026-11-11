@@ -7,7 +7,6 @@ import {
   copyAtomic,
   copyVerified,
   downloadVerified,
-  fetchJsonWithRetry,
   fetchPortalJsonWithRetry,
   hashFile,
   writeAtomicFile,
@@ -181,7 +180,6 @@ import {
   isSafeRelativePath,
   isPathProtected,
   isPreservedSeedFile,
-  canonicalizeRelativePath,
   validateDigestString,
   sanitizeInstallationState,
   resolveAndContainPath,
@@ -559,11 +557,11 @@ export class LauncherSync {
     const verifiedAt = new Map<string, string>();
 
     // Bounded async metadata checking across manifest files (concurrency 8)
-    const checkResults = new Array<{
+    const checkResults: Array<{
       file: any;
       needDownload: boolean;
       verifiedTimestamp?: string;
-    }>(manifestFiles.length);
+    }> = Array.from({ length: manifestFiles.length });
 
     await runBoundedPool(
       manifestFiles,

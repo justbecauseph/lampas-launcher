@@ -63,7 +63,7 @@ const spawnSpy = spyOn(childProcess, "spawn").mockImplementation(() => {
   return proc;
 });
 
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 const { GameRunner } = await import("../src/game-runner");
@@ -380,7 +380,7 @@ describe("Phase 4 — Sync Efficiency & Reliable State Publication", () => {
       () => {},
     );
     expect(launched).toBe(true);
-    GameRunner.killGame();
+    void GameRunner.killGame();
   });
 
   test("GameRunner.launchGame rejects launch if installation.json is corrupted JSON", async () => {

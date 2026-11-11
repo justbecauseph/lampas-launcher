@@ -11,8 +11,6 @@ const {
   parseMavenCoordinate,
   mavenToPath,
   validateFabricRuntimeMetadata,
-  PermanentFabricMetaError,
-  TransientFabricMetaError,
 } = await import("../src/fabric-meta");
 import type { MinecraftRuntimeDefinition } from "../src/types";
 
@@ -413,6 +411,7 @@ describe("FabricMetaResolver & Maven Coordinate Validation (PLAN.md Part D & Har
       const requests: string[] = [];
       try {
         globalThis.fetch = (async (input: string | URL | Request) => {
+          // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
           requests.push(String(input));
           return Response.json(sampleMetaPayload);
         }) as typeof fetch;
@@ -431,6 +430,7 @@ describe("FabricMetaResolver & Maven Coordinate Validation (PLAN.md Part D & Har
         ).toBe(true);
         requests.length = 0;
         globalThis.fetch = (async (input: string | URL | Request) => {
+          // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
           requests.push(String(input));
           return new Response(null, {
             status: 302,
@@ -450,6 +450,7 @@ describe("FabricMetaResolver & Maven Coordinate Validation (PLAN.md Part D & Har
   describe("Atomic Cache Writes & Sidecar Checksums", () => {
     test("resolves sidecar checksums and writes cache atomically", async () => {
       const mockFetch = async (input: string | URL | Request) => {
+        // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
         const urlStr = input.toString();
         if (urlStr.endsWith(".sha256")) {
           return new Response(

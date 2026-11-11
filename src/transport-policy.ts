@@ -7,7 +7,11 @@ import {
 import { TRANSFER_LIMITS } from "./transfer-limits";
 
 export type TransportKind =
-  "portal-auth" | "public-metadata" | "artifact" | "cosmetic" | "release-check";
+  | "portal-auth"
+  | "public-metadata"
+  | "artifact"
+  | "cosmetic"
+  | "release-check";
 
 export interface TransportPolicyOptions {
   kind: TransportKind;
@@ -186,7 +190,7 @@ export function validateTransportUrl(
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
-  } catch (error) {
+  } catch {
     throw new TransportPolicyError(
       `Malformed ${options.kind} URL '${rawUrl}'.`,
     );

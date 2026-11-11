@@ -418,6 +418,7 @@ describe("JavaRuntimeManager Async Probing (Phase 3A)", () => {
     const events: string[] = [];
     const previousFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
+      // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
       const url = input.toString();
       if (url.endsWith("/all.json")) {
         events.push("metadata");

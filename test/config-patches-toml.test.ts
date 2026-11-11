@@ -15,7 +15,7 @@ mock.module("electron", () => ({
   shell: { openPath: async () => "" },
 }));
 
-const { LauncherLogger } = await import("../src/logger");
+await import("../src/logger");
 const { tomlAdapter } = await import("../src/config-patches/adapters/toml");
 const { reconcileConfigPatches } =
   await import("../src/config-patches/reconciler");
