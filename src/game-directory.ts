@@ -1473,8 +1473,14 @@ export class GameDirectoryManager {
         );
       }
 
-      // Re-establish exact target inventory, hashes, sizes, directory structure, and source consistency
-      await verifyTargetCompleteness(journal.target, receipt, journal.source);
+      // Re-establish exact target inventory, hashes, sizes, directory structure, and source consistency.
+      // The interrupted cleaning phase may have deleted part of the source, so only its remaining entries must match.
+      await verifyTargetCompleteness(
+        journal.target,
+        receipt,
+        journal.source,
+        true,
+      );
 
       // Target is 100% verified complete
       ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
@@ -1784,6 +1790,7 @@ async function verifyTargetCompleteness(
   targetDir: string,
   receipt: MoveReceipt,
   sourceDir?: string,
+  allowPartialSource = false,
 ): Promise<void> {
   // 1. Receipt schema and integrity validation (receipt is untrusted until proven valid)
   if (
@@ -2047,7 +2054,10 @@ async function verifyTargetCompleteness(
       "source directory",
     );
 
-    if (sourcePayloadFiles.length !== receipt.files.length) {
+    if (
+      !allowPartialSource &&
+      sourcePayloadFiles.length !== receipt.files.length
+    ) {
       throw new Error(
         `Recovery aborted: source directory file count changed after interruption (expected ${receipt.files.length}, found ${sourcePayloadFiles.length}). Source directory has been preserved.`,
       );
@@ -2068,6 +2078,8 @@ async function verifyTargetCompleteness(
       const key = normalizePathKey(expected.relativePath);
       const srcFile = sourceMap.get(key);
       if (!srcFile) {
+        // Cleaning phase already deleted this file from the source
+        if (allowPartialSource) continue;
         throw new Error(
           `Recovery aborted: source directory inventory changed (missing '${expected.relativePath}'). Source directory has been preserved.`,
         );
@@ -2100,7 +2112,7 @@ async function verifyTargetCompleteness(
       sourceDirKeys.add(normalizePathKey(dirRel));
     }
 
-    if (sourceDirKeys.size !== receiptDirKeys.size) {
+    if (!allowPartialSource && sourceDirKeys.size !== receiptDirKeys.size) {
       throw new Error(
         `Recovery aborted: source directory structure changed after interruption (expected ${receiptDirKeys.size} directories, found ${sourceDirKeys.size}). Source directory has been preserved.`,
       );
