@@ -278,6 +278,7 @@ export class LauncherSync {
     onProgress: (progress: SyncProgress) => void,
     verificationMode: "fast" | "full",
     clearOnSuccess: boolean,
+    repair = false,
   ): Promise<{
     success: boolean;
     version: string;
@@ -296,6 +297,7 @@ export class LauncherSync {
       const result = await this.syncClientInternal(
         onProgress,
         verificationMode,
+        repair,
       );
       // A full pack pass does not verify the bootstrap/runtime/Java surfaces
       // covered by repairInstallation. Keep an integrity block until that
@@ -305,7 +307,12 @@ export class LauncherSync {
       return result;
     } catch (error) {
       if (isKnownSyncSafetyFailure(error))
-        await persistSyncSafetyBlock(safetyContext, safetyReason(error), error);
+        await persistSyncSafetyBlock(
+          safetyContext,
+          safetyReason(error),
+          error,
+          { repair },
+        );
       throw error;
     }
   }
@@ -313,6 +320,7 @@ export class LauncherSync {
   private static async syncClientInternal(
     onProgress: (progress: SyncProgress) => void,
     verificationMode: "fast" | "full" = "fast",
+    repair = false,
   ): Promise<{
     success: boolean;
     version: string;
@@ -537,9 +545,16 @@ export class LauncherSync {
         }
         prevState = validateInstallationState(rawPrev, gameDir);
       } catch (stateError) {
-        throw new Error(
-          "Installation state is malformed; synchronization is blocked until it is repaired or removed.",
-          { cause: stateError },
+        // Repair rebuilds installation state from a full verification pass, so
+        // unreadable prior state is treated as none (prevState stays empty).
+        if (!repair) {
+          throw new Error(
+            "Installation state is malformed; synchronization is blocked until it is repaired or removed.",
+            { cause: stateError },
+          );
+        }
+        LauncherLogger.warn(
+          "[Repair] Installation state is malformed; rebuilding it from a full verification.",
         );
       }
     }
@@ -1128,6 +1143,7 @@ export class LauncherSync {
       safetyContext,
       "INTEGRITY",
       new Error("Full repair has not completed verification."),
+      { repair: true },
     );
     try {
       const result = await this.repairInstallationInternal(onProgress, onLog);
@@ -1138,7 +1154,9 @@ export class LauncherSync {
       // installation incomplete. Preserve launch blocking for every repair
       // failure, including generic bootstrap and Java errors that may have
       // lost their original cause while being wrapped for the UI.
-      await persistSyncSafetyBlock(safetyContext, "INTEGRITY", error);
+      await persistSyncSafetyBlock(safetyContext, "INTEGRITY", error, {
+        repair: true,
+      });
       throw error;
     }
   }
@@ -1194,6 +1212,7 @@ export class LauncherSync {
       },
       "full",
       false,
+      true,
     );
 
     log(
