@@ -39,12 +39,48 @@ const ipcHandlers = new Map<string, Function>();
 const ipcListeners = new Map<string, Function>();
 const openedPaths: string[] = [];
 const openedExternals: string[] = [];
-const interceptedProcesses: Array<{ command: string; args: any[] }> = [];
+// `args` is the command line as spawned. `effectiveArgs` also has each JDK
+// `@argfile` replaced by the arguments it held at spawn time: outside Windows
+// the game's own arguments, including the token, reach Java that way.
+const interceptedProcesses: Array<{
+  command: string;
+  args: any[];
+  effectiveArgs: any[];
+}> = [];
+
+function expandArgfiles(args: any[]): any[] {
+  return args.flatMap((arg) => {
+    if (typeof arg !== "string" || !arg.startsWith("@")) return [arg];
+    let body: string;
+    try {
+      body = fs.readFileSync(arg.slice(1), "utf-8");
+    } catch {
+      return [arg];
+    }
+    return body
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        if (!/^".*"$/.test(line)) {
+          throw new Error(`Unquoted line in launch argument file: ${line}`);
+        }
+        return line.slice(1, -1).replace(/\\(.)/g, "$1");
+      });
+  });
+}
+
+function recordProcess(command: string, args: any[]): void {
+  interceptedProcesses.push({
+    command,
+    args,
+    effectiveArgs: expandArgfiles(args),
+  });
+}
 // Mock children by spawn order, so tests can write game output and exit them.
 const spawnedChildren: Array<{ command: string; proc: any }> = [];
 
 function createMockChildProcess(command: string, args: any[] = []) {
-  interceptedProcesses.push({ command, args });
+  recordProcess(command, args);
   const proc = new EventEmitter() as any;
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
@@ -66,14 +102,14 @@ spyOn(cp, "spawn").mockImplementation(((command: string, args: any[] = []) => {
   return createMockChildProcess(command, args);
 }) as any);
 spyOn(cp, "exec").mockImplementation(((command: string) => {
-  interceptedProcesses.push({ command, args: [] });
+  recordProcess(command, []);
   throw new Error(`Unexpected child_process.exec invocation for: ${command}`);
 }) as any);
 spyOn(cp, "execFile").mockImplementation(((
   command: string,
   args: any[] = [],
 ) => {
-  interceptedProcesses.push({ command, args });
+  recordProcess(command, args);
   throw new Error(
     `Unexpected child_process.execFile invocation for: ${command}`,
   );
@@ -82,7 +118,7 @@ spyOn(cp, "fork").mockImplementation(((
   modulePath: string,
   args: any[] = [],
 ) => {
-  interceptedProcesses.push({ command: modulePath, args });
+  recordProcess(modulePath, args);
   throw new Error(
     `Unexpected child_process.fork invocation for: ${modulePath}`,
   );
@@ -95,17 +131,17 @@ mock.module("node:child_process", () => ({
     return createMockChildProcess(command, args);
   },
   exec: (command: string) => {
-    interceptedProcesses.push({ command, args: [] });
+    recordProcess(command, []);
     throw new Error(`Unexpected child_process.exec invocation for: ${command}`);
   },
   execFile: (command: string, args: any[] = []) => {
-    interceptedProcesses.push({ command, args });
+    recordProcess(command, args);
     throw new Error(
       `Unexpected child_process.execFile invocation for: ${command}`,
     );
   },
   fork: (modulePath: string, args: any[] = []) => {
-    interceptedProcesses.push({ command: modulePath, args });
+    recordProcess(modulePath, args);
     throw new Error(
       `Unexpected child_process.fork invocation for: ${modulePath}`,
     );
@@ -4829,7 +4865,22 @@ try {
           (call) => !isMaximizerHelper(call),
         );
         const launchCall = launchCalls[launchCalls.length - 1];
-        const args = launchCall.args;
+        const args = launchCall.effectiveArgs;
+        if (process.platform !== "win32") {
+          // The token must reach Java through the argument file, never the
+          // command line that other local users can read.
+          if (
+            launchCall.args.includes("--accessToken") ||
+            launchCall.args.includes(launchMinecraftToken) ||
+            launchCall.args.filter(
+              (arg) => typeof arg === "string" && arg.startsWith("@"),
+            ).length !== 1
+          ) {
+            throw new Error(
+              "Expected the game arguments to be passed through one @argfile outside Windows",
+            );
+          }
+        }
         const getFlagVal = (flag: string, argList: string[] = args) => {
           const idx = argList.indexOf(flag);
           if (idx === -1 || idx + 1 >= argList.length) return null;
@@ -4890,17 +4941,18 @@ try {
           throw new Error("Expected launch to execute process execution sink");
         }
         const forgedCall = forgedLaunchCalls[forgedLaunchCalls.length - 1];
+        const forgedArgs = forgedCall.effectiveArgs;
         if (
-          forgedCall.args.includes("AttackerPlayer") ||
-          forgedCall.args.includes("forged-uuid-999") ||
-          forgedCall.args.includes("99.9.9") ||
-          forgedCall.args.includes("ForgedPack")
+          forgedArgs.includes("AttackerPlayer") ||
+          forgedArgs.includes("forged-uuid-999") ||
+          forgedArgs.includes("99.9.9") ||
+          forgedArgs.includes("ForgedPack")
         ) {
           throw new Error(
             `Forged renderer arguments leaked into process execution sink! Args: ${JSON.stringify(forgedCall.args)}`,
           );
         }
-        if (getFlagVal("--username", forgedCall.args) !== "BoundaryUser") {
+        if (getFlagVal("--username", forgedArgs) !== "BoundaryUser") {
           throw new Error(
             "Main-owned consolidated user identity was overridden by forged renderer input",
           );
