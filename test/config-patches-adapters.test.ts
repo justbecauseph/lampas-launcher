@@ -120,6 +120,95 @@ hypixelOnlyChatTabs=true
     expect(reApply.changed).toBe(false);
   });
 
+  test("Properties: set and remove consume the continuation lines of the targeted key", () => {
+    const fixture = "a=1\nkey=a,\\\n    b\nother=2\n";
+
+    const set = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["key"], value: "x" },
+    ]);
+    expect(set.changed).toBe(true);
+    expect(set.output).toBe("a=1\nkey=x\nother=2\n");
+
+    const removed = propertiesAdapter.apply(fixture, [
+      { op: "remove", path: ["key"] },
+    ]);
+    expect(removed.changed).toBe(true);
+    expect(removed.output).toBe("a=1\nother=2\n");
+  });
+
+  test("Properties: a continuation line that looks like a key is not matched as one", () => {
+    const fixture = "key=a,\\\n    other=9\nother=2\n";
+
+    const res = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["other"], value: "3" },
+    ]);
+    expect(res.output).toBe("key=a,\\\n    other=9\nother=3\n");
+  });
+
+  test("Properties: CRLF files keep CRLF line endings on set and remove", () => {
+    const noBareLf = (text: string) => !/(?<!\r)\n/.test(text);
+
+    const propFixture = "# header\r\nkey=1\r\nother=2\r\n";
+    const propSet = propertiesAdapter.apply(propFixture, [
+      { op: "set", path: ["key"], value: "5" },
+    ]);
+    expect(propSet.output).toBe("# header\r\nkey=5\r\nother=2\r\n");
+
+    const propAdded = propertiesAdapter.apply(propFixture, [
+      { op: "set", path: ["added"], value: "true" },
+    ]);
+    expect(propAdded.output).toContain("added=true");
+    expect(noBareLf(propAdded.output)).toBe(true);
+
+    const propRemoved = propertiesAdapter.apply(propFixture, [
+      { op: "remove", path: ["key"] },
+    ]);
+    expect(propRemoved.output).toBe("# header\r\nother=2\r\n");
+  });
+
+  test("Properties: a value ending in an odd number of backslashes is rejected", () => {
+    const fixture = "key=1\nother=2\nthird=3\n";
+
+    // A single trailing backslash would continue onto the next line and swallow it on reapply.
+    expect(() =>
+      propertiesAdapter.apply(fixture, [
+        { op: "set", path: ["key"], value: "C:\\Games\\" },
+      ]),
+    ).toThrow(/odd number of backslashes/);
+
+    // An even run is a literal backslash pair, so the value is written and reapplies unchanged.
+    const even = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["key"], value: "C:\\Games\\\\" },
+    ]);
+    expect(even.output).toBe("key=C:\\Games\\\\\nother=2\nthird=3\n");
+    const reApply = propertiesAdapter.apply(even.output, [
+      { op: "set", path: ["key"], value: "C:\\Games\\\\" },
+    ]);
+    expect(reApply.changed).toBe(false);
+  });
+
+  test("Properties: a key appended after a trailing continuation line is not folded into it", () => {
+    // Appended directly, z=1 would continue key's value on reapply. Java ends a
+    // continuation at an empty line, so the blank line keeps z as its own property.
+    const res = propertiesAdapter.apply("a=1\nkey=a,\\", [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(res.output).toBe("a=1\nkey=a,\\\n\nz=1");
+    const reApply = propertiesAdapter.apply(res.output, [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(reApply.changed).toBe(false);
+
+    const crlf = propertiesAdapter.apply("a=1\r\nkey=a,\\", [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(crlf.output).toBe("a=1\r\nkey=a,\\\r\n\r\nz=1");
+    const crlfReApply = propertiesAdapter.apply(crlf.output, [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(crlfReApply.changed).toBe(false);
+  });
+
   test("INI: preserves section headers, comments, and spacing", () => {
     const iniFixture = `; Global INI settings
 app_name = Lampas
