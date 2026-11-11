@@ -13,6 +13,7 @@ import {
   isDefaultGameDirAppStorage,
 } from "./config";
 import { GameRunner } from "./game-runner";
+import { IpcValidationError } from "./ipc-boundary";
 import { LauncherLogger } from "./logger";
 import { writeAtomicFileSync } from "./file-transfer";
 import { runBoundedPool } from "./async-pool";
@@ -908,6 +909,28 @@ export class GameDirectoryManager {
       };
     }
 
+    // A move renames its staging folder onto the target, so the target must be empty.
+    if (currentPath !== undefined && fs.existsSync(resolvedTarget)) {
+      let entryCount: number;
+      try {
+        entryCount = fs.readdirSync(resolvedTarget).length;
+      } catch (err: any) {
+        LauncherLogger.warn(
+          `Cannot read target directory: ${err?.message || err}`,
+        );
+        return {
+          valid: false,
+          reason: "Couldn't open that folder.",
+        };
+      }
+      if (entryCount > 0) {
+        return {
+          valid: false,
+          reason: "Target directory already exists and is not empty.",
+        };
+      }
+    }
+
     // Check writability
     if (!checkWritable(resolvedTarget)) {
       return {
@@ -965,7 +988,9 @@ export class GameDirectoryManager {
 
     const validation = this.validateTarget(target, source);
     if (!validation.valid) {
-      throw new Error(validation.reason || "Invalid target directory");
+      throw new IpcValidationError(
+        validation.reason || "Invalid target directory",
+      );
     }
 
     // Strictly validate existing target directory:
@@ -973,7 +998,9 @@ export class GameDirectoryManager {
     if (fs.existsSync(target)) {
       const entries = await fs.promises.readdir(target);
       if (entries.length > 0) {
-        throw new Error("Target directory already exists and is not empty.");
+        throw new IpcValidationError(
+          "Target directory already exists and is not empty.",
+        );
       }
       await fs.promises.rmdir(target);
     }
@@ -1278,7 +1305,9 @@ export class GameDirectoryManager {
       if (fs.existsSync(target)) {
         const entries = await fs.promises.readdir(target);
         if (entries.length > 0) {
-          throw new Error("Target directory already exists and is not empty.");
+          throw new IpcValidationError(
+            "Target directory already exists and is not empty.",
+          );
         }
         await fs.promises.rmdir(target);
       }
