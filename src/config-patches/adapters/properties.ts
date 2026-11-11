@@ -1,6 +1,38 @@
 import type { ConfigOperation } from "../../types";
 import type { ConfigPatchAdapter, PatchResult } from "../types";
 
+// A physical line continues onto the next line when it ends in an odd number
+// of backslashes.
+function endsWithContinuation(line: string): boolean {
+  let backslashes = 0;
+  for (let i = line.length - 1; i >= 0 && line[i] === "\\"; i--) {
+    backslashes++;
+  }
+  return backslashes % 2 === 1;
+}
+
+// Groups physical lines into logical lines, so a key and its continuation lines
+// are replaced or removed together. Comment and blank lines never continue.
+function groupLogicalLines(lines: string[]): string[][] {
+  const groups: string[][] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const group = [lines[i]];
+    const trimmed = lines[i].trim();
+    if (
+      !trimmed.startsWith("#") &&
+      !trimmed.startsWith("!") &&
+      trimmed !== ""
+    ) {
+      while (i + 1 < lines.length && endsWithContinuation(lines[i])) {
+        i++;
+        group.push(lines[i]);
+      }
+    }
+    groups.push(group);
+  }
+  return groups;
+}
+
 export class PropertiesConfigAdapter implements ConfigPatchAdapter {
   readonly canCreate = true;
 
@@ -14,6 +46,7 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
     let current = source;
     let changed = false;
     const details: string[] = [];
+    const eol = source.includes("\r\n") ? "\r\n" : "\n";
 
     for (const op of operations) {
       if (op.op === "replaceLiteral") {
@@ -33,28 +66,29 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
 
       if (op.op === "set") {
         const targetVal = String(op.value);
-        const newLines = lines.map((line) => {
+        const newLines = groupLogicalLines(lines).flatMap((group) => {
+          const line = group[0];
           const trimmed = line.trim();
           if (
             trimmed.startsWith("#") ||
             trimmed.startsWith("!") ||
             trimmed === ""
           ) {
-            return line;
+            return group;
           }
           const match = line.match(
             /^([ \t]*)([^=: \t]+)([ \t]*[=:][ \t]*)(.*)$/,
           );
           if (match && match[2] === key) {
             keyFound = true;
-            if (match[4].trim() === targetVal) {
-              return line;
+            if (group.length === 1 && match[4].trim() === targetVal) {
+              return group;
             }
             changed = true;
             details.push(`${key}: ${match[4].trim()} → ${targetVal}`);
-            return `${match[1]}${match[2]}${match[3]}${targetVal}`;
+            return [`${match[1]}${match[2]}${match[3]}${targetVal}`];
           }
-          return line;
+          return group;
         });
 
         if (!keyFound) {
@@ -63,16 +97,17 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
           details.push(`${key}: (unset) → ${targetVal}`);
         }
 
-        current = newLines.join("\n");
+        current = newLines.join(eol);
       } else if (op.op === "remove") {
-        const newLines = lines.filter((line) => {
+        const newLines = groupLogicalLines(lines).flatMap((group) => {
+          const line = group[0];
           const trimmed = line.trim();
           if (
             trimmed.startsWith("#") ||
             trimmed.startsWith("!") ||
             trimmed === ""
           ) {
-            return true;
+            return group;
           }
           const match = line.match(
             /^([ \t]*)([^=: \t]+)([ \t]*[=:][ \t]*)(.*)$/,
@@ -81,12 +116,12 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
             keyFound = true;
             changed = true;
             details.push(`${key}: removed (${match[4].trim()})`);
-            return false;
+            return [];
           }
-          return true;
+          return group;
         });
 
-        current = newLines.join("\n");
+        current = newLines.join(eol);
       }
     }
 

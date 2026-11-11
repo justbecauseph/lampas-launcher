@@ -57,6 +57,7 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
     let current = source;
     let changed = false;
     const details: string[] = [];
+    const eol = source.includes("\r\n") ? "\r\n" : "\n";
 
     // Validate original document before any modification
     if (current.trim() !== "") {
@@ -134,8 +135,8 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
 
       if (sectionStart === -1) {
         if (op.op === "set") {
-          const newSection = `\n[${sectionName}]\n${key} = ${formattedVal}\n`;
-          current = current + (current.endsWith("\n") ? "" : "\n") + newSection;
+          const newSection = `${eol}[${sectionName}]${eol}${key} = ${formattedVal}${eol}`;
+          current = current + (current.endsWith("\n") ? "" : eol) + newSection;
           changed = true;
         }
         continue;
@@ -157,17 +158,17 @@ export class TomlConfigAdapter implements ConfigPatchAdapter {
         if (op.op === "set") {
           const match = lines[keyLineIdx].match(keyRegex)!;
           lines[keyLineIdx] = `${match[1]}${formattedVal}${match[3]}`;
-          current = lines.join("\n");
+          current = lines.join(eol);
           changed = true;
         } else if (op.op === "remove") {
           lines.splice(keyLineIdx, 1);
-          current = lines.join("\n");
+          current = lines.join(eol);
           changed = true;
         }
       } else {
         if (op.op === "set") {
           lines.splice(sectionEnd, 0, `${key} = ${formattedVal}`);
-          current = lines.join("\n");
+          current = lines.join(eol);
           changed = true;
         }
       }
