@@ -47,7 +47,8 @@ export class YamlConfigAdapter implements ConfigPatchAdapter {
       }
 
       const hasKey = doc.hasIn(op.path);
-      const currentVal = hasKey ? doc.getIn(op.path) : undefined;
+      const rawVal = hasKey ? doc.getIn(op.path) : undefined;
+      const currentVal = YAML.isCollection(rawVal) ? rawVal.toJSON() : rawVal;
 
       if (op.op === "set") {
         if (hasKey && deepEqual(currentVal, op.value)) {

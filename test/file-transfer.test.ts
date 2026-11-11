@@ -295,6 +295,61 @@ describe("Launcher file-transfer: 302 redirect regression tests", () => {
     }
   });
 
+  test("downloadVerified() accepts a body that takes longer than timeoutMs in total when no gap reaches timeoutMs", async () => {
+    const timeoutMs = 200;
+    const gapMs = 60;
+    const chunk = Buffer.from("lampas-trickled-chunk-");
+    const chunkCount = 8;
+    const payload = Buffer.concat(
+      Array.from({ length: chunkCount }, () => chunk),
+    );
+    const sha256 = crypto.createHash("sha256").update(payload).digest("hex");
+
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        let sent = 0;
+        const body = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (sent === chunkCount) {
+              controller.close();
+              return;
+            }
+            if (sent > 0) await new Promise((r) => setTimeout(r, gapMs));
+            controller.enqueue(chunk);
+            sent++;
+          },
+        });
+        return new Response(body, { status: 200 });
+      },
+    });
+
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "launcher-download-idle-timeout-"),
+    );
+    const destination = path.join(tempDir, "trickled.jar");
+
+    try {
+      const bytes = await downloadVerified(
+        `http://127.0.0.1:${server.port}/trickled.jar`,
+        destination,
+        {
+          expectedHash: sha256,
+          algorithm: "sha256",
+          expectedSize: payload.length,
+          timeoutMs,
+          attempts: 1,
+        },
+      );
+
+      expect(bytes).toBe(payload.length);
+      expect(fs.readFileSync(destination).equals(payload)).toBe(true);
+    } finally {
+      server.stop(true);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("downloadVerified() pre-aborted signal rejects immediately without network or disk writes", async () => {
     const controller = new AbortController();
     controller.abort(new Error("Pre-aborted download"));

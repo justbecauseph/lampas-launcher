@@ -200,6 +200,7 @@ export async function persistSyncSafetyBlock(
   context: SyncSafetyContext,
   reason: SyncSafetyReason,
   error: unknown,
+  options: { repair?: boolean } = {},
 ): Promise<void> {
   const current = normalizedContext(context);
   if (
@@ -241,12 +242,22 @@ export async function persistSyncSafetyBlock(
       disallowSymlinks: true,
       expectedCategory: "RESERVED_INTERNAL",
     });
-    prior = readMarker(filePath) ?? prior;
   } catch (readError) {
     throw new SyncSafetyPersistenceError(
       "Cannot safely inspect the synchronization safety marker.",
       { cause: readError },
     );
+  }
+  try {
+    prior = readMarker(filePath) ?? prior;
+  } catch (readError) {
+    // A repair replaces a malformed marker with its own INTEGRITY marker below.
+    // Every other caller stays fail-closed.
+    if (!options.repair)
+      throw new SyncSafetyPersistenceError(
+        "Cannot safely inspect the synchronization safety marker.",
+        { cause: readError },
+      );
   }
   effectiveReason =
     hadIntegrityBeforeDiskRead ||

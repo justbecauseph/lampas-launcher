@@ -606,17 +606,12 @@ export class GameRunner {
 
       this.runningProcess = proc;
 
-      // Set up exit promise to await actual process termination
+      // Set up exit promise to await actual process termination. It settles
+      // when the exit is reported, so killGame returns after runningProcess is
+      // cleared.
+      let settleExit: (code: number | null) => void = () => {};
       this.exitPromise = new Promise<number | null>((resolve) => {
-        let resolved = false;
-        const settleExit = (code: number | null) => {
-          if (!resolved) {
-            resolved = true;
-            resolve(code);
-          }
-        };
-        proc.once?.("exit", settleExit);
-        proc.once?.("close", settleExit);
+        settleExit = resolve;
       });
 
       // Wait for asynchronous spawn or initial spawn error
@@ -696,6 +691,7 @@ export class GameRunner {
       argfileFallback.unref?.();
 
       let exitReported = false;
+      let exitFallback: ReturnType<typeof setTimeout> | null = null;
       const maximizer = maximizeGameWindow(proc.pid, (code) => {
         if (exitReported) return;
         if (code === MAXIMIZE_EXIT.maximized) {
@@ -708,9 +704,12 @@ export class GameRunner {
         }
       });
 
-      const handleExit = (code: number | null) => {
+      // Reports the exit once. 'close' fires after the stdout and stderr
+      // streams have ended, so the framers flush after the last output.
+      const reportExit = (code: number | null) => {
         if (exitReported) return;
         exitReported = true;
+        if (exitFallback) clearTimeout(exitFallback);
         if (maximizer && maximizer.exitCode === null) {
           try {
             maximizer.kill();
@@ -722,6 +721,7 @@ export class GameRunner {
         scrubJvmCrashFiles(launchDir);
         this.runningProcess = null;
         this.exitPromise = null;
+        settleExit(code);
         if (!this.releasedForShutdown) {
           try {
             clearGameSession(sessionId);
@@ -734,8 +734,17 @@ export class GameRunner {
         onExit(code);
       };
 
+      // 'exit' can fire while stdout and stderr are still open, and output
+      // written before the exit can still arrive. Wait for 'close'; the
+      // fallback reports the exit if 'close' does not follow.
+      const handleExit = (code: number | null) => {
+        if (exitReported || exitFallback) return;
+        exitFallback = setTimeout(() => reportExit(code), 1_000);
+        exitFallback.unref?.();
+      };
+
       proc.once?.("exit", handleExit);
-      proc.once?.("close", handleExit);
+      proc.once?.("close", reportExit);
 
       // Runtime post-spawn errors: log but DO NOT clear runningProcess!
       // The child OS process has not exited unless 'exit' or 'close' fires.
@@ -761,7 +770,7 @@ export class GameRunner {
     }
 
     const proc = this.runningProcess;
-    if (!proc || proc.killed) {
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
       return;
     }
 
@@ -788,7 +797,8 @@ export class GameRunner {
     if (
       result === "timeout" &&
       this.runningProcess &&
-      !this.runningProcess.killed
+      this.runningProcess.exitCode === null &&
+      this.runningProcess.signalCode === null
     ) {
       try {
         this.runningProcess.kill("SIGKILL");

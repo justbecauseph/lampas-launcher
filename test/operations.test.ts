@@ -309,6 +309,8 @@ describe("Phase 1 — GameRunner Lifecycle Invariants", () => {
   test("killGame does not clear process state before exit event settlement", () => {
     const fakeProc = new EventEmitter() as any;
     fakeProc.killed = false;
+    fakeProc.exitCode = null;
+    fakeProc.signalCode = null;
     fakeProc.kill = () => {
       fakeProc.killed = true;
     };
@@ -329,10 +331,12 @@ describe("Phase 1 — GameRunner Lifecycle Invariants", () => {
     );
   });
 
-  test("repeated killGame calls do not crash and handle already-killed gracefully", () => {
+  test("repeated killGame calls do not crash and re-send the signal while the process is alive", () => {
     let killCount = 0;
     const fakeProc = new EventEmitter() as any;
     fakeProc.killed = false;
+    fakeProc.exitCode = null;
+    fakeProc.signalCode = null;
     fakeProc.kill = () => {
       killCount++;
       fakeProc.killed = true;
@@ -343,8 +347,8 @@ describe("Phase 1 — GameRunner Lifecycle Invariants", () => {
     void GameRunner.killGame();
     void GameRunner.killGame();
 
-    // Only one kill signal issued because proc.killed becomes true
-    expect(killCount).toBe(1);
+    // The mock never exits, so every Stop sends a signal instead of returning early
+    expect(killCount).toBe(3);
   });
 
   test("exit callback is invoked exactly once even if both exit and close fire", () => {

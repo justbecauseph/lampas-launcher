@@ -121,7 +121,9 @@ function isPrivateIpLiteral(hostname: string): boolean {
       (octets[0] === 192 && octets[1] === 168)
     );
   }
-  // IPv6 loopback, unspecified, unique-local and link-local literals.
+  // IPv6 loopback, unspecified, unique-local and link-local literals. DNS names
+  // cannot contain ":", so only colon-bearing hosts are checked.
+  if (!host.includes(":")) return false;
   return (
     host === "::" ||
     host === "::1" ||

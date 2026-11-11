@@ -13,6 +13,7 @@ import {
   isDefaultGameDirAppStorage,
 } from "./config";
 import { GameRunner } from "./game-runner";
+import { IpcValidationError } from "./ipc-boundary";
 import { LauncherLogger } from "./logger";
 import { writeAtomicFileSync } from "./file-transfer";
 import { runBoundedPool } from "./async-pool";
@@ -319,6 +320,37 @@ export async function authorizeAndRemoveStaging(journal: {
       `Move recovery: failed to remove staging directory '${journal.staging}': ${err.message}`,
     );
     return false;
+  }
+}
+
+const PROMOTE_RENAME_RETRY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const PROMOTE_RENAME_BACKOFF_MS = [50, 100, 200];
+
+/**
+ * Renames the verified staging directory into the target path. Windows reports
+ * EPERM/EBUSY/EACCES while another process holds a handle in the folder, so those
+ * codes are retried with a short backoff before the error is rethrown.
+ */
+async function renameWithLockRetry(
+  source: string,
+  target: string,
+): Promise<void> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      await fs.promises.rename(source, target);
+      return;
+    } catch (err: any) {
+      const delayMs = PROMOTE_RENAME_BACKOFF_MS[attempt];
+      if (!PROMOTE_RENAME_RETRY_CODES.has(err?.code) || delayMs === undefined) {
+        throw err;
+      }
+      attempt++;
+      LauncherLogger.warn(
+        `Move promotion rename failed with ${err.code}; retrying in ${delayMs} ms.`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }
 
@@ -908,6 +940,28 @@ export class GameDirectoryManager {
       };
     }
 
+    // A move renames its staging folder onto the target, so the target must be empty.
+    if (currentPath !== undefined && fs.existsSync(resolvedTarget)) {
+      let entryCount: number;
+      try {
+        entryCount = fs.readdirSync(resolvedTarget).length;
+      } catch (err: any) {
+        LauncherLogger.warn(
+          `Cannot read target directory: ${err?.message || err}`,
+        );
+        return {
+          valid: false,
+          reason: "Couldn't open that folder.",
+        };
+      }
+      if (entryCount > 0) {
+        return {
+          valid: false,
+          reason: "Target directory already exists and is not empty.",
+        };
+      }
+    }
+
     // Check writability
     if (!checkWritable(resolvedTarget)) {
       return {
@@ -965,7 +1019,20 @@ export class GameDirectoryManager {
 
     const validation = this.validateTarget(target, source);
     if (!validation.valid) {
-      throw new Error(validation.reason || "Invalid target directory");
+      throw new IpcValidationError(
+        validation.reason || "Invalid target directory",
+      );
+    }
+
+    const userDataDir = getUserDataDir();
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    // An unfinished journal still owns its staging folder and source. Starting a
+    // new move would overwrite it and orphan that staging folder.
+    if (fs.existsSync(journalPath)) {
+      throw new Error(
+        `Cannot start a directory move: an unfinished move journal exists at '${journalPath}'. ` +
+          `Restart the launcher to finish or roll back the previous move.`,
+      );
     }
 
     // Strictly validate existing target directory:
@@ -973,7 +1040,9 @@ export class GameDirectoryManager {
     if (fs.existsSync(target)) {
       const entries = await fs.promises.readdir(target);
       if (entries.length > 0) {
-        throw new Error("Target directory already exists and is not empty.");
+        throw new IpcValidationError(
+          "Target directory already exists and is not empty.",
+        );
       }
       await fs.promises.rmdir(target);
     }
@@ -993,11 +1062,9 @@ export class GameDirectoryManager {
       return { success: true, gameDir: target, previousGameDir: source };
     }
 
-    const userDataDir = getUserDataDir();
     if (!fs.existsSync(userDataDir)) {
       await fs.promises.mkdir(userDataDir, { recursive: true });
     }
-    const journalPath = path.join(userDataDir, "directory-move.json");
     const targetParent = path.dirname(target);
     if (!fs.existsSync(targetParent)) {
       await fs.promises.mkdir(targetParent, { recursive: true });
@@ -1044,6 +1111,11 @@ export class GameDirectoryManager {
         LauncherLogger.error(
           `Direct rename failed with fatal error (${renameErr.code || renameErr.message}): ${renameErr.message}`,
         );
+        // rename is atomic and no staging folder exists yet, so the source is still
+        // the only copy. Remove the journal so a retry in this session can start.
+        try {
+          await fs.promises.unlink(journalPath);
+        } catch {}
         throw renameErr;
       }
     }
@@ -1278,12 +1350,76 @@ export class GameDirectoryManager {
       if (fs.existsSync(target)) {
         const entries = await fs.promises.readdir(target);
         if (entries.length > 0) {
-          throw new Error("Target directory already exists and is not empty.");
+          throw new IpcValidationError(
+            "Target directory already exists and is not empty.",
+          );
         }
         await fs.promises.rmdir(target);
       }
 
-      await fs.promises.rename(staging, target);
+      try {
+        await renameWithLockRetry(staging, target);
+      } catch (promoteErr: any) {
+        // Without a target the source is still the only complete copy. Remove the
+        // marker-checked staging folder and the journal now; a journal left in
+        // "finalizing" would make the next start try to promote it.
+        if (!fs.existsSync(target)) {
+          const removed = await authorizeAndRemoveStaging(journalData);
+          if (removed || !fs.existsSync(journalData.staging)) {
+            if (fs.existsSync(journalPath)) {
+              try {
+                await fs.promises.unlink(journalPath);
+              } catch {}
+            }
+          } else {
+            // Staging could not be removed (for example, a lock inside it). A recursive rm can
+            // delete the staging marker before it fails, and startup recovery only discards
+            // staging that carries a matching marker. Restore the marker, then rewrite the
+            // journal to a pre-finalize phase so startup recovery discards staging and keeps
+            // the source. The in-memory phase stays "finalizing" so the outer catch does not
+            // delete this journal.
+            try {
+              checkPhysicalAncestrySync(
+                path.dirname(journalData.staging),
+                journalData.staging,
+                { disallowSymlinks: true, enforceOwnership: false },
+              );
+              const marker = readStagingMarker(journalData.staging);
+              if (
+                !marker ||
+                marker.operationId !== journalData.operationId ||
+                marker.source !== journalData.source ||
+                marker.target !== journalData.target
+              ) {
+                writeStagingMarker(journalData.staging, {
+                  operationId: journalData.operationId,
+                  source: journalData.source,
+                  target: journalData.target,
+                  staging: journalData.staging,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+              writeAtomicFileSync(
+                journalPath,
+                JSON.stringify(
+                  {
+                    ...journalData,
+                    phase: "verifying",
+                    stagingVerified: false,
+                  },
+                  null,
+                  2,
+                ),
+              );
+            } catch (keepErr: any) {
+              LauncherLogger.error(
+                `Move promotion failed and the journal could not be reset for staging cleanup: ${keepErr.message}`,
+              );
+            }
+          }
+        }
+        throw promoteErr;
+      }
 
       // Verify receipt exists in promoted target
       const targetReceiptPath = path.join(target, MOVE_RECEIPT_FILENAME);
@@ -1473,8 +1609,14 @@ export class GameDirectoryManager {
         );
       }
 
-      // Re-establish exact target inventory, hashes, sizes, directory structure, and source consistency
-      await verifyTargetCompleteness(journal.target, receipt, journal.source);
+      // Re-establish exact target inventory, hashes, sizes, directory structure, and source consistency.
+      // The interrupted cleaning phase may have deleted part of the source, so only its remaining entries must match.
+      await verifyTargetCompleteness(
+        journal.target,
+        receipt,
+        journal.source,
+        true,
+      );
 
       // Target is 100% verified complete
       ConfigManager.set({ gameDir: journal.target, gameDirConfigured: true });
@@ -1784,6 +1926,7 @@ async function verifyTargetCompleteness(
   targetDir: string,
   receipt: MoveReceipt,
   sourceDir?: string,
+  allowPartialSource = false,
 ): Promise<void> {
   // 1. Receipt schema and integrity validation (receipt is untrusted until proven valid)
   if (
@@ -2047,7 +2190,10 @@ async function verifyTargetCompleteness(
       "source directory",
     );
 
-    if (sourcePayloadFiles.length !== receipt.files.length) {
+    if (
+      !allowPartialSource &&
+      sourcePayloadFiles.length !== receipt.files.length
+    ) {
       throw new Error(
         `Recovery aborted: source directory file count changed after interruption (expected ${receipt.files.length}, found ${sourcePayloadFiles.length}). Source directory has been preserved.`,
       );
@@ -2068,6 +2214,8 @@ async function verifyTargetCompleteness(
       const key = normalizePathKey(expected.relativePath);
       const srcFile = sourceMap.get(key);
       if (!srcFile) {
+        // Cleaning phase already deleted this file from the source
+        if (allowPartialSource) continue;
         throw new Error(
           `Recovery aborted: source directory inventory changed (missing '${expected.relativePath}'). Source directory has been preserved.`,
         );
@@ -2100,7 +2248,7 @@ async function verifyTargetCompleteness(
       sourceDirKeys.add(normalizePathKey(dirRel));
     }
 
-    if (sourceDirKeys.size !== receiptDirKeys.size) {
+    if (!allowPartialSource && sourceDirKeys.size !== receiptDirKeys.size) {
       throw new Error(
         `Recovery aborted: source directory structure changed after interruption (expected ${receiptDirKeys.size} directories, found ${sourceDirKeys.size}). Source directory has been preserved.`,
       );

@@ -547,23 +547,23 @@ async function run() {
     );
     const validState = fs.readFileSync(validStatePath, "utf8");
     fs.writeFileSync(validStatePath, '{"files":"malformed"}\n', "utf8");
-    let repairFailed = false;
+    let syncFailed = false;
     try {
-      await LauncherSync.repairInstallation(() => {});
+      await LauncherSync.syncClient(() => {}, "full");
     } catch (error) {
-      repairFailed = /installation state is malformed/i.test(
+      syncFailed = /installation state is malformed/i.test(
         String(error && error.message),
       );
     }
     assert.equal(
-      repairFailed,
+      syncFailed,
       true,
-      "repair must fail closed on malformed managed state",
+      "sync must fail closed on malformed managed state",
     );
     assert.equal(
       fs.existsSync(path.join(sourceGameDir, ".lampas", "sync-safety.json")),
       true,
-      "failed repair must leave a durable sync safety marker",
+      "failed sync must leave a durable sync safety marker",
     );
     fs.writeFileSync(validStatePath, validState, "utf8");
     await LauncherSync.syncClient(() => {}, "full");
@@ -692,7 +692,7 @@ async function run() {
           "Portal metadata and credential-free artifact transfer",
           "sync, managed config patch, official mod toggle",
           "custom mod import/toggle/remove",
-          "repair fail-closed malformed-state boundary",
+          "sync fail-closed malformed-state boundary",
           "no-sync settings persistence",
           "directory move destination error and success",
           "incomplete move restart recovery",

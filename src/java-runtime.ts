@@ -68,6 +68,7 @@ export function validateJavaRuntimeManifest(
 
   const entries: ValidatedJavaRuntimeManifestEntry[] = [];
   const byPath = new Map<string, ValidatedJavaRuntimeManifestEntry>();
+  const linkKeys = new Set<string>();
   let expectedRuntimeBytes = 0;
   for (const [rawPath, rawInfo] of rawEntries) {
     if (Buffer.byteLength(rawPath, "utf8") > MAX_JAVA_MANIFEST_PATH_BYTES) {
@@ -77,7 +78,7 @@ export function validateJavaRuntimeManifest(
     }
     const relativePath = canonicalizeRelativePath(rawPath);
     const key = normalizePathKey(relativePath);
-    if (byPath.has(key)) {
+    if (byPath.has(key) || linkKeys.has(key)) {
       throw new Error(
         `Java runtime manifest contains duplicate path '${relativePath}'.`,
       );
@@ -88,6 +89,12 @@ export function validateJavaRuntimeManifest(
       );
     }
     const info = rawInfo as Record<string, any>;
+    if (info.type === "link") {
+      // Links are not materialized and carry no bytes to verify. Their paths
+      // still count toward duplicate detection.
+      linkKeys.add(key);
+      continue;
+    }
     if (info.type !== "file" && info.type !== "directory") {
       throw new Error(
         `Java runtime manifest entry '${relativePath}' has an invalid type.`,

@@ -56,6 +56,8 @@ const spawnSpy = spyOn(childProcess, "spawn").mockImplementation(() => {
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
   proc.killed = false;
+  proc.exitCode = null;
+  proc.signalCode = null;
   proc.kill = () => {
     proc.killed = true;
     proc.emit("exit", 0);

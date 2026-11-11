@@ -95,6 +95,27 @@ alsoKeepMe = 100
     expect(res.output).toContain("alsoKeepMe = 100");
   });
 
+  test("keeps CRLF line endings on set, remove, and new section creation", () => {
+    const tomlFixture = "[general]\r\ndebug = true\r\nlevel = 5\r\n";
+
+    const set = tomlAdapter.apply(tomlFixture, [
+      { op: "set", path: ["general", "debug"], value: false },
+    ]);
+    expect(set.output).toBe("[general]\r\ndebug = false\r\nlevel = 5\r\n");
+
+    const removed = tomlAdapter.apply(tomlFixture, [
+      { op: "remove", path: ["general", "level"] },
+    ]);
+    expect(removed.output).toBe("[general]\r\ndebug = true\r\n");
+
+    const created = tomlAdapter.apply(tomlFixture, [
+      { op: "set", path: ["audio", "volume"], value: 0.5 },
+    ]);
+    expect(created.output).toBe(
+      "[general]\r\ndebug = true\r\nlevel = 5\r\n\r\n[audio]\r\nvolume = 0.5\r\n",
+    );
+  });
+
   test("reconciles TOML patch end-to-end and validates resulting document", async () => {
     const configPath = path.join(tempDir, "config/custom.toml");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });

@@ -26,7 +26,7 @@ mock.module("electron", () => ({
 }));
 
 const { ConfigManager, getDefaultGameDir } = await import("../src/config");
-const { GameDirectoryManager, writeStagingMarker } =
+const { GameDirectoryManager, STAGING_MARKER_FILENAME, writeStagingMarker } =
   await import("../src/game-directory");
 const { GameRunner } = await import("../src/game-runner");
 const { OperationCoordinator } = await import("../src/operations");
@@ -659,6 +659,148 @@ describe("GameDirectoryManager & Installation Relocation", () => {
     expect(fs.existsSync(journalPath)).toBe(false);
   });
 
+  test("startup recovery finishes source deletion when a cleaning-phase crash left a partial source", async () => {
+    const partialSource = path.join(testRoot, "partial-clean-source");
+    const partialTarget = path.join(testRoot, "partial-clean-target");
+    const opId = "partial-clean-op";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const optionsText = "new-options";
+    const levelText = "world-level";
+
+    // Target holds the complete move, verified by the receipt
+    fs.mkdirSync(path.join(partialTarget, "saves", "World"), {
+      recursive: true,
+    });
+    fs.writeFileSync(path.join(partialTarget, "options.txt"), optionsText);
+    fs.writeFileSync(
+      path.join(partialTarget, "saves", "World", "level.dat"),
+      levelText,
+    );
+    fs.writeFileSync(
+      path.join(partialTarget, ".lampas_move_receipt.json"),
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: partialSource,
+        target: partialTarget,
+        staging: stagingDir,
+        fileCount: 2,
+        totalBytes: optionsText.length + levelText.length,
+        directories: ["saves", "saves/World"],
+        files: [
+          {
+            relativePath: "options.txt",
+            size: optionsText.length,
+            sha256: crypto
+              .createHash("sha256")
+              .update(optionsText)
+              .digest("hex"),
+          },
+          {
+            relativePath: "saves/World/level.dat",
+            size: levelText.length,
+            sha256: crypto.createHash("sha256").update(levelText).digest("hex"),
+          },
+        ],
+        stagingVerified: true,
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
+    // Crash mid-delete: saves/World/level.dat and its directories are already gone
+    fs.mkdirSync(partialSource, { recursive: true });
+    fs.writeFileSync(path.join(partialSource, "options.txt"), optionsText);
+
+    ConfigManager.set({ gameDir: partialSource, gameDirConfigured: true });
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: partialSource,
+        target: partialTarget,
+        staging: stagingDir,
+        phase: "cleaning",
+      }),
+    );
+
+    await GameDirectoryManager.recoverInterruptedMove();
+
+    expect(fs.existsSync(partialSource)).toBe(false);
+    expect(
+      fs.readFileSync(
+        path.join(partialTarget, "saves", "World", "level.dat"),
+        "utf-8",
+      ),
+    ).toBe(levelText);
+    expect(fs.existsSync(journalPath)).toBe(false);
+    expect(ConfigManager.get().gameDir).toBe(partialTarget);
+  });
+
+  test("startup recovery aborts during cleaning phase when a remaining source file was modified", async () => {
+    const editedSource = path.join(testRoot, "edited-clean-source");
+    const editedTarget = path.join(testRoot, "edited-clean-target");
+    const opId = "edited-clean-op";
+    const stagingDir = path.join(testRoot, `.lampas-moving-${opId}`);
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const optionsText = "new-options";
+
+    fs.mkdirSync(editedTarget, { recursive: true });
+    fs.writeFileSync(path.join(editedTarget, "options.txt"), optionsText);
+    fs.writeFileSync(
+      path.join(editedTarget, ".lampas_move_receipt.json"),
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: editedSource,
+        target: editedTarget,
+        staging: stagingDir,
+        fileCount: 1,
+        totalBytes: optionsText.length,
+        directories: [],
+        files: [
+          {
+            relativePath: "options.txt",
+            size: optionsText.length,
+            sha256: crypto
+              .createHash("sha256")
+              .update(optionsText)
+              .digest("hex"),
+          },
+        ],
+        stagingVerified: true,
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
+    // Same size as the receipt entry but different bytes: a user edit, not a partial delete
+    fs.mkdirSync(editedSource, { recursive: true });
+    fs.writeFileSync(path.join(editedSource, "options.txt"), "NEW-OPTIONS");
+
+    ConfigManager.set({ gameDir: editedSource, gameDirConfigured: true });
+    fs.writeFileSync(
+      journalPath,
+      JSON.stringify({
+        version: 2,
+        operationId: opId,
+        source: editedSource,
+        target: editedTarget,
+        staging: stagingDir,
+        phase: "cleaning",
+      }),
+    );
+
+    await expect(GameDirectoryManager.recoverInterruptedMove()).rejects.toThrow(
+      /source file content was modified after interruption/,
+    );
+
+    expect(
+      fs.readFileSync(path.join(editedSource, "options.txt"), "utf-8"),
+    ).toBe("NEW-OPTIONS");
+    expect(fs.existsSync(journalPath)).toBe(true);
+  });
+
   test("Phase 5: preserves empty directories across relocation", async () => {
     const sourceDir = path.join(testRoot, "empty-dir-source");
     const targetDir = path.join(testRoot, "empty-dir-target");
@@ -727,6 +869,9 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       ).rejects.toThrow("EPERM");
       expect(fs.existsSync(path.join(sourceDir, "options.txt"))).toBe(true);
       expect(fs.existsSync(targetDir)).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "directory-move.json"))).toBe(
+        false,
+      );
       expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
     } finally {
       GameDirectoryManager.resetForTesting();
@@ -864,6 +1009,224 @@ describe("GameDirectoryManager & Installation Relocation", () => {
       try {
         (ConfigManager.set as any).mockRestore();
       } catch {}
+    }
+  });
+
+  test("Phase 5: transient lock on the promotion rename is retried and the move completes", async () => {
+    const sourceDir = path.join(testRoot, "promote-retry-source");
+    const targetDir = path.join(testRoot, "promote-retry-target");
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "options.txt"), "retry-me");
+
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
+    // Force copy fallback
+    GameDirectoryManager._renameFn = () => {
+      const err: any = new Error("EXDEV");
+      err.code = "EXDEV";
+      throw err;
+    };
+
+    const realRename = fs.promises.rename.bind(fs.promises);
+    let promoteAttempts = 0;
+    const renameSpy = spyOn(fs.promises, "rename").mockImplementation(
+      async (src, dest) => {
+        if (path.resolve(String(dest)) !== path.resolve(targetDir)) {
+          return realRename(src, dest);
+        }
+        promoteAttempts++;
+        if (promoteAttempts <= 2) {
+          const err: any = new Error("EBUSY: resource busy or locked");
+          err.code = "EBUSY";
+          throw err;
+        }
+        return realRename(src, dest);
+      },
+    );
+
+    try {
+      const result = await GameDirectoryManager.moveInstallation(targetDir);
+      expect(result.success).toBe(true);
+      expect(promoteAttempts).toBe(3);
+      expect(
+        fs.readFileSync(path.join(targetDir, "options.txt"), "utf-8"),
+      ).toBe("retry-me");
+      expect(fs.existsSync(sourceDir)).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "directory-move.json"))).toBe(
+        false,
+      );
+    } finally {
+      renameSpy.mockRestore();
+      GameDirectoryManager.resetForTesting();
+    }
+  });
+
+  test("Phase 5: promotion rename that stays locked removes staging and journal and keeps the source", async () => {
+    const sourceDir = path.join(testRoot, "promote-locked-source");
+    const targetDir = path.join(testRoot, "promote-locked-target");
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "options.txt"), "keep-me");
+
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
+    // Force copy fallback
+    GameDirectoryManager._renameFn = () => {
+      const err: any = new Error("EXDEV");
+      err.code = "EXDEV";
+      throw err;
+    };
+
+    const realRename = fs.promises.rename.bind(fs.promises);
+    let stagingPath: string | undefined;
+    const renameSpy = spyOn(fs.promises, "rename").mockImplementation(
+      async (src, dest) => {
+        if (path.resolve(String(dest)) !== path.resolve(targetDir)) {
+          return realRename(src, dest);
+        }
+        stagingPath = String(src);
+        const err: any = new Error("EPERM: operation not permitted, rename");
+        err.code = "EPERM";
+        throw err;
+      },
+    );
+
+    try {
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("EPERM");
+      expect(stagingPath).toBeDefined();
+      expect(fs.existsSync(stagingPath!)).toBe(false);
+      expect(fs.existsSync(targetDir)).toBe(false);
+      expect(fs.existsSync(journalPath)).toBe(false);
+      expect(
+        fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8"),
+      ).toBe("keep-me");
+      expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
+    } finally {
+      renameSpy.mockRestore();
+      GameDirectoryManager.resetForTesting();
+    }
+  });
+
+  test("Phase 5: promotion failure that cannot remove staging keeps a verifying journal and recovery keeps the source", async () => {
+    const sourceDir = path.join(testRoot, "promote-unremovable-source");
+    const targetDir = path.join(testRoot, "promote-unremovable-target");
+    const journalPath = path.join(userDataDir, "directory-move.json");
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "options.txt"), "keep-me");
+
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
+    // Force copy fallback
+    GameDirectoryManager._renameFn = () => {
+      const err: any = new Error("EXDEV");
+      err.code = "EXDEV";
+      throw err;
+    };
+
+    const realRename = fs.promises.rename.bind(fs.promises);
+    const realRm = fs.promises.rm.bind(fs.promises);
+    let stagingPath: string | undefined;
+    const renameSpy = spyOn(fs.promises, "rename").mockImplementation(
+      async (src, dest) => {
+        if (path.resolve(String(dest)) !== path.resolve(targetDir)) {
+          return realRename(src, dest);
+        }
+        stagingPath = String(src);
+        const err: any = new Error("EPERM: operation not permitted, rename");
+        err.code = "EPERM";
+        throw err;
+      },
+    );
+    // A lock inside the staging folder: a recursive rm deletes the marker before it
+    // reaches the locked file, so removal fails and leaves the folder in place.
+    const rmSpy = spyOn(fs.promises, "rm").mockImplementation(
+      async (p, options) => {
+        if (
+          stagingPath !== undefined &&
+          path.resolve(String(p)) === path.resolve(stagingPath)
+        ) {
+          await realRm(path.join(stagingPath, STAGING_MARKER_FILENAME), {
+            force: true,
+          });
+          const err: any = new Error("EBUSY: resource busy or locked");
+          err.code = "EBUSY";
+          throw err;
+        }
+        return realRm(p, options);
+      },
+    );
+
+    try {
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow("EPERM");
+      expect(stagingPath).toBeDefined();
+      expect(fs.existsSync(stagingPath!)).toBe(true);
+      expect(fs.existsSync(targetDir)).toBe(false);
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf-8"));
+      expect(journal.phase).toBe("verifying");
+      expect(journal.stagingVerified).toBe(false);
+      expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
+
+      // Once the lock is gone, startup recovery discards the staging copy and keeps the source.
+      rmSpy.mockRestore();
+      await GameDirectoryManager.recoverInterruptedMove();
+      expect(fs.existsSync(stagingPath!)).toBe(false);
+      expect(fs.existsSync(journalPath)).toBe(false);
+      expect(fs.existsSync(targetDir)).toBe(false);
+      expect(
+        fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8"),
+      ).toBe("keep-me");
+      expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
+    } finally {
+      rmSpy.mockRestore();
+      renameSpy.mockRestore();
+      GameDirectoryManager.resetForTesting();
+    }
+  });
+
+  test("Phase 5: a new move refuses to start while a move journal exists and leaves that journal untouched", async () => {
+    const sourceDir = path.join(testRoot, "journal-present-source");
+    const targetDir = path.join(testRoot, "journal-present-target");
+    const journalPath = path.join(userDataDir, "directory-move.json");
+    const existingJournal = JSON.stringify(
+      {
+        version: 2,
+        operationId: "op-existing-journal",
+        source: path.join(testRoot, "journal-present-old-source"),
+        target: path.join(testRoot, "journal-present-old-target"),
+        staging: path.join(testRoot, ".lampas-moving-op-existing-journal"),
+        phase: "finalizing",
+        timestamp: new Date().toISOString(),
+        stagingVerified: true,
+        stagingReceipt: { fileCount: 1, totalBytes: 4 },
+      },
+      null,
+      2,
+    );
+    fs.writeFileSync(journalPath, existingJournal);
+
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "options.txt"), "still-here");
+    ConfigManager.set({ gameDir: sourceDir, gameDirConfigured: true });
+
+    try {
+      await expect(
+        GameDirectoryManager.moveInstallation(targetDir),
+      ).rejects.toThrow(/journal/i);
+      expect(fs.readFileSync(journalPath, "utf-8")).toBe(existingJournal);
+      expect(fs.existsSync(targetDir)).toBe(false);
+      expect(
+        fs.readFileSync(path.join(sourceDir, "options.txt"), "utf-8"),
+      ).toBe("still-here");
+      expect(ConfigManager.get().gameDir).toBe(path.resolve(sourceDir));
+    } finally {
+      GameDirectoryManager.resetForTesting();
     }
   });
 

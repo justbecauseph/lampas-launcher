@@ -13,6 +13,7 @@ export interface SettingsViewOptions {
   ) => void;
   onConfigChanged: (config: RendererSettingsDto) => void;
   switchToTab?: (tabId: string) => void;
+  onSessionCleared?: () => void;
 }
 
 const PENDING_TOAST_KEY = "lampas:pending-toast";
@@ -75,7 +76,7 @@ export function initSettingsView(options: SettingsViewOptions): {
   checkInitialGameDir: (status: DirectoryStatus) => Promise<void>;
   dispose: () => void;
 } {
-  const { showToast, onConfigChanged, switchToTab } = options;
+  const { showToast, onConfigChanged, switchToTab, onSessionCleared } = options;
 
   const ramSlider = document.getElementById(
     "ram-slider",
@@ -675,11 +676,19 @@ export function initSettingsView(options: SettingsViewOptions): {
   if (settingPortal) {
     settingPortal.onchange = async () => {
       try {
+        const previousPortalUrl = currentConfig?.portalUrl;
         const updated = await window.lampas.config.set({
           portalUrl: settingPortal.value.trim(),
         });
         currentConfig = updated;
         onConfigChanged(updated);
+        // Main clears the session when the portal origin changes.
+        if (
+          previousPortalUrl !== undefined &&
+          updated.portalUrl !== previousPortalUrl
+        ) {
+          onSessionCleared?.();
+        }
         flashSaved();
       } catch (err: any) {
         showToast(
