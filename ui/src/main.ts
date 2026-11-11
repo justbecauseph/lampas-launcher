@@ -141,6 +141,7 @@ async function startApp(): Promise<void> {
     requestLogin: () => authView.login(),
     isNoSync: () => Boolean(activeConfig.noSync),
     onStatusChange: (status) => consoleView.setGameStatus(status),
+    onSessionCleared: () => authView.updateUserUI(null),
   });
   refreshPlayButton = playView.refreshPlayButton;
   refreshPlayButton();
@@ -162,6 +163,7 @@ async function startApp(): Promise<void> {
       activeConfig = cfg;
     },
     switchToTab,
+    onSessionCleared: () => authView.updateUserUI(null),
   });
 
   // Initialize Mods View
