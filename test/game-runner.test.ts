@@ -27,9 +27,23 @@ const sessionFile = path.join(userDataDir, "game-session.json");
 let spawnedCalls: Array<{
   javaExe: string;
   jvmArgs: string[];
+  rawArgs: string[];
   options: any;
 }> = [];
 let bootstrapCalls: Array<{ gameDir: string; runtime: any }> = [];
+
+// On non-Windows the launcher passes the game's arguments in an @argfile.
+// Expand it so the assertions see the full argument list on every platform.
+function expandArgfileArgs(args: string[]): string[] {
+  const index = args.findIndex((arg) => arg.startsWith("@"));
+  if (index === -1) return args;
+  const expanded = fs
+    .readFileSync(args[index].slice(1), "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => line.slice(1, -1).replace(/\\(.)/g, "$1"));
+  return [...args.slice(0, index), ...expanded];
+}
 
 mock.module("electron", () => ({
   app: { getPath: () => userDataDir },
@@ -52,7 +66,12 @@ mock.module("node:child_process", () => ({
       helper.kill = () => {};
       return helper;
     }
-    spawnedCalls.push({ javaExe, jvmArgs, options });
+    spawnedCalls.push({
+      javaExe,
+      jvmArgs: expandArgfileArgs(jvmArgs),
+      rawArgs: jvmArgs,
+      options,
+    });
     const proc = new EventEmitter() as any;
     proc.pid = 4242;
     proc.stdout = new EventEmitter();
@@ -237,6 +256,91 @@ describe("GameRunner launch flow & Quick Play", () => {
     expect(spawnedCalls.length).toBe(1);
     const { jvmArgs } = spawnedCalls[0];
     expect(jvmArgs.includes("--quickPlayMultiplayer")).toBe(false);
+  });
+
+  describe("access token and the process command line", () => {
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+    };
+    const realPlatform = process.platform;
+    const setPlatform = (value: string) =>
+      Object.defineProperty(process, "platform", { value });
+    const launchAs = async (platform: string) => {
+      spawnedCalls = [];
+      let proc: any;
+      mockSpawnHook = (p) => (proc = p);
+      setPlatform(platform);
+      try {
+        await GameRunner.launchGame(
+          dummyUser,
+          () => {},
+          () => {},
+          release,
+        );
+      } finally {
+        setPlatform(realPlatform);
+        mockSpawnHook = null;
+      }
+      const { rawArgs } = spawnedCalls[0];
+      const argfileArg = rawArgs.find((arg) => arg.startsWith("@"));
+      return { proc, rawArgs, argfile: argfileArg?.slice(1) };
+    };
+
+    test("on Linux the token is not in the spawn arguments", async () => {
+      const { rawArgs, argfile } = await launchAs("linux");
+      expect(rawArgs.join(" ")).not.toContain(TEST_MINECRAFT_TOKEN);
+      expect(rawArgs).not.toContain("--accessToken");
+      expect(rawArgs.filter((arg) => arg.startsWith("@")).length).toBe(1);
+      expect(rawArgs[rawArgs.length - 1]).toBe(`@${argfile}`);
+      // The session marker stays on the command line for later adoption.
+      expect(
+        rawArgs.some((arg) => arg.startsWith("-Dlampas.launcher.session=")),
+      ).toBe(true);
+      expect(fs.readFileSync(argfile!, "utf8")).toContain(TEST_MINECRAFT_TOKEN);
+    });
+
+    test("the argument file is removed on the first stdout output, not stderr", async () => {
+      const { proc, argfile } = await launchAs("linux");
+      proc.stderr.emit(
+        "data",
+        Buffer.from("NOTE: Picked up JDK_JAVA_OPTIONS\n"),
+      );
+      expect(fs.existsSync(argfile!)).toBe(true);
+      proc.stdout.emit("data", Buffer.from("Loading Minecraft\n"));
+      expect(fs.existsSync(argfile!)).toBe(false);
+      expect(fs.existsSync(path.dirname(argfile!))).toBe(false);
+    });
+
+    test("the argument file is removed when the game exits", async () => {
+      const { proc, argfile } = await launchAs("linux");
+      expect(fs.existsSync(argfile!)).toBe(true);
+      proc.emit("exit", 1);
+      expect(fs.existsSync(argfile!)).toBe(false);
+    });
+
+    test("the argument file is removed when the launcher shuts down", async () => {
+      const { argfile } = await launchAs("linux");
+      expect(fs.existsSync(argfile!)).toBe(true);
+      GameRunner.releaseForShutdown();
+      expect(fs.existsSync(argfile!)).toBe(false);
+    });
+
+    test("on Windows the arguments stay on the command line with no file", async () => {
+      const { rawArgs, argfile } = await launchAs("win32");
+      expect(argfile).toBeUndefined();
+      expect(rawArgs[rawArgs.indexOf("--accessToken") + 1]).toBe(
+        TEST_MINECRAFT_TOKEN,
+      );
+    });
   });
 
   test("refuses to launch without a Microsoft-issued Minecraft token", async () => {

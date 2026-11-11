@@ -866,8 +866,15 @@ app.whenReady().then(async () => {
   registerSecureHandler(
     "gameDir:validate",
     IpcSchemas.gameDirValidate,
-    (_, targetPath, currentPath) =>
-      GameDirectoryManager.validateTarget(targetPath, currentPath),
+    (_, targetPath, currentPath) => {
+      // The validator drops a network currentPath. The configured folder is
+      // main's own value, so it stands in and may be on a share.
+      const config = ConfigManager.get();
+      return GameDirectoryManager.validateTarget(
+        targetPath,
+        currentPath ?? (config.gameDirConfigured ? config.gameDir : undefined),
+      );
+    },
   );
   registerSecureHandler(
     "gameDir:configure",

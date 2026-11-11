@@ -38,6 +38,11 @@ import {
   writeGameSession,
 } from "./game-session";
 import type { GameSessionVerdict, ProcessProbe } from "./game-session";
+import {
+  scrubJvmCrashFiles,
+  sweepStaleLaunchArgfiles,
+  writeLaunchArgfile,
+} from "./launch-secrets";
 
 function readInstalledMetadata(gameDir: string, filePath: string): unknown {
   checkPhysicalAncestrySync(gameDir, filePath, {
@@ -152,6 +157,8 @@ export class GameRunner {
   } | null = null;
   private static releasedForShutdown = false;
   private static adoptionPending = false;
+  // Removes the JVM argument file of the game being started or running.
+  private static pendingArgfileDispose: (() => void) | null = null;
   static _processProbe: ProcessProbe = systemProcessProbe;
   static _adoptedPollMs = 2000;
   static _adoptionRetryMs = 5000;
@@ -178,6 +185,11 @@ export class GameRunner {
   static async adoptRunningGame(
     onExit: (code: number | null) => void,
   ): Promise<{ pid: number } | null> {
+    // A JVM can crash after the launcher closed, so scrub on every start.
+    try {
+      scrubJvmCrashFiles(resolveStoreGameDir(ConfigManager.get().gameDir));
+    } catch {}
+    sweepStaleLaunchArgfiles();
     if (this.isGameRunning()) return null;
     const record = readGameSession();
     if (!record) return null;
@@ -231,6 +243,9 @@ export class GameRunner {
       try {
         clearGameSession(record.sessionId);
       } catch {}
+      try {
+        scrubJvmCrashFiles(resolveStoreGameDir(record.gameDir));
+      } catch {}
       onExit(null);
     }, this._adoptedPollMs);
     timer.unref?.();
@@ -265,6 +280,18 @@ export class GameRunner {
         level,
         message,
       });
+    };
+
+    // Argument file for the game's own arguments (non-Windows), removed once
+    // the JVM has had time to read it. Safe to call more than once.
+    let argfile: { path: string; dispose(): void } | null = null;
+    const disposeArgfile = () => {
+      const current = argfile;
+      argfile = null;
+      if (this.pendingArgfileDispose === disposeArgfile) {
+        this.pendingArgfileDispose = null;
+      }
+      current?.dispose();
     };
 
     try {
@@ -484,6 +511,8 @@ export class GameRunner {
       // to the package's private copy. The game runs outside the package and
       // needs that copy's real path.
       const launchDir = resolveStoreGameDir(gameDir);
+      scrubJvmCrashFiles(launchDir);
+      sweepStaleLaunchArgfiles();
       if (launchDir !== gameDir)
         log("INFO", `Game files are in the Store package's copy: ${launchDir}`);
       log("INFO", "Authentication: Microsoft account");
@@ -521,7 +550,7 @@ export class GameRunner {
       }
 
       const sessionId = newGameSessionId();
-      const jvmArgs = buildLaunchArguments({
+      const parts = buildLaunchArgumentParts({
         gameDir: launchDir,
         ramGb,
         runtime,
@@ -539,11 +568,34 @@ export class GameRunner {
 
       log("INFO", `Starting Minecraft client via ${mainClass}...`);
 
+      // A JVM crash writes hs_err_pid<pid>.log into the game folder; the
+      // crash-reports folder must exist for the JVM to write it there.
+      try {
+        fs.mkdirSync(path.join(launchDir, "crash-reports"), {
+          recursive: true,
+        });
+      } catch {}
+
+      // On non-Windows the game's arguments, including the token, go through an
+      // argument file so they stay out of the command line that `ps` and
+      // /proc/<pid>/cmdline show other local users. Windows keeps the plain
+      // command line: other users cannot read it there, and a plaintext file
+      // would be a new exposure. The session marker stays in the command line.
+      let spawnArgs = [...parts.jvm, ...parts.app];
+      if (
+        process.platform !== "win32" &&
+        !customJavaArgs.includes("--disable-@files")
+      ) {
+        argfile = writeLaunchArgfile(parts.app);
+        spawnArgs = [...parts.jvm, `@${argfile.path}`];
+        this.pendingArgfileDispose = disposeArgfile;
+      }
+
       // Detached so the game outlives the launcher; on Windows a non-detached
       // child is placed in a job object that closes with its parent. Verified
       // on a side-loaded Store (MSIX) install on 2026-10-14: the game survives
       // the launcher quitting and is adopted again on the next start.
-      const proc = spawn(javaExe, jvmArgs, {
+      const proc = spawn(javaExe, spawnArgs, {
         cwd: launchDir,
         detached: true,
         windowsHide: true,
@@ -588,6 +640,7 @@ export class GameRunner {
             cleanupSpawnListeners();
             this.runningProcess = null;
             this.exitPromise = null;
+            disposeArgfile();
             reject(err);
           }
         };
@@ -632,6 +685,14 @@ export class GameRunner {
       stdoutFramer.attach(proc.stdout);
       stderrFramer.attach(proc.stderr);
 
+      // The java launcher reads the argument file before it starts the JVM, so
+      // the first stdout output means the file is no longer needed. stderr is
+      // not a signal: the launcher prints "Picked up JDK_JAVA_OPTIONS" there
+      // before it opens the file. The timer covers a game that stays silent.
+      proc.stdout?.once?.("data", disposeArgfile);
+      const argfileFallback = setTimeout(disposeArgfile, 30_000);
+      argfileFallback.unref?.();
+
       let exitReported = false;
       const maximizer = maximizeGameWindow(proc.pid, (code) => {
         if (exitReported) return;
@@ -655,6 +716,8 @@ export class GameRunner {
         }
         stdoutFramer.flush();
         stderrFramer.flush();
+        disposeArgfile();
+        scrubJvmCrashFiles(launchDir);
         this.runningProcess = null;
         this.exitPromise = null;
         if (!this.releasedForShutdown) {
@@ -680,6 +743,7 @@ export class GameRunner {
 
       return true;
     } catch (err: any) {
+      disposeArgfile();
       log("ERROR", `Failed to launch Minecraft JVM: ${err.message}`);
       throw err;
     } finally {
@@ -775,6 +839,7 @@ export class GameRunner {
    */
   static releaseForShutdown(): void {
     this.releasedForShutdown = true;
+    this.pendingArgfileDispose?.();
     const proc = this.runningProcess;
     if (proc) {
       try {
@@ -794,6 +859,8 @@ export class GameRunner {
   }
 
   static resetForTesting(): void {
+    this.pendingArgfileDispose?.();
+    this.pendingArgfileDispose = null;
     this.runningProcess = null;
     this.exitPromise = null;
     this.isStarting = false;
@@ -808,7 +875,7 @@ export class GameRunner {
   }
 }
 
-export function buildLaunchArguments(options: {
+export interface LaunchArgumentOptions {
   gameDir: string;
   ramGb: number;
   runtime: any;
@@ -822,7 +889,17 @@ export function buildLaunchArguments(options: {
   classpathString: string;
   autoConnectServer?: string;
   sessionId?: string;
-}): string[] {
+}
+
+/**
+ * The Java command split at the main class. `jvm` holds the JVM options and
+ * the classpath; `app` holds the main class and the game's arguments, which
+ * include the access token.
+ */
+export function buildLaunchArgumentParts(options: LaunchArgumentOptions): {
+  jvm: string[];
+  app: string[];
+} {
   const classification = classifyJavaArgs(options.customJavaArgs);
   if (classification.hasLaunchTargetOverride) {
     throw new InstallationStateError(
@@ -831,7 +908,12 @@ export function buildLaunchArguments(options: {
   }
 
   const rawUuid = options.uuid.replace(/-/g, "");
-  const jvmArgs = [
+  // A crash log goes to the game's crash-reports folder, where the launcher
+  // scrubs it. A custom -XX:ErrorFile replaces this default.
+  const hasCustomErrorFile = options.customJavaArgs.some((arg) =>
+    arg.startsWith("-XX:ErrorFile="),
+  );
+  const jvm = [
     `-Xmx${options.ramGb}G`,
     `-Xms${Math.min(2, options.ramGb)}G`,
     // Generational ZGC (the only ZGC mode on Java 25). G1-only tuning such as
@@ -843,9 +925,17 @@ export function buildLaunchArguments(options: {
     `-Djava.library.path=${path.join(options.gameDir, "natives")}`,
     `-Dminecraft.applet.TargetDirectory=${options.gameDir}`,
     ...(options.sessionId ? [sessionMarkerArg(options.sessionId)] : []),
+    ...(hasCustomErrorFile
+      ? []
+      : [
+          `-XX:ErrorFile=${path.join(options.gameDir, "crash-reports", "hs_err_pid%p.log")}`,
+        ]),
     ...options.customJavaArgs,
     "-cp",
     options.classpathString,
+  ];
+
+  const app = [
     options.mainClass,
     "--username",
     options.username,
@@ -870,10 +960,15 @@ export function buildLaunchArguments(options: {
   ];
 
   if (options.autoConnectServer) {
-    jvmArgs.push("--quickPlayMultiplayer", options.autoConnectServer);
+    app.push("--quickPlayMultiplayer", options.autoConnectServer);
   }
 
-  return jvmArgs;
+  return { jvm, app };
+}
+
+export function buildLaunchArguments(options: LaunchArgumentOptions): string[] {
+  const { jvm, app } = buildLaunchArgumentParts(options);
+  return [...jvm, ...app];
 }
 
 export { parseJavaArgs, classifyJavaArgs } from "./ipc-boundary";

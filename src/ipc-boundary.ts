@@ -1310,6 +1310,32 @@ export function validateOpenKnownLocation(raw: unknown): KnownLocationId {
   return raw as KnownLocationId;
 }
 
+/**
+ * True for Windows UNC and device paths (\\host\share, //host/share, \\?\C:\, \\.\pipe).
+ * Touching one makes Windows contact the named host, so IPC rejects them
+ * before any filesystem call.
+ */
+export function isNetworkOrDevicePath(
+  raw: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return false;
+  const trimmed = raw.trim();
+  if (/^[\\/]{2}/.test(trimmed)) return true;
+  // NT object-manager prefix (\??\UNC\host\share). Node resolves it to a
+  // drive path, but native dialogs pass it through to Windows unchanged.
+  if (/^[\\/]\?\?[\\/]/.test(trimmed)) return true;
+  return path.win32.resolve(trimmed).startsWith("\\\\");
+}
+
+function assertLocalPath(raw: string): void {
+  if (isNetworkOrDevicePath(raw)) {
+    throw new IpcValidationError(
+      "Network and device paths aren't supported. Choose a folder on this computer or a mapped drive.",
+    );
+  }
+}
+
 export function validateGameDirTarget(raw: unknown): string {
   if (typeof raw !== "string" || raw.trim().length === 0) {
     throw new IpcValidationError(
@@ -1321,6 +1347,7 @@ export function validateGameDirTarget(raw: unknown): string {
       "Directory target path exceeds maximum length of 1024 characters.",
     );
   }
+  assertLocalPath(raw);
   return path.resolve(raw.trim());
 }
 
@@ -1334,7 +1361,12 @@ export function validateOptionalPath(raw: unknown): string | undefined {
       "Path exceeds maximum length of 1024 characters.",
     );
   }
-  return raw.trim();
+  // An optional path is only a hint (the dialog's starting folder, or the
+  // current game folder, which main reads from its own config). A network
+  // one is dropped instead of refused, so a player whose saved game folder
+  // is on a share can still browse and move.
+  if (isNetworkOrDevicePath(raw)) return undefined;
+  return path.resolve(raw.trim());
 }
 
 export function validateGameDirValidateArgs(
@@ -1374,6 +1406,7 @@ export function validateModPaths(raw: unknown): string[] {
         "Mod path exceeds maximum length of 1024 characters.",
       );
     }
+    assertLocalPath(item);
     const resolved = path.resolve(item.trim());
     if (path.extname(resolved).toLowerCase() !== ".jar") {
       throw new IpcValidationError("Mod file must have a .jar extension.");
@@ -1461,6 +1494,7 @@ export function validateShaderPackPaths(raw: unknown): string[] {
         "Shader pack path exceeds maximum length of 1024 characters.",
       );
     }
+    assertLocalPath(item);
     const resolved = path.resolve(item.trim());
     if (path.extname(resolved).toLowerCase() !== ".zip") {
       throw new IpcValidationError(
