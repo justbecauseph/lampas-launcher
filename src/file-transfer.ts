@@ -630,7 +630,13 @@ export async function downloadVerified(
         throw error;
       }
       lastError = error;
-      if (error instanceof TransferIntegrityError) integrityError ??= error;
+      // A hash mismatch replaces an earlier size mismatch. Otherwise the first
+      // integrity error is kept.
+      if (
+        error instanceof TransferIntegrityError &&
+        (!integrityError || !(error instanceof TransferSizeMismatchError))
+      )
+        integrityError = error;
       // Only a wrong-sized body is retried: CDNs occasionally answer 200 with
       // an empty or truncated body. Wrong bytes of the right size fail at once.
       if (
