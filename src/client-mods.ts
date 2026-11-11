@@ -147,6 +147,19 @@ function promoteImport(
   }
 }
 
+/** Removes files a failed import call created, so they are not left untracked. */
+function removeFailedImports(created: string[], kind: ImportKind): void {
+  for (const target of created) {
+    try {
+      fs.rmSync(target, { force: true });
+    } catch (rollbackErr: any) {
+      LauncherLogger.error(
+        `[${kind.logTag}] Could not remove '${path.basename(target)}' after a failed import: ${rollbackErr.message}`,
+      );
+    }
+  }
+}
+
 function modPath(gameDir: string, filename: string, enabled: boolean): string {
   if (
     filename !== path.basename(filename) ||
@@ -213,7 +226,9 @@ export class ShaderPackManager {
 
     const packs = [...(config.customShaderPacks || [])];
 
-    for (const sourcePath of sourcePaths) {
+    // Validate every selected file before copying any, so a rejected file
+    // leaves no earlier file behind in shaderpacks/.
+    const selected = sourcePaths.map((sourcePath) => {
       assertImportableFile(sourcePath, SHADER_IMPORT);
       assertZipArchive(sourcePath);
       const filename = path.basename(sourcePath);
@@ -226,7 +241,8 @@ export class ShaderPackManager {
         disallowSymlinks: true,
       });
 
-      if (fs.existsSync(destination)) {
+      const destinationExisted = fs.existsSync(destination);
+      if (destinationExisted) {
         const destStat = fs.lstatSync(destination);
         if (!destStat.isFile() || destStat.isSymbolicLink()) {
           throw new Error(
@@ -242,31 +258,47 @@ export class ShaderPackManager {
           );
         }
       }
+      return { sourcePath, filename, destination, destinationExisted };
+    });
 
-      promoteImport(
-        sourcePath,
-        shaderDir,
-        destination,
-        filename,
-        SHADER_IMPORT,
-      );
-
-      const size = fs.statSync(destination).size;
-      if (existing) {
-        existing.addedAt = new Date().toISOString();
-        existing.size = size;
-        LauncherLogger.info(
-          `[Shader Packs] Replaced shader pack: ${filename} (${(size / 1024).toFixed(1)} KB)`,
-        );
-      } else {
-        packs.push({ filename, addedAt: new Date().toISOString(), size });
-        LauncherLogger.info(
-          `[Shader Packs] Added shader pack: ${filename} (${(size / 1024).toFixed(1)} KB)`,
+    const created: string[] = [];
+    try {
+      for (const file of selected) {
+        if (!file.destinationExisted) created.push(file.destination);
+        promoteImport(
+          file.sourcePath,
+          shaderDir,
+          file.destination,
+          file.filename,
+          SHADER_IMPORT,
         );
       }
-    }
 
-    ConfigManager.set({ customShaderPacks: packs });
+      // Config entries change only after every copy has succeeded.
+      for (const { filename, destination } of selected) {
+        const existing = packs.find(
+          (pack) => pack.filename.toLowerCase() === filename.toLowerCase(),
+        );
+        const size = fs.statSync(destination).size;
+        if (existing) {
+          existing.addedAt = new Date().toISOString();
+          existing.size = size;
+          LauncherLogger.info(
+            `[Shader Packs] Replaced shader pack: ${filename} (${(size / 1024).toFixed(1)} KB)`,
+          );
+        } else {
+          packs.push({ filename, addedAt: new Date().toISOString(), size });
+          LauncherLogger.info(
+            `[Shader Packs] Added shader pack: ${filename} (${(size / 1024).toFixed(1)} KB)`,
+          );
+        }
+      }
+
+      ConfigManager.set({ customShaderPacks: packs });
+    } catch (err) {
+      removeFailedImports(created, SHADER_IMPORT);
+      throw err;
+    }
     return packs;
   }
 
@@ -313,7 +345,9 @@ export class ClientModManager {
 
     const mods = [...(config.customClientMods || [])];
 
-    for (const sourcePath of sourcePaths) {
+    // Validate every selected file before copying any, so a rejected file
+    // leaves no earlier file behind in mods/.
+    const selected = sourcePaths.map((sourcePath) => {
       assertImportableFile(sourcePath, MOD_IMPORT);
       const filename = path.basename(sourcePath);
       const existing = mods.find(
@@ -325,7 +359,8 @@ export class ClientModManager {
         disallowSymlinks: true,
       });
 
-      if (fs.existsSync(destination)) {
+      const destinationExisted = fs.existsSync(destination);
+      if (destinationExisted) {
         const destStat = fs.lstatSync(destination);
         if (
           destStat.isSymbolicLink() ||
@@ -347,35 +382,60 @@ export class ClientModManager {
           );
         }
       }
+      return { sourcePath, filename, destination, destinationExisted };
+    });
 
-      promoteImport(sourcePath, modsDir, destination, filename, MOD_IMPORT);
-
-      if (existing) {
-        const disabledPath = modPath(config.gameDir, filename, false);
-        if (fs.existsSync(disabledPath)) {
-          fs.rmSync(disabledPath, { force: true });
-        }
-        existing.enabled = true;
-        existing.addedAt = new Date().toISOString();
-        existing.size = fs.statSync(destination).size;
-        LauncherLogger.info(
-          `[Client Mods] Replaced custom mod: ${filename} (${(existing.size / 1024).toFixed(1)} KB)`,
-        );
-      } else {
-        const size = fs.statSync(destination).size;
-        mods.push({
-          filename,
-          enabled: true,
-          addedAt: new Date().toISOString(),
-          size,
-        });
-        LauncherLogger.info(
-          `[Client Mods] Added custom mod: ${filename} (${(size / 1024).toFixed(1)} KB)`,
+    let created: string[] = [];
+    try {
+      for (const file of selected) {
+        if (!file.destinationExisted) created.push(file.destination);
+        promoteImport(
+          file.sourcePath,
+          modsDir,
+          file.destination,
+          file.filename,
+          MOD_IMPORT,
         );
       }
-    }
 
-    ConfigManager.set({ customClientMods: mods });
+      // Config entries and disabled copies change only after every copy has
+      // succeeded. A deleted disabled copy leaves the new enabled file as the
+      // mod's only file, so a rollback keeps that file.
+      for (const { filename, destination } of selected) {
+        const existing = mods.find(
+          (mod) => mod.filename.toLowerCase() === filename.toLowerCase(),
+        );
+        if (existing) {
+          const disabledPath = modPath(config.gameDir, filename, false);
+          if (fs.existsSync(disabledPath)) {
+            fs.rmSync(disabledPath, { force: true });
+            created = created.filter((target) => target !== destination);
+          }
+          existing.enabled = true;
+          existing.addedAt = new Date().toISOString();
+          existing.size = fs.statSync(destination).size;
+          LauncherLogger.info(
+            `[Client Mods] Replaced custom mod: ${filename} (${(existing.size / 1024).toFixed(1)} KB)`,
+          );
+        } else {
+          const size = fs.statSync(destination).size;
+          mods.push({
+            filename,
+            enabled: true,
+            addedAt: new Date().toISOString(),
+            size,
+          });
+          LauncherLogger.info(
+            `[Client Mods] Added custom mod: ${filename} (${(size / 1024).toFixed(1)} KB)`,
+          );
+        }
+      }
+
+      ConfigManager.set({ customClientMods: mods });
+    } catch (err) {
+      removeFailedImports(created, MOD_IMPORT);
+      throw err;
+    }
     return mods;
   }
 
