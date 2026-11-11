@@ -5071,6 +5071,7 @@ try {
             }
           } finally {
             child.emit("exit", 0);
+            child.emit("close", 0);
           }
         },
       );
@@ -5105,6 +5106,7 @@ try {
             }
           } finally {
             child.emit("exit", 0);
+            child.emit("close", 0);
           }
         },
       );
@@ -5119,6 +5121,7 @@ try {
           try {
             writeGameOutput(first, soundEngineLine);
             first.emit("exit", 0);
+            first.emit("close", 0);
             await sleepFor(closeWaitMs);
             if (quitCount() !== 0) {
               throw new Error(
@@ -5136,7 +5139,9 @@ try {
             }
           } finally {
             first.emit("exit", 0);
+            first.emit("close", 0);
             second?.emit("exit", 0);
+            second?.emit("close", 0);
           }
         },
       );
@@ -5164,6 +5169,7 @@ try {
             }
           } finally {
             child.emit("exit", 0);
+            child.emit("close", 0);
           }
         },
       );
@@ -5199,6 +5205,7 @@ try {
             }
           } finally {
             child.emit("exit", 0);
+            child.emit("close", 0);
             ConfigManager.set({ closeOnGameStart: false });
           }
         },

@@ -324,6 +324,7 @@ describe("GameRunner launch flow & Quick Play", () => {
       const { proc, argfile } = await launchAs("linux");
       expect(fs.existsSync(argfile!)).toBe(true);
       proc.emit("exit", 1);
+      proc.emit("close", 1);
       expect(fs.existsSync(argfile!)).toBe(false);
     });
 
@@ -828,8 +829,9 @@ describe("GameRunner launch flow & Quick Play", () => {
         errorLogs.some((msg) => msg.includes("EPIPE: write to closed pipe")),
       ).toBe(true);
 
-      // Now emit true exit event
+      // Now emit true exit event; the report waits for 'close'
       childProc.emit("exit", 0);
+      childProc.emit("close", 0);
 
       // Now runningProcess is cleared and exit reported
       expect(GameRunner.isGameRunning()).toBe(false);
@@ -1009,6 +1011,7 @@ describe("GameRunner detached launch and session record", () => {
       expect(fs.existsSync(sessionFile)).toBe(true);
 
       childProc.emit("exit", 0);
+      childProc.emit("close", 0);
 
       expect(fs.existsSync(sessionFile)).toBe(false);
       expect(GameRunner.isGameRunning()).toBe(false);
@@ -1053,7 +1056,100 @@ describe("GameRunner detached launch and session record", () => {
 
       // An exit observed during shutdown must not erase the record either.
       childProc.emit("exit", 0);
+      childProc.emit("close", 0);
       expect(fs.existsSync(sessionFile)).toBe(true);
+    } finally {
+      mockSpawnHook = null;
+      GameRunner.resetForTesting();
+    }
+  });
+});
+
+describe("GameRunner exit reporting", () => {
+  test("output that arrives after 'exit' is logged before the exit line", async () => {
+    let childProc: any = null;
+    mockSpawnHook = (proc) => {
+      childProc = proc;
+    };
+    const lines: string[] = [];
+    const exitCodes: Array<number | null> = [];
+    try {
+      await GameRunner.launchGame(
+        sessionUser,
+        (entry) => lines.push(entry.message),
+        (code) => exitCodes.push(code),
+        sessionRelease(),
+      );
+
+      childProc.emit("exit", 0);
+      // stdout is still open, so the last output arrives after 'exit'.
+      childProc.stdout.emit("data", Buffer.from("Saving chunks\nlast words"));
+      expect(exitCodes).toEqual([]);
+
+      childProc.emit("close", 0);
+
+      expect(lines.slice(-3)).toEqual([
+        "Saving chunks",
+        "last words",
+        "Minecraft exited with code 0",
+      ]);
+      expect(exitCodes).toEqual([0]);
+    } finally {
+      mockSpawnHook = null;
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("a 'close' without a prior 'exit' reports the exit once", async () => {
+    let childProc: any = null;
+    mockSpawnHook = (proc) => {
+      childProc = proc;
+    };
+    const lines: string[] = [];
+    const exitCodes: Array<number | null> = [];
+    try {
+      await GameRunner.launchGame(
+        sessionUser,
+        (entry) => lines.push(entry.message),
+        (code) => exitCodes.push(code),
+        sessionRelease(),
+      );
+
+      childProc.emit("close", 1);
+
+      expect(exitCodes).toEqual([1]);
+      expect(lines[lines.length - 1]).toBe("Minecraft exited with code 1");
+      expect(GameRunner.isGameRunning()).toBe(false);
+    } finally {
+      mockSpawnHook = null;
+      GameRunner.resetForTesting();
+    }
+  });
+
+  test("an 'exit' with no 'close' is reported once after the 1 s fallback", async () => {
+    let childProc: any = null;
+    mockSpawnHook = (proc) => {
+      childProc = proc;
+    };
+    const exitCodes: Array<number | null> = [];
+    try {
+      await GameRunner.launchGame(
+        sessionUser,
+        () => {},
+        (code) => exitCodes.push(code),
+        sessionRelease(),
+      );
+
+      childProc.emit("exit", 1);
+      expect(exitCodes).toEqual([]);
+
+      // Longer than the fallback, so its timer fires before this resolves.
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      expect(exitCodes).toEqual([1]);
+      expect(GameRunner.isGameRunning()).toBe(false);
+
+      childProc.emit("close", 1);
+      expect(exitCodes).toEqual([1]);
     } finally {
       mockSpawnHook = null;
       GameRunner.resetForTesting();
