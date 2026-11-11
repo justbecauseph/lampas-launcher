@@ -480,7 +480,14 @@ export class ConfigManager {
       loaded.gameDirConfigured = hasInstallation;
     }
 
-    loaded.portalUrl = normalizePortalUrl(loaded.portalUrl);
+    try {
+      loaded.portalUrl = normalizePortalUrl(loaded.portalUrl);
+    } catch (err: any) {
+      LauncherLogger.warn(
+        `[Config] Ignored the saved portal URL: ${err?.message || err}. Using ${DEFAULT_CONFIG.portalUrl}.`,
+      );
+      loaded.portalUrl = normalizePortalUrl(DEFAULT_CONFIG.portalUrl);
+    }
 
     // Phase 3 Security: Main-only Session Authority & Credential Separation
     // Initialize SessionManager with config path and active portal
