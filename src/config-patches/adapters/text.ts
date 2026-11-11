@@ -40,6 +40,10 @@ export class TextConfigAdapter implements ConfigPatchAdapter {
       }
 
       if (count === 0) {
+        if (replacement === "") {
+          continue;
+        }
+
         let repCount = 0;
         let rPos = 0;
         while ((rPos = current.indexOf(replacement, rPos)) !== -1) {
@@ -62,7 +66,7 @@ export class TextConfigAdapter implements ConfigPatchAdapter {
         );
       }
 
-      current = current.replaceAll(search, replacement);
+      current = current.replaceAll(search, () => replacement);
       changed = true;
       details.push(
         `'${search}' → '${replacement}' (${count} match${count > 1 ? "es" : ""})`,
