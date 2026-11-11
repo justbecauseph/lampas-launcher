@@ -12,6 +12,7 @@ const {
   mavenToPath,
   validateFabricRuntimeMetadata,
 } = await import("../src/fabric-meta");
+const { TransportPolicyError } = await import("../src/transport-policy");
 import type { MinecraftRuntimeDefinition } from "../src/types";
 
 describe("FabricMetaResolver & Maven Coordinate Validation (PLAN.md Part D & Hardening)", () => {
@@ -495,6 +496,103 @@ describe("FabricMetaResolver & Maven Coordinate Validation (PLAN.md Part D & Har
       expect(cachedJson.libraries[0].sha256).toBe(
         "73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958",
       );
+    });
+  });
+
+  describe("Sidecar outage falls back to the exact cache", () => {
+    const loaderSha256 =
+      "73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958";
+
+    const sidecarsAvailable = async (input: string | URL | Request) => {
+      // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
+      const urlStr = input.toString();
+      if (urlStr.endsWith(".sha256")) {
+        return new Response(`${loaderSha256}\n`, { status: 200 });
+      }
+      if (urlStr.endsWith(".sha1")) {
+        return new Response("354dfaa02d0552e11867f85dff7cdbfaf813ba3e\n", {
+          status: 200,
+        });
+      }
+      return Response.json(sampleMetaPayload);
+    };
+
+    const withSidecarOutage =
+      (outage: () => Promise<Response>) =>
+      async (input: string | URL | Request) => {
+        // oxlint-disable-next-line typescript/no-base-to-string -- fetch mock inputs are URL strings or URL objects in these tests
+        const urlStr = input.toString();
+        if (urlStr.endsWith(".sha256") || urlStr.endsWith(".sha1")) {
+          return outage();
+        }
+        return Response.json(sampleMetaPayload);
+      };
+
+    const outages: Record<string, () => Promise<Response>> = {
+      "HTTP 503": () =>
+        Promise.resolve(new Response("Service Unavailable", { status: 503 })),
+      "sidecar timeout": () =>
+        Promise.reject(
+          new DOMException("The operation timed out.", "TimeoutError"),
+        ),
+    };
+
+    for (const [label, outage] of Object.entries(outages)) {
+      test(`${label} from the sidecar returns the exact cache metadata, which carries checksums`, async () => {
+        const seeded = await FabricMetaResolver.resolveFabricRuntime(
+          validRuntime,
+          cacheDir,
+          { fetchFn: sidecarsAvailable },
+        );
+
+        const fallback = await FabricMetaResolver.resolveFabricRuntime(
+          validRuntime,
+          cacheDir,
+          { fetchFn: withSidecarOutage(outage) },
+        );
+
+        expect(fallback).toEqual(seeded);
+        expect(
+          fallback.libraries.find(
+            (lib) => lib.name === "net.fabricmc:fabric-loader:0.19.3",
+          )?.sha256,
+        ).toBe(loaderSha256);
+      });
+    }
+
+    test("sidecar outage without an exact cache rejects with the checksum error and writes no cache", async () => {
+      const cachePath = FabricMetaResolver.getCachePath(
+        cacheDir,
+        "26.2",
+        "0.19.3",
+      );
+
+      await expect(
+        FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
+          fetchFn: withSidecarOutage(() =>
+            Promise.resolve(
+              new Response("Service Unavailable", { status: 503 }),
+            ),
+          ),
+        }),
+      ).rejects.toThrow(/is missing an expected SHA-1 or SHA-256 checksum/);
+      expect(fs.existsSync(cachePath)).toBe(false);
+    });
+
+    test("transport policy errors from a sidecar still reject when an exact cache exists", async () => {
+      await FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
+        fetchFn: sidecarsAvailable,
+      });
+
+      await expect(
+        FabricMetaResolver.resolveFabricRuntime(validRuntime, cacheDir, {
+          fetchFn: withSidecarOutage(() =>
+            Promise.reject(
+              new TransportPolicyError("Sidecar host is not approved."),
+            ),
+          ),
+        }),
+      ).rejects.toThrow(TransportPolicyError);
     });
   });
 });
