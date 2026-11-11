@@ -9,6 +9,7 @@
  */
 
 import { GameRunner } from "./game-runner";
+import { InstallationStateError } from "./ipc-boundary";
 
 export type LauncherOperationType =
   | "sync"
@@ -89,7 +90,7 @@ export class OperationCoordinator {
 
   /**
    * Acquires the exclusive operation guard for an operation type.
-   * Throws Error if mutations are blocked due to recovery failure.
+   * Throws InstallationStateError if mutations are blocked due to recovery failure.
    * Throws OperationBusyError if another operation is active.
    * Throws GameRunningConflictError if Minecraft is running and operation affects installation.
    */
@@ -98,7 +99,7 @@ export class OperationCoordinator {
     description?: string,
   ): OperationScope {
     if (blockedReason) {
-      throw new Error(
+      throw new InstallationStateError(
         `Launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`,
       );
     }
@@ -232,7 +233,7 @@ export class OperationCoordinator {
 
   private static assertNotBlocked(operationName: string): void {
     if (blockedReason) {
-      throw new Error(
+      throw new InstallationStateError(
         `Cannot perform '${operationName}': launcher operations are blocked due to an unresolved startup recovery failure: ${blockedReason}`,
       );
     }

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ConfigManager } from "./config";
+import { ModPolicyError } from "./ipc-boundary";
 import { LauncherLogger } from "./logger";
 import { OperationCoordinator } from "./operations";
 import type { CustomClientMod, CustomShaderPack } from "./types";
@@ -342,7 +343,7 @@ export class ClientModManager {
           !existing &&
           path.resolve(sourcePath) !== path.resolve(destination)
         ) {
-          throw new Error(
+          throw new ModPolicyError(
             `${filename} already exists in the mods folder and is not a launcher-managed local mod.`,
           );
         }
@@ -400,9 +401,11 @@ export class ClientModManager {
       disallowSymlinks: true,
     });
     if (!fs.existsSync(source))
-      throw new Error(`${filename} is missing from the mods folder.`);
+      throw new ModPolicyError(`${filename} is missing from the mods folder.`);
     if (fs.existsSync(destination))
-      throw new Error(`Cannot toggle ${filename}: destination already exists.`);
+      throw new ModPolicyError(
+        `Cannot toggle ${filename}: destination already exists.`,
+      );
     fs.renameSync(source, destination);
     mod.enabled = enabled;
     LauncherLogger.info(

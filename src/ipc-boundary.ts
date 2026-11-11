@@ -17,6 +17,7 @@ import {
   ConfigManager,
   getUserDataDir,
   normalizePortalUrl,
+  PortalPolicyError,
   validateWebUrl,
 } from "./config";
 import { LauncherLogger } from "./logger";
@@ -1186,7 +1187,14 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
         "portalUrl exceeds maximum length of 512 characters.",
       );
     }
-    sanitized.portalUrl = normalizePortalUrl(raw.portalUrl);
+    try {
+      sanitized.portalUrl = normalizePortalUrl(raw.portalUrl);
+    } catch (err) {
+      if (err instanceof PortalPolicyError) {
+        throw new IpcValidationError(err.message);
+      }
+      throw err;
+    }
   }
 
   if (raw.selectedChannel !== undefined) {
