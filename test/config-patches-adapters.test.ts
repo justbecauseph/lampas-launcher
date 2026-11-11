@@ -187,6 +187,28 @@ hypixelOnlyChatTabs=true
     expect(reApply.changed).toBe(false);
   });
 
+  test("Properties: a key appended after a trailing continuation line is not folded into it", () => {
+    // Appended directly, z=1 would continue key's value on reapply. Java ends a
+    // continuation at an empty line, so the blank line keeps z as its own property.
+    const res = propertiesAdapter.apply("a=1\nkey=a,\\", [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(res.output).toBe("a=1\nkey=a,\\\n\nz=1");
+    const reApply = propertiesAdapter.apply(res.output, [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(reApply.changed).toBe(false);
+
+    const crlf = propertiesAdapter.apply("a=1\r\nkey=a,\\", [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(crlf.output).toBe("a=1\r\nkey=a,\\\r\n\r\nz=1");
+    const crlfReApply = propertiesAdapter.apply(crlf.output, [
+      { op: "set", path: ["z"], value: "1" },
+    ]);
+    expect(crlfReApply.changed).toBe(false);
+  });
+
   test("INI: preserves section headers, comments, and spacing", () => {
     const iniFixture = `; Global INI settings
 app_name = Lampas

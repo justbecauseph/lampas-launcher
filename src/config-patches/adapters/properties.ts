@@ -76,7 +76,8 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
             `Properties value for '${key}' contains a line break or ends in an odd number of backslashes`,
           );
         }
-        const newLines = groupLogicalLines(lines).flatMap((group) => {
+        const groups = groupLogicalLines(lines);
+        const newLines = groups.flatMap((group) => {
           const line = group[0];
           const trimmed = line.trim();
           if (
@@ -102,6 +103,17 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
         });
 
         if (!keyFound) {
+          // A last logical line ending in an odd number of backslashes would make
+          // the appended key one of its continuation lines. A blank line ends it.
+          const lastGroup = groups[groups.length - 1];
+          const lastTrimmed = lastGroup[0].trim();
+          if (
+            !lastTrimmed.startsWith("#") &&
+            !lastTrimmed.startsWith("!") &&
+            endsWithContinuation(lastGroup[lastGroup.length - 1])
+          ) {
+            newLines.push("");
+          }
           newLines.push(`${key}=${targetVal}`);
           changed = true;
           details.push(`${key}: (unset) → ${targetVal}`);
