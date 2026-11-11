@@ -14,6 +14,7 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
     let current = source;
     let changed = false;
     const details: string[] = [];
+    const eol = source.includes("\r\n") ? "\r\n" : "\n";
 
     for (const op of operations) {
       if (op.op === "replaceLiteral") {
@@ -43,9 +44,9 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          const secMatch = line.match(/^[ \t]*\[([a-zA-Z0-9_.-]+)\]/);
+          const secMatch = line.match(/^\s*\[([^\]]+)\]\s*(?:[;#].*)?$/);
           if (secMatch) {
-            if (inSection && section && !keyFound) {
+            if (inSection && !keyFound) {
               insertIndex = newLines.length;
             }
             inSection = section
@@ -104,12 +105,12 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
           );
         }
 
-        current = newLines.join("\n");
+        current = newLines.join(eol);
       } else if (op.op === "remove") {
         const newLines: string[] = [];
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          const secMatch = line.match(/^[ \t]*\[([a-zA-Z0-9_.-]+)\]/);
+          const secMatch = line.match(/^\s*\[([^\]]+)\]\s*(?:[;#].*)?$/);
           if (secMatch) {
             inSection = section
               ? secMatch[1].toLowerCase() === section.toLowerCase()
@@ -132,7 +133,7 @@ export class IniConfigAdapter implements ConfigPatchAdapter {
 
           newLines.push(line);
         }
-        current = newLines.join("\n");
+        current = newLines.join(eol);
       }
     }
 

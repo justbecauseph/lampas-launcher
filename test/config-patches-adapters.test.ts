@@ -160,6 +160,92 @@ fov = 90
     expect(reApply.changed).toBe(false);
   });
 
+  test("INI: root keys go before the first section and are found only in the root region", () => {
+    const rootFixture = `app_name = Lampas
+[audio]
+volume = 80
+
+[chat]
+enabled = true
+`;
+
+    const res = iniAdapter.apply(rootFixture, [
+      { op: "set", path: ["debug"], value: false },
+    ]);
+
+    expect(res.changed).toBe(true);
+    expect(res.output).toBe(`app_name = Lampas
+debug=false
+[audio]
+volume = 80
+
+[chat]
+enabled = true
+`);
+
+    // Idempotency
+    const reApply = iniAdapter.apply(res.output, [
+      { op: "set", path: ["debug"], value: false },
+    ]);
+    expect(reApply.changed).toBe(false);
+    expect(reApply.output).toBe(res.output);
+
+    // A key of the same name inside a section does not satisfy a root key
+    const sectionOnly = iniAdapter.apply("[chat]\ndebug = true\n", [
+      { op: "set", path: ["debug"], value: false },
+    ]);
+    expect(sectionOnly.output).toBe("debug=false\n[chat]\ndebug = true\n");
+  });
+
+  test("INI: section headers with spaces or punctuation are recognized", () => {
+    const bracketFixture = `[My Section]
+value = 1
+[other]
+x = 2
+`;
+
+    const res = iniAdapter.apply(bracketFixture, [
+      { op: "set", path: ["My Section", "newKey"], value: "on" },
+    ]);
+
+    expect(res.changed).toBe(true);
+    expect(res.output).toBe(`[My Section]
+value = 1
+newKey=on
+[other]
+x = 2
+`);
+
+    // Idempotency
+    const reApply = iniAdapter.apply(res.output, [
+      { op: "set", path: ["My Section", "newKey"], value: "on" },
+    ]);
+    expect(reApply.changed).toBe(false);
+    expect(reApply.output).toBe(res.output);
+  });
+
+  test("INI: preserves CRLF line endings when editing and inserting", () => {
+    const crlfFixture = "app=1\r\n[chat]\r\nenabled = true\r\n";
+
+    const res = iniAdapter.apply(crlfFixture, [
+      { op: "set", path: ["chat", "enabled"], value: false },
+      { op: "set", path: ["flag"], value: "on" },
+    ]);
+
+    expect(res.changed).toBe(true);
+    expect(res.output).toBe(
+      "app=1\r\nflag=on\r\n[chat]\r\nenabled = false\r\n",
+    );
+
+    // Idempotency
+    const reApply = iniAdapter.apply(res.output, [
+      { op: "set", path: ["chat", "enabled"], value: false },
+      { op: "set", path: ["flag"], value: "on" },
+    ]);
+    expect(reApply.changed).toBe(false);
+    expect(reApply.output).toBe(res.output);
+  });
+
   test("Text: literal matching with expectedMatches requirement and idempotency", () => {
     const textFixture = `# Custom arbitrary config file
 hypixelOnlyChatTabs=true
