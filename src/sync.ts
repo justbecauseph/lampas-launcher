@@ -606,6 +606,7 @@ export class LauncherSync {
           const previous = prevState.files[file.path];
           const metadataMatches =
             verificationMode !== "full" &&
+            previous?.policy === "MANAGED" &&
             previous?.sha256 === file.hashes.sha256 &&
             previous.size === file.size &&
             previous.mtimeMs === stat.mtimeMs &&
