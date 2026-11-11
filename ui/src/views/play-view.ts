@@ -20,6 +20,7 @@ export interface PlayViewOptions {
   requestLogin?: () => Promise<void>;
   isNoSync?: () => boolean;
   onStatusChange?: (state: GameStatus) => void;
+  onSessionCleared?: () => void;
 }
 
 const PROGRESS_LABELS: Partial<Record<SyncProgress["status"], string>> = {
@@ -66,6 +67,7 @@ export function initPlayView(options: PlayViewOptions): {
     requestLogin,
     isNoSync,
     onStatusChange,
+    onSessionCleared,
   } = options;
 
   const el = <T extends HTMLElement = HTMLElement>(id: string) =>
@@ -193,6 +195,10 @@ export function initPlayView(options: PlayViewOptions): {
       const readiness = await window.lampas.game.checkReady();
       if (readiness.ready) return true;
       setGameStatus("idle");
+      // Main has no usable session, so show the signed-out state.
+      if (readiness.reason === "login" || readiness.reason === "session") {
+        onSessionCleared?.();
+      }
       showLaunchError(readiness.message, false);
       appendLog("ERROR", readiness.message);
       return false;
