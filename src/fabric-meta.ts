@@ -31,6 +31,13 @@ export class TransientFabricMetaError extends Error {
   }
 }
 
+export class FabricChecksumMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FabricChecksumMissingError";
+  }
+}
+
 export interface ParsedMavenCoordinate {
   group: string;
   artifact: string;
@@ -245,7 +252,7 @@ export function validateFabricRuntimeMetadata(
     // cache entry without a usable digest cannot establish the identity of the
     // bytes that Minecraft will load, so it must fail closed.
     if (lib.sha256 === undefined && lib.sha1 === undefined) {
-      throw new Error(
+      throw new FabricChecksumMissingError(
         `[FabricMeta] Library '${lib.name}' is missing an expected SHA-1 or SHA-256 checksum.`,
       );
     }
@@ -416,25 +423,40 @@ export class FabricMetaResolver {
       }
 
       // Strictly validate transformed metadata before caching
-      const metadata = validateFabricRuntimeMetadata(rawMetadata, runtime);
-
-      // Atomically persist to disk cache
-      if (cachePath) {
-        checkCachePathOwnership(cacheDir!, cachePath);
-        try {
-          prepareCacheDirectory(cacheDir!, cachePath);
-          await writeAtomicFile(cachePath, JSON.stringify(metadata, null, 2), {
-            encoding: "utf-8",
-          });
-        } catch (cacheErr) {
-          // A containment or ownership failure must fail closed. Only ordinary
-          // cache I/O failures remain non-fatal to a successful network response.
-          if (cacheErr instanceof PathContainmentError) throw cacheErr;
-          // Non-fatal cache write error
-        }
+      let metadata: FabricRuntimeMetadata | null = null;
+      try {
+        metadata = validateFabricRuntimeMetadata(rawMetadata, runtime);
+      } catch (validationErr) {
+        // Only unavailable sidecar checksums fall back to the exact cache. Any
+        // other validation failure is final.
+        if (!(validationErr instanceof FabricChecksumMissingError))
+          throw validationErr;
+        networkError = validationErr;
       }
 
-      return metadata;
+      if (metadata) {
+        // Atomically persist to disk cache
+        if (cachePath) {
+          checkCachePathOwnership(cacheDir!, cachePath);
+          try {
+            prepareCacheDirectory(cacheDir!, cachePath);
+            await writeAtomicFile(
+              cachePath,
+              JSON.stringify(metadata, null, 2),
+              {
+                encoding: "utf-8",
+              },
+            );
+          } catch (cacheErr) {
+            // A containment or ownership failure must fail closed. Only ordinary
+            // cache I/O failures remain non-fatal to a successful network response.
+            if (cacheErr instanceof PathContainmentError) throw cacheErr;
+            // Non-fatal cache write error
+          }
+        }
+
+        return metadata;
+      }
     }
 
     // Network failed or offline: check exact cache
@@ -460,6 +482,12 @@ export class FabricMetaResolver {
           `[FabricMeta] Network query failed (${networkError?.message}) and cached metadata at '${cachePath}' is corrupted: ${cacheErr.message}`,
         );
       }
+    }
+
+    // No exact cache exists, so report the checksum failure itself. The network
+    // response was not cached or returned because it lacked checksums.
+    if (networkError instanceof FabricChecksumMissingError) {
+      throw networkError;
     }
 
     throw new Error(
