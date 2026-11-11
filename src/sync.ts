@@ -16,7 +16,7 @@ import { app } from "electron";
 import { placeSeedFileIfAbsent, seedEntryExists } from "./seed-file";
 import { reconcileConfigPatches } from "./config-patches";
 import { LauncherLogger } from "./logger";
-import { AuthRequiredError } from "./ipc-boundary";
+import { AuthRequiredError, MainIpcError } from "./ipc-boundary";
 import { resolveRuntimeDefinition } from "./runtime-definition";
 import { runBoundedPool } from "./async-pool";
 import type {
@@ -204,6 +204,30 @@ interface CachedOfficialMods {
   key: string;
   fetchedAt: number;
   mods: any[];
+}
+
+/** Shown in the Mods tab when the Portal refuses the channel's mod list. */
+export const MOD_CATALOG_ACCESS_MESSAGES = {
+  signIn: "Sign in to see the mods for this channel.",
+  noAccess: "Your account doesn't have access to this channel.",
+} as const;
+
+/**
+ * Maps a Portal 401 or 403 on the mod catalog to an error whose message may
+ * cross the IPC boundary. Any other error is returned unchanged.
+ */
+export function modCatalogAccessError(error: unknown): unknown {
+  const status = httpStatus(error);
+  if (status === 401) {
+    return new AuthRequiredError(MOD_CATALOG_ACCESS_MESSAGES.signIn);
+  }
+  if (status === 403) {
+    return new MainIpcError(
+      MOD_CATALOG_ACCESS_MESSAGES.noAccess,
+      "CHANNEL_ACCESS_DENIED",
+    );
+  }
+  return error;
 }
 
 export class LauncherSync {
@@ -1293,10 +1317,19 @@ export class LauncherSync {
     const portalUrl = normalizePortalUrl(config.portalUrl);
     const channel = config.selectedChannel || "stable";
 
+    // The session token goes only to the Portal that issued it, so a changed
+    // portalUrl is fetched without credentials.
+    const token =
+      config.token && config.sessionPortalUrl === portalUrl
+        ? config.token
+        : undefined;
+
     // The official list only changes with the channel's release, so callers
     // (the Mods tab, every mod icon lookup) share one fetch per portal and
-    // channel. Local mods and toggles are applied fresh on every call.
-    const key = `${portalUrl}|${channel}`;
+    // channel. A list fetched with the session token is never reused for a
+    // request without one, or the reverse. Local mods and toggles are applied
+    // fresh on every call.
+    const key = `${portalUrl}|${channel}|${token ? "session" : "anonymous"}`;
     const cached = this.officialModsCache;
     if (
       cached &&
@@ -1308,7 +1341,7 @@ export class LauncherSync {
 
     let inFlight = this.officialModsInFlight;
     if (!inFlight || inFlight.key !== key) {
-      const promise = this.fetchOfficialMods(portalUrl, channel).then(
+      const promise = this.fetchOfficialMods(portalUrl, channel, token).then(
         (mods) => {
           if (mods && this.officialModsInFlight?.promise === promise) {
             this.officialModsCache = { key, fetchedAt: Date.now(), mods };
@@ -1334,21 +1367,33 @@ export class LauncherSync {
   /**
    * Fetches and validates the channel's official mod list. Resolves to null
    * on a transient network failure so callers can fall back to local metadata.
+   * A Portal denial (401, 403) rejects. `token` is the session token for this
+   * Portal, or undefined to fetch without credentials; every URL requested
+   * here is on the Portal's own origin.
    */
   private static async fetchOfficialMods(
     portalUrl: string,
     channel: string,
+    token?: string,
   ): Promise<any[] | null> {
+    const headers: Record<string, string> = {
+      "User-Agent": "Lampas-Launcher/1.0",
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
     try {
       const channelData = validateChannelResponse(
         await fetchPortalJsonWithRetry(
           `${portalUrl}/api/v1/channels/${channel}`,
+          headers,
         ),
         channel,
       );
       const release = validateReleaseDescriptor(
         await fetchPortalJsonWithRetry(
           metadataUrl(portalUrl, channelData.release, "channel release"),
+          headers,
         ),
       );
       if (release.version !== channelData.version) {
@@ -1362,6 +1407,7 @@ export class LauncherSync {
           release.clientManifest,
           "release client manifest",
         ),
+        headers,
       );
       this.assertProtocolSupported(release, manifest);
       validateClientManifest(manifest, release);

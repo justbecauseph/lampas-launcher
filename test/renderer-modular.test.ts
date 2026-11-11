@@ -726,4 +726,131 @@ describe("Phase 6 — Modular Renderer, Types, and Local Fonts", () => {
       (globalThis as any).window = prevWin;
     }
   });
+
+  test("Mods tab shows why the catalog was refused, then the list once it loads", async () => {
+    class MockNode {
+      innerHTML = "";
+      innerText = "";
+      dataset: Record<string, string> = {};
+      private listeners = new Map<string, Array<(event: unknown) => void>>();
+      classList = {
+        add: () => {},
+        remove: () => {},
+        contains: () => false,
+      };
+      addEventListener(event: string, handler: (event: unknown) => void) {
+        this.listeners.set(event, [
+          ...(this.listeners.get(event) ?? []),
+          handler,
+        ]);
+      }
+      removeEventListener() {}
+      click() {
+        for (const handler of this.listeners.get("click") ?? []) {
+          handler({ target: this });
+        }
+      }
+    }
+
+    const elements = new Map<string, MockNode>();
+    const reg = (id: string) => {
+      const el = new MockNode();
+      elements.set(id, el);
+      return el;
+    };
+    const grid = reg("mods-grid");
+    const navMods = reg("nav-mods");
+    reg("tab-mods");
+    const allPill = new MockNode();
+    allPill.dataset.filter = "all";
+
+    // What Electron hands the renderer when the main process rejects the call.
+    const rejectWith = (message: string) =>
+      new Error(
+        `Error invoking remote method 'sync:getModCatalog': Error: ${message}`,
+      );
+    let outcome: () => Promise<ModCatalogEntry[]> = async () => {
+      throw rejectWith("Sign in to see the mods for this channel.");
+    };
+
+    const prevDoc = (globalThis as any).document;
+    const prevWin = (globalThis as any).window;
+    const prevWarn = console.warn;
+    console.warn = () => {};
+    (globalThis as any).document = {
+      getElementById: (id: string) => elements.get(id) || null,
+      querySelectorAll: (selector: string) =>
+        selector === ".mod-filter-pill" ? [allPill] : [],
+      createElement: () => new MockNode(),
+    };
+    (globalThis as any).window = {
+      lampas: { sync: { getModCatalog: () => outcome() } },
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    try {
+      const dispose = initModsView({
+        showToast: () => {},
+        onModsChanged: () => {},
+      });
+      await settle();
+
+      expect(grid.innerHTML).toContain(
+        "Sign in to see the mods for this channel.",
+      );
+      expect(grid.innerHTML).not.toContain("Error invoking remote method");
+      expect(grid.innerHTML).not.toContain('<div class="mod-card"');
+
+      // Re-rendering (a filter click) keeps the reason on screen.
+      allPill.click();
+      expect(grid.innerHTML).toContain(
+        "Sign in to see the mods for this channel.",
+      );
+
+      // A refused channel: the main process's wording is shown as sent.
+      outcome = async () => {
+        throw rejectWith("Your account doesn't have access to this channel.");
+      };
+      navMods.click();
+      await settle();
+      expect(grid.innerHTML).toContain(
+        "Your account doesn&#39;t have access to this channel.",
+      );
+
+      // The generic main-process failure never reaches the page verbatim.
+      outcome = async () => {
+        throw rejectWith(
+          "Operation failed: An unexpected internal error occurred.",
+        );
+      };
+      navMods.click();
+      await settle();
+      expect(grid.innerHTML).not.toContain("unexpected internal error");
+      expect(grid.innerHTML).toContain("load the mod list. Open Logs");
+
+      // Opening the tab again after signing in loads the list.
+      outcome = async () => [
+        {
+          id: "dev-mod",
+          name: "Dev Mod",
+          filename: "dev-mod.jar",
+          side: "client",
+          source: "official",
+          kind: "mod",
+          enabled: true,
+          canDisable: true,
+        } as ModCatalogEntry,
+      ];
+      navMods.click();
+      await settle();
+      expect(grid.innerHTML).toContain('data-mod-id="dev-mod"');
+      expect(grid.innerHTML).not.toContain("load the mod list");
+
+      dispose();
+    } finally {
+      console.warn = prevWarn;
+      (globalThis as any).document = prevDoc;
+      (globalThis as any).window = prevWin;
+    }
+  });
 });

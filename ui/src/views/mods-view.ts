@@ -114,6 +114,8 @@ export function initModsView(options: ModsViewOptions): () => void {
   const btnAddModsLabel = document.getElementById("btn-add-mods-label");
 
   let allMods: NormalizedMod[] = [];
+  /** Why the catalog could not be loaded; shown while there is no list. */
+  let catalogError: string | null = null;
   let activeModFilter = "all";
   let activeModSearch = "";
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -262,9 +264,11 @@ export function initModsView(options: ModsViewOptions): () => void {
 
     if (filtered.length === 0) {
       const emptyText =
-        filter === "shader" && !query
-          ? "No shader packs yet. Drop a .zip above to add one."
-          : "No mods match your search.";
+        catalogError && allMods.length === 0
+          ? escapeHtml(catalogError)
+          : filter === "shader" && !query
+            ? "No shader packs yet. Drop a .zip above to add one."
+            : "No mods match your search.";
       modsGrid.innerHTML = `
         <div class="col-span-2 empty-state">
           ${emptyText}
@@ -354,10 +358,21 @@ export function initModsView(options: ModsViewOptions): () => void {
         _searchKey: precomputeSearchKey(mod),
       }));
       catalogLoaded = true;
+      catalogError = null;
       updateCounts();
       renderMods();
     } catch (err: any) {
       console.warn("Failed to load mod catalog:", err?.message || err);
+      // A list that is already on screen stays; with none, say why. The
+      // main process sends its own wording when the Portal asks for a
+      // sign-in or refuses the channel.
+      if (!catalogLoaded) {
+        catalogError = formatFriendlyError(
+          err,
+          "Couldn't load the mod list. Open Logs for details.",
+        );
+        renderMods();
+      }
     }
   }
 

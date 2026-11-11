@@ -18,7 +18,7 @@ import {
 } from "./game-files-removal";
 import { SessionManager } from "./session-manager";
 import { LauncherAuth } from "./auth";
-import { LauncherSync } from "./sync";
+import { LauncherSync, modCatalogAccessError } from "./sync";
 import {
   GameRunner,
   LAUNCH_SIGN_IN_MESSAGES,
@@ -165,6 +165,9 @@ const cosmeticImageBroker = new CosmeticImageBroker({
   resolveModIcon: createModIconResolver(() => LauncherSync.getModCatalog()),
 });
 SessionManager.addSessionListener((credentials) => {
+  // The official mod list is fetched with the session token, so a sign-in,
+  // sign-out or refreshed token must not reuse a list fetched before it.
+  LauncherSync.invalidateModCatalog();
   if (!credentials) cosmeticImageBroker.clear();
 });
 
@@ -1174,7 +1177,9 @@ void app.whenReady().then(async () => {
     }
   });
   registerSecureHandler("sync:getModCatalog", IpcSchemas.noArgs, () =>
-    LauncherSync.getModCatalog(),
+    LauncherSync.getModCatalog().catch((error) => {
+      throw modCatalogAccessError(error);
+    }),
   );
   registerSecureHandler("sync:getInstalledRuntime", IpcSchemas.noArgs, () => {
     const config = ConfigManager.get();

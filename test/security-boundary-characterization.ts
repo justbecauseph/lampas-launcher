@@ -2848,6 +2848,96 @@ try {
     },
   );
 
+  // [Regression Gate 1] Independent redirect: the Mods tab catalog sends the session token to Origin A only and rejects 302/307/308 redirects with 0 requests to B
+  await runTest(
+    "[Regression Gate 1] Independent redirect: Mods tab catalog metadata endpoints reject 302/307/308 redirects with 0 requests to B",
+    async () => {
+      const endpoints: Array<{
+        name: string;
+        matches: (url: string) => boolean;
+        setRedirect: (code: number) => void;
+      }> = [
+        {
+          name: "channel",
+          matches: (url) => url.startsWith("/api/v1/channels/"),
+          setRedirect: (code) => {
+            serverARedirectChannelToB = code;
+          },
+        },
+        {
+          name: "release",
+          matches: (url) => url === "/api/v1/releases/2.0.0",
+          setRedirect: (code) => {
+            serverARedirectReleaseToB = code;
+          },
+        },
+        {
+          name: "manifest",
+          matches: (url) => url.includes("/client-manifest"),
+          setRedirect: (code) => {
+            serverARedirectManifestToB = code;
+          },
+        },
+      ];
+
+      try {
+        for (const endpoint of endpoints) {
+          for (const code of [302, 307, 308]) {
+            const token = `mods-${endpoint.name}-tok-${code}`;
+            ConfigManager.establishSession(originAPortal, { token });
+            LauncherSync.invalidateModCatalog();
+            endpoint.setRedirect(code);
+            capturedRequests = [];
+            capturedRequestsA = [];
+
+            let policyErr: any = null;
+            try {
+              await LauncherSync.getModCatalog();
+            } catch (err: any) {
+              policyErr = err;
+            }
+            endpoint.setRedirect(0);
+
+            if (!policyErr) {
+              throw new Error(
+                `Expected getModCatalog to fail on ${endpoint.name} ${code} redirect`,
+              );
+            }
+            if (policyErr.name !== "PortalRedirectPolicyError") {
+              throw new Error(
+                `Expected PortalRedirectPolicyError, got: ${policyErr.name} (${policyErr.message})`,
+              );
+            }
+            // Positive control: the token was in play on the redirecting request.
+            const redirected = capturedRequestsA.find((r) =>
+              endpoint.matches(r.url || ""),
+            );
+            if (!redirected) {
+              throw new Error(
+                `Expected ${endpoint.name} request at Origin A for ${code}`,
+              );
+            }
+            if (redirected.headers["authorization"] !== `Bearer ${token}`) {
+              throw new Error(
+                `Expected the session token on the ${endpoint.name} request to Origin A, got: ${redirected.headers["authorization"]}`,
+              );
+            }
+            if (capturedRequests.length !== 0) {
+              throw new Error(
+                `Requests reached Destination B on Mods tab ${endpoint.name} ${code}! Captured: ${JSON.stringify(capturedRequests)}`,
+              );
+            }
+          }
+        }
+      } finally {
+        serverARedirectChannelToB = 0;
+        serverARedirectReleaseToB = 0;
+        serverARedirectManifestToB = 0;
+        LauncherSync.invalidateModCatalog();
+      }
+    },
+  );
+
   // 32. [Regression Gate 1] Legitimate file download follows safe redirect without auth headers
   await runTest(
     "[Regression Gate 1] Legitimate file download follows safe redirect without auth headers",

@@ -165,9 +165,9 @@ describe("Phase 1 Security Verification — Isolated Boundary Harness (SEC-01, S
         .split("\n")[0],
     );
 
-    expect(parsed.totalPassed).toBe(68);
+    expect(parsed.totalPassed).toBe(69);
     expect(parsed.totalSkipped).toBe(0);
-    expect(parsed.tests.length).toBe(68);
+    expect(parsed.tests.length).toBe(69);
     for (const t of parsed.tests) {
       expect(t.passed).toBe(true);
     }
