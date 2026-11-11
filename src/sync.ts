@@ -832,7 +832,7 @@ export class LauncherSync {
           if (fs.existsSync(cachePath)) {
             const cachedHash = await hashFile(cachePath, "sha256");
             if (
-              cachedHash === file.hashes.sha256 &&
+              cachedHash.toLowerCase() === file.hashes.sha256.toLowerCase() &&
               fs.statSync(cachePath).size === file.size
             ) {
               cached = true;
@@ -854,7 +854,7 @@ export class LauncherSync {
             operationId: syncGenerationId,
           });
           completedCount++;
-          bytesDownloaded += networkBytes;
+          bytesDownloaded += cached ? file.size || 0 : networkBytes;
 
           const status = cached ? "⚡ [Cache Hit]" : "✓ [Downloaded]";
           const sizeBytes = fs.existsSync(cachePath)
