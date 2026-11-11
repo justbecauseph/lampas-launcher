@@ -128,6 +128,76 @@ describe("launcher settings", () => {
     expect(ConfigManager.get().customShaderPacks).toEqual([]);
   });
 
+  test("a selection with a rejected file copies nothing, so it can be retried", () => {
+    const modsDir = path.join(testRoot, "game", "mods");
+    const goodMod = path.join(testRoot, "batch-good.jar");
+    fs.writeFileSync(goodMod, "good mod");
+    expect(() =>
+      ClientModManager.add([goodMod, path.join(testRoot, "batch-missing.jar")]),
+    ).toThrow("Mod file not found");
+    expect(fs.existsSync(path.join(modsDir, "batch-good.jar"))).toBe(false);
+    expect(ConfigManager.get().customClientMods).toEqual([]);
+    ClientModManager.add([goodMod]);
+    expect(
+      ConfigManager.get().customClientMods?.map((mod) => mod.filename),
+    ).toEqual(["batch-good.jar"]);
+
+    const shaderDir = path.join(testRoot, "game", "shaderpacks");
+    const goodPack = path.join(testRoot, "Batch.zip");
+    writeZip(goodPack);
+    const notZip = path.join(testRoot, "Batch-broken.zip");
+    fs.writeFileSync(notZip, "plain text");
+    expect(() => ShaderPackManager.add([goodPack, notZip])).toThrow(
+      "not a valid shader pack",
+    );
+    expect(fs.existsSync(path.join(shaderDir, "Batch.zip"))).toBe(false);
+    expect(ConfigManager.get().customShaderPacks).toEqual([]);
+    ShaderPackManager.add([goodPack]);
+    expect(
+      ConfigManager.get().customShaderPacks?.map((pack) => pack.filename),
+    ).toEqual(["Batch.zip"]);
+  });
+
+  test("a copy that fails midway removes the files copied in that call", () => {
+    const shaderDir = path.join(testRoot, "game", "shaderpacks");
+    const first = path.join(testRoot, "Midway-a.zip");
+    const second = path.join(testRoot, "Midway-b.zip");
+    writeZip(first);
+    writeZip(second);
+
+    const originalRename = fs.renameSync.bind(fs);
+    const renameSpy = spyOn(fs, "renameSync").mockImplementation(
+      (oldP: any, newP: any) => {
+        if (
+          path.basename(String(newP)) === "Midway-b.zip" &&
+          path.basename(String(oldP)).startsWith(".importing-")
+        ) {
+          throw new Error(
+            "Simulated disk failure during shader pack promotion",
+          );
+        }
+        return originalRename(oldP, newP);
+      },
+    );
+    try {
+      expect(() => ShaderPackManager.add([first, second])).toThrow(
+        "Simulated disk failure during shader pack promotion",
+      );
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(fs.existsSync(path.join(shaderDir, "Midway-a.zip"))).toBe(false);
+    expect(
+      fs.readdirSync(shaderDir).filter((f) => f.startsWith(".importing-")),
+    ).toEqual([]);
+    expect(ConfigManager.get().customShaderPacks).toEqual([]);
+    ShaderPackManager.add([first]);
+    expect(
+      ConfigManager.get().customShaderPacks?.map((pack) => pack.filename),
+    ).toEqual(["Midway-a.zip"]);
+  });
+
   test("rejects shader packs that are not ZIP archives or would overwrite pack files", () => {
     const fake = path.join(testRoot, "not-really.zip");
     fs.writeFileSync(fake, "plain text");
