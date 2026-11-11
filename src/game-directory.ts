@@ -1343,18 +1343,50 @@ export class GameDirectoryManager {
               } catch {}
             }
           } else {
-            // Staging could not be removed (for example, a lock inside it). Rewrite the
-            // journal to a pre-finalize phase so startup recovery discards staging and
-            // keeps the source. The in-memory phase stays "finalizing" so the outer
-            // catch does not delete this journal.
-            writeAtomicFileSync(
-              journalPath,
-              JSON.stringify(
-                { ...journalData, phase: "verifying", stagingVerified: false },
-                null,
-                2,
-              ),
-            );
+            // Staging could not be removed (for example, a lock inside it). A recursive rm can
+            // delete the staging marker before it fails, and startup recovery only discards
+            // staging that carries a matching marker. Restore the marker, then rewrite the
+            // journal to a pre-finalize phase so startup recovery discards staging and keeps
+            // the source. The in-memory phase stays "finalizing" so the outer catch does not
+            // delete this journal.
+            try {
+              checkPhysicalAncestrySync(
+                path.dirname(journalData.staging),
+                journalData.staging,
+                { disallowSymlinks: true, enforceOwnership: false },
+              );
+              const marker = readStagingMarker(journalData.staging);
+              if (
+                !marker ||
+                marker.operationId !== journalData.operationId ||
+                marker.source !== journalData.source ||
+                marker.target !== journalData.target
+              ) {
+                writeStagingMarker(journalData.staging, {
+                  operationId: journalData.operationId,
+                  source: journalData.source,
+                  target: journalData.target,
+                  staging: journalData.staging,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+              writeAtomicFileSync(
+                journalPath,
+                JSON.stringify(
+                  {
+                    ...journalData,
+                    phase: "verifying",
+                    stagingVerified: false,
+                  },
+                  null,
+                  2,
+                ),
+              );
+            } catch (keepErr: any) {
+              LauncherLogger.error(
+                `Move promotion failed and the journal could not be reset for staging cleanup: ${keepErr.message}`,
+              );
+            }
           }
         }
         throw promoteErr;

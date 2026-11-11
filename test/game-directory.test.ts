@@ -26,7 +26,7 @@ mock.module("electron", () => ({
 }));
 
 const { ConfigManager, getDefaultGameDir } = await import("../src/config");
-const { GameDirectoryManager, writeStagingMarker } =
+const { GameDirectoryManager, STAGING_MARKER_FILENAME, writeStagingMarker } =
   await import("../src/game-directory");
 const { GameRunner } = await import("../src/game-runner");
 const { OperationCoordinator } = await import("../src/operations");
@@ -1000,13 +1000,17 @@ describe("GameDirectoryManager & Installation Relocation", () => {
         throw err;
       },
     );
-    // A lock inside the staging folder: removal fails and leaves the folder in place.
+    // A lock inside the staging folder: a recursive rm deletes the marker before it
+    // reaches the locked file, so removal fails and leaves the folder in place.
     const rmSpy = spyOn(fs.promises, "rm").mockImplementation(
       async (p, options) => {
         if (
           stagingPath !== undefined &&
           path.resolve(String(p)) === path.resolve(stagingPath)
         ) {
+          await realRm(path.join(stagingPath, STAGING_MARKER_FILENAME), {
+            force: true,
+          });
           const err: any = new Error("EBUSY: resource busy or locked");
           err.code = "EBUSY";
           throw err;
