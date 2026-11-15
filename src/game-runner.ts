@@ -537,11 +537,20 @@ export class GameRunner {
       const classpathString = classpath.join(cpSeparator);
 
       const customJavaArgs = parseJavaArgs(activeConfig.javaArgs || "");
-      const autoConnectServer =
+      let autoConnectServer: string | undefined =
         release?.launch?.autoConnect && release.launch.server
           ? release.launch.server.trim()
           : undefined;
-      if (autoConnectServer && !isValidServerAddress(autoConnectServer)) {
+      if (autoConnectServer && activeConfig.skipAutoJoin) {
+        log(
+          "INFO",
+          "Auto-join is turned off in Settings; starting at the title screen.",
+        );
+        autoConnectServer = undefined;
+      } else if (
+        autoConnectServer &&
+        !isValidServerAddress(autoConnectServer)
+      ) {
         log(
           "ERROR",
           `Invalid auto-connect server address configured: '${autoConnectServer}'`,

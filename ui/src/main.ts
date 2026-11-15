@@ -115,6 +115,7 @@ async function startApp(): Promise<void> {
     noSync: false,
     externalImages: true,
     closeOnGameStart: false,
+    skipAutoJoin: false,
   };
 
   // Initialize Console View

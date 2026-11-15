@@ -86,6 +86,7 @@ function toRendererSettingsDto(config: LauncherConfig): RendererSettingsDto {
     noSync: config.noSync,
     externalImages: Boolean(config.externalImages),
     closeOnGameStart: Boolean(config.closeOnGameStart),
+    skipAutoJoin: Boolean(config.skipAutoJoin),
   };
 }
 

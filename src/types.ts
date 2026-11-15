@@ -60,6 +60,7 @@ export interface LauncherConfig {
   noSync?: boolean;
   externalImages?: boolean;
   closeOnGameStart?: boolean;
+  skipAutoJoin?: boolean;
   token?: string;
   refreshToken?: string;
   minecraftAccessToken?: string;
@@ -287,6 +288,7 @@ export interface RendererSettingsDto {
   noSync?: boolean;
   externalImages: boolean;
   closeOnGameStart: boolean;
+  skipAutoJoin: boolean;
 }
 
 export interface ModCatalogEntry {
@@ -342,6 +344,7 @@ export interface UpdateSettingsDto {
   javaArgs?: string;
   externalImages?: boolean;
   closeOnGameStart?: boolean;
+  skipAutoJoin?: boolean;
 }
 
 export interface ClearCredentialsResult {

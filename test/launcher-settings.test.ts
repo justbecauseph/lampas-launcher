@@ -304,6 +304,23 @@ describe("launcher settings", () => {
     expect(ConfigManager.get().closeOnGameStart).toBe(false);
   });
 
+  test("skipping auto-join to the server is off by default", () => {
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().skipAutoJoin).toBe(false);
+  });
+
+  test("skipAutoJoin set to true persists across re-reading from disk", () => {
+    ConfigManager.set({ skipAutoJoin: true });
+    expect(ConfigManager.get().skipAutoJoin).toBe(true);
+
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().skipAutoJoin).toBe(true);
+
+    ConfigManager.set({ skipAutoJoin: false });
+    ConfigManager.resetForTesting();
+    expect(ConfigManager.get().skipAutoJoin).toBe(false);
+  });
+
   test("closeOnGameStart set to true persists across re-reading from disk", () => {
     ConfigManager.set({ closeOnGameStart: true });
     expect(ConfigManager.get().closeOnGameStart).toBe(true);
@@ -476,6 +493,13 @@ describe("config.json shape validation on load", () => {
     );
   });
 
+  test("drops a non-boolean skipAutoJoin and loads the default off", () => {
+    for (const bad of ["yes", "true", 1, 0, null, ["true"]]) {
+      expect(loadFromDisk({ skipAutoJoin: bad }).skipAutoJoin).toBe(false);
+    }
+    expect(loadFromDisk({ skipAutoJoin: true }).skipAutoJoin).toBe(true);
+  });
+
   test("does not carry unknown keys onto the loaded config", () => {
     // Raw JSON, because an object literal's __proto__ would not serialize.
     const config = loadFromDisk(
@@ -540,6 +564,7 @@ describe("config.json shape validation on load", () => {
       noSync: true,
       externalImages: false,
       closeOnGameStart: true,
+      skipAutoJoin: true,
     };
 
     expect(loadFromDisk(valid)).toEqual(valid);

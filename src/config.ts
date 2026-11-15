@@ -148,6 +148,7 @@ const DEFAULT_CONFIG: LauncherConfig = {
   noSync: false,
   externalImages: true,
   closeOnGameStart: false,
+  skipAutoJoin: false,
 };
 
 import { normalizePortalUrl } from "./portal-policy";
@@ -209,6 +210,7 @@ const KNOWN_CONFIG_KEY_LIST = [
   "noSync",
   "externalImages",
   "closeOnGameStart",
+  "skipAutoJoin",
 ] as const satisfies readonly PersistedConfigKey[];
 
 // Compile-time check: a key added to LauncherConfig must also be listed above,
@@ -310,6 +312,7 @@ function sanitizeLoadedConfig(parsed: unknown): {
     "noSync",
     "externalImages",
     "closeOnGameStart",
+    "skipAutoJoin",
   ] as const) {
     if (!has(key)) continue;
     const v = parsed[key];
@@ -521,6 +524,7 @@ export class ConfigManager {
     loaded.noSync = Boolean(loaded.noSync);
     loaded.externalImages = Boolean(loaded.externalImages);
     loaded.closeOnGameStart = Boolean(loaded.closeOnGameStart);
+    loaded.skipAutoJoin = Boolean(loaded.skipAutoJoin);
     this.cachedConfig = loaded;
     if (gameDirRedirected) {
       try {

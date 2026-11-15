@@ -124,6 +124,9 @@ export function initSettingsView(options: SettingsViewOptions): {
   const settingCloseOnGameStart = document.getElementById(
     "setting-close-on-game-start",
   ) as HTMLInputElement | null;
+  const settingSkipAutoJoin = document.getElementById(
+    "setting-skip-auto-join",
+  ) as HTMLInputElement | null;
   const channelBtns =
     document.querySelectorAll<HTMLButtonElement>(".channel-btn");
   const titlebarChannelBadge = document.getElementById(
@@ -372,6 +375,8 @@ export function initSettingsView(options: SettingsViewOptions): {
       settingExternalImages.checked = Boolean(config.externalImages);
     if (settingCloseOnGameStart)
       settingCloseOnGameStart.checked = Boolean(config.closeOnGameStart);
+    if (settingSkipAutoJoin)
+      settingSkipAutoJoin.checked = Boolean(config.skipAutoJoin);
 
     updateNoSyncUI(config.noSync);
     applyChannel(config.selectedChannel || "stable");
@@ -488,6 +493,25 @@ export function initSettingsView(options: SettingsViewOptions): {
         settingCloseOnGameStart.checked = Boolean(
           currentConfig?.closeOnGameStart,
         );
+        showToast(
+          `Couldn't change this setting: ${formatFriendlyError(err)}`,
+          "error",
+        );
+      }
+    };
+  }
+
+  if (settingSkipAutoJoin) {
+    settingSkipAutoJoin.onchange = async () => {
+      try {
+        const updated = await window.lampas.config.set({
+          skipAutoJoin: settingSkipAutoJoin.checked,
+        });
+        currentConfig = updated;
+        onConfigChanged(updated);
+        flashSaved();
+      } catch (err: any) {
+        settingSkipAutoJoin.checked = Boolean(currentConfig?.skipAutoJoin);
         showToast(
           `Couldn't change this setting: ${formatFriendlyError(err)}`,
           "error",

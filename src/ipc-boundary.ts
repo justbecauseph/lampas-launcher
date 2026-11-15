@@ -1158,6 +1158,7 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "javaArgs",
   "externalImages",
   "closeOnGameStart",
+  "skipAutoJoin",
 ]);
 
 export function validateConfigSet(payload: unknown): UpdateSettingsDto {
@@ -1246,6 +1247,13 @@ export function validateConfigSet(payload: unknown): UpdateSettingsDto {
       throw new IpcValidationError("closeOnGameStart must be a boolean.");
     }
     sanitized.closeOnGameStart = raw.closeOnGameStart;
+  }
+
+  if (raw.skipAutoJoin !== undefined) {
+    if (typeof raw.skipAutoJoin !== "boolean") {
+      throw new IpcValidationError("skipAutoJoin must be a boolean.");
+    }
+    sanitized.skipAutoJoin = raw.skipAutoJoin;
   }
 
   if (raw.javaPath !== undefined) {

@@ -228,6 +228,46 @@ describe("GameRunner launch flow & Quick Play", () => {
     expect(jvmArgs[qpIndex + 1]).toBe("play.lampas.town:25565");
   });
 
+  test("skipAutoJoin=true keeps --quickPlayMultiplayer off even when autoConnect is on", async () => {
+    spawnedCalls = [];
+    const release: ReleaseDescriptor = {
+      schemaVersion: 1,
+      pack: "Lampas 2",
+      version: "2.0.0",
+      minecraft: "26.2",
+      loader: { type: "fabric", version: "0.19.3" },
+      minimumLauncherVersion: "1.1.0",
+      protocol: 2,
+      created: new Date().toISOString(),
+      clientManifest: "/manifest",
+      serverManifest: "/server-manifest",
+      launch: {
+        autoConnect: true,
+        server: "play.lampas.town:25565",
+      },
+    };
+
+    let launched: boolean;
+    ConfigManager.set({ skipAutoJoin: true });
+    try {
+      launched = await GameRunner.launchGame(
+        dummyUser,
+        () => {},
+        () => {},
+        release,
+      );
+    } finally {
+      // Config persists to disk and would leak into later tests.
+      ConfigManager.set({ skipAutoJoin: false });
+    }
+
+    expect(launched).toBe(true);
+    expect(spawnedCalls.length).toBe(1);
+    const { jvmArgs } = spawnedCalls[0];
+    expect(jvmArgs.includes("--quickPlayMultiplayer")).toBe(false);
+    expect(jvmArgs.includes("play.lampas.town:25565")).toBe(false);
+  });
+
   test("autoConnect=false does not append --quickPlayMultiplayer", async () => {
     spawnedCalls = [];
     const release: ReleaseDescriptor = {
