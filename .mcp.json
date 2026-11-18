@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lampas-kb": {
+      "type": "http",
+      "url": "https://kb.lampas.town/mcp",
+      "headers": {
+        "Authorization": "Bearer ${LAMPAS_KB_TOKEN:-}"
+      }
+    }
+  }
+}

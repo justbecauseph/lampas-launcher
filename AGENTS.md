@@ -29,3 +29,7 @@ release. Add a tool name to select part of the graph. For example, run
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
 
 <!--VITE PLUS END-->
+
+## Lampas knowledgebase (lampas-kb)
+
+`.mcp.json` connects the `lampas-kb` MCP server at `https://kb.lampas.town/mcp`; it needs a token from https://kb.lampas.town/auth/token in the `LAMPAS_KB_TOKEN` environment variable ([kb README](https://github.com/justbecauseph/lampas-two-kb/blob/main/kb/README.md#mcp-server-lampas-kb)). Ask it before stating what is deployed, decided or designed for Lampas 2 outside this repository: take versions from its `status` tool, attribute discussion to the person who said it, and treat plans as intent.
