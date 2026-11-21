@@ -248,6 +248,89 @@ describe("Phase 4 metadata preflight", () => {
   });
 });
 
+describe("client manifest configPatch modId", () => {
+  const validatedRelease = validateReleaseDescriptor(release);
+  const modPatch = (modId: unknown) => ({
+    id: "example-patch",
+    revision: 1,
+    path: "config/example.json",
+    adapter: "json",
+    mode: "enforce",
+    missingFile: "defer",
+    modId,
+    operations: [{ op: "set", path: ["enabled"], value: true }],
+  });
+
+  test("accepts a modId that names an entry in manifest.mods", () => {
+    expect(() =>
+      validateClientManifest(
+        manifest({ configPatches: [modPatch("example")] }),
+        validatedRelease,
+      ),
+    ).not.toThrow();
+  });
+
+  test("rejects a modId that names no entry in manifest.mods", () => {
+    expect(() =>
+      validateClientManifest(
+        manifest({ configPatches: [modPatch("other-mod")] }),
+        validatedRelease,
+      ),
+    ).toThrow(/modId 'other-mod' does not match any entry in manifest\.mods/);
+  });
+
+  test("rejects a modId when the manifest has no mods field", () => {
+    const { mods: _mods, ...withoutMods } = manifest();
+    expect(() =>
+      validateClientManifest(
+        { ...withoutMods, configPatches: [modPatch("example")] },
+        validatedRelease,
+      ),
+    ).toThrow(/does not match any entry in manifest\.mods/);
+  });
+
+  test("accepts a patch without modId when the manifest has no mods field", () => {
+    const { mods: _mods, ...withoutMods } = manifest();
+    const { modId: _modId, ...plainPatch } = modPatch("example");
+    expect(() =>
+      validateClientManifest(
+        { ...withoutMods, configPatches: [plainPatch] },
+        validatedRelease,
+      ),
+    ).not.toThrow();
+  });
+
+  test("rejects a malformed modId: empty, surrounding whitespace, control characters, DEL, a non-string, or over 128 characters", () => {
+    for (const bad of [
+      "",
+      " example",
+      "example ",
+      "exa\u0001mple",
+      "exa\u007fmple",
+      42,
+      "a".repeat(129),
+    ]) {
+      expect(() =>
+        validateClientManifest(
+          manifest({ configPatches: [modPatch(bad)] }),
+          validatedRelease,
+        ),
+      ).toThrow(/modId/);
+    }
+  });
+
+  test("accepts a 128-character modId that matches a mod", () => {
+    const longId = "a".repeat(128);
+    const mods = [{ ...manifest().mods[0], id: longId }];
+    expect(() =>
+      validateClientManifest(
+        manifest({ mods, configPatches: [modPatch(longId)] }),
+        validatedRelease,
+      ),
+    ).not.toThrow();
+  });
+});
+
 afterAll(() => {
   fs.rmSync(testRoot, { recursive: true, force: true });
 });

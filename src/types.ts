@@ -233,6 +233,8 @@ export interface ConfigPatch {
   adapter: string;
   mode: ConfigPatchMode;
   missingFile: MissingFilePolicy;
+  /** Mod that owns the patch. A patch whose mod is disabled is deferred. */
+  modId?: string;
   operations: ConfigOperation[];
 }
 

@@ -243,7 +243,7 @@ describe("reconcileConfigPatches on options.txt keybinds", () => {
     expect(res.appliedState["unbind-snappy-tappy"]).toBeUndefined();
   });
 
-  test("defers without writing when the key line is absent", async () => {
+  test("defers without writing when the key is absent and options.txt has no version line", async () => {
     const source = "guiScale:2\nfov:0.0\n";
     fs.writeFileSync(optionsPath, source, "utf-8");
 
@@ -436,7 +436,7 @@ describe("keybind rewrite: line endings and matching", () => {
     );
   });
 
-  test("a lone CR inside a key line's value does not match, so the key counts as missing and the patch defers", async () => {
+  test("a lone CR inside a key line's value makes the key malformed, so the patch defers without writing", async () => {
     const source = "key_a:x\rkey_b:y\n";
     fs.writeFileSync(optionsPath, source, "utf-8");
     const res = await reconcileConfigPatches({
@@ -485,6 +485,226 @@ describe("keybind rewrite: line endings and matching", () => {
     expect(res.appliedCount).toBe(1);
     expect(fs.readFileSync(optionsPath, "utf-8")).toBe(
       `  ${SNAPPY_KEY}: key.keyboard.unknown\n`,
+    );
+  });
+});
+
+describe("keybind append: an absent key is added when options.txt has a version line", () => {
+  let gameDir: string;
+  let optionsPath: string;
+  const VERSION = "version:4903";
+  const APPENDED_SNAPPY = `${SNAPPY_KEY}:key.keyboard.unknown`;
+
+  beforeEach(() => {
+    gameDir = fs.mkdtempSync(path.join(testRoot, "game-"));
+    optionsPath = path.join(gameDir, "options.txt");
+  });
+
+  afterEach(() => {
+    fs.rmSync(gameDir, { recursive: true, force: true });
+  });
+
+  test("LF file with a trailing newline gets the new line last, with a newline", async () => {
+    fs.writeFileSync(optionsPath, `${VERSION}\nguiScale:2\n`, "utf-8");
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    expect(res.appliedCount).toBe(1);
+    expect(res.deferredCount).toBe(0);
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(
+      `${VERSION}\nguiScale:2\n${APPENDED_SNAPPY}\n`,
+    );
+    expect(res.appliedState["unbind-snappy-tappy"]).toEqual({
+      revision: 3,
+      appliedAt: expect.any(String),
+    });
+  });
+
+  test("CRLF file with a trailing newline gets a CRLF-terminated new line", async () => {
+    fs.writeFileSync(optionsPath, `${VERSION}\r\nguiScale:2\r\n`, "utf-8");
+    await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(
+      `${VERSION}\r\nguiScale:2\r\n${APPENDED_SNAPPY}\r\n`,
+    );
+  });
+
+  test("LF file without a trailing newline stays without one", async () => {
+    fs.writeFileSync(optionsPath, `${VERSION}\nguiScale:2`, "utf-8");
+    await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(
+      `${VERSION}\nguiScale:2\n${APPENDED_SNAPPY}`,
+    );
+  });
+
+  test("CRLF file without a trailing newline gives the last line its CR and stays without a final newline", async () => {
+    fs.writeFileSync(optionsPath, `${VERSION}\r\nguiScale:2`, "utf-8");
+    await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(
+      `${VERSION}\r\nguiScale:2\r\n${APPENDED_SNAPPY}`,
+    );
+  });
+
+  test("a second run after the append is unchanged and leaves the bytes identical", async () => {
+    fs.writeFileSync(optionsPath, `${VERSION}\nguiScale:2\n`, "utf-8");
+    await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    const afterFirst = fs.readFileSync(optionsPath);
+
+    const second = await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    expect(second.appliedCount).toBe(0);
+    expect(second.unchangedCount).toBe(1);
+    expect(fs.readFileSync(optionsPath).equals(afterFirst)).toBe(true);
+  });
+
+  test("a once patch does not rewrite a key the player rebinds after the append", async () => {
+    fs.writeFileSync(optionsPath, `${VERSION}\n`, "utf-8");
+    const first = await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    expect(first.appliedCount).toBe(1);
+
+    const rebound = `${VERSION}\n${SNAPPY_KEY}:key.keyboard.f6\n`;
+    fs.writeFileSync(optionsPath, rebound, "utf-8");
+
+    const second = await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(first.appliedState),
+    });
+    expect(second.appliedCount).toBe(0);
+    expect(second.unchangedCount).toBe(1);
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(rebound);
+  });
+
+  test("a version line with a non-integer value does not allow the append, and the patch defers", async () => {
+    const source = "version:4903.1\nguiScale:2\n";
+    fs.writeFileSync(optionsPath, source, "utf-8");
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [keybindPatch()],
+      prevState: emptyState(),
+    });
+    expect(res.deferredCount).toBe(1);
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(source);
+  });
+
+  test("a key line with a lone CR is malformed even when version is present, so nothing is appended", async () => {
+    const source = `${VERSION}\nkey_a:x\rkey_b:y\n`;
+    fs.writeFileSync(optionsPath, source, "utf-8");
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [
+        keybindPatch({
+          operations: [
+            { op: "set", path: ["key_a"], value: "key.keyboard.unknown" },
+          ],
+        }),
+      ],
+      prevState: emptyState(),
+    });
+    expect(res.deferredCount).toBe(1);
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(source);
+  });
+
+  test("a multi-key patch rewrites the present key in place and appends the absent one", async () => {
+    fs.writeFileSync(
+      optionsPath,
+      `${VERSION}\n${SNAPPY_KEY}:key.keyboard.grave.accent\nfov:0.0\n`,
+      "utf-8",
+    );
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [
+        keybindPatch({
+          operations: [
+            {
+              op: "set",
+              path: [SNAPPY_KEY],
+              value: "key.keyboard.unknown",
+            },
+            { op: "set", path: [FIGURA_KEY], value: "key.keyboard.f6" },
+          ],
+        }),
+      ],
+      prevState: emptyState(),
+    });
+    expect(res.appliedCount).toBe(1);
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(
+      `${VERSION}\n${APPENDED_SNAPPY}\nfov:0.0\n${FIGURA_KEY}:key.keyboard.f6\n`,
+    );
+  });
+
+  test("a deferred key leaves the file untouched even when an earlier key in the same patch would change", async () => {
+    const source = `${SNAPPY_KEY}:key.keyboard.grave.accent\nfov:0.0\n`;
+    fs.writeFileSync(optionsPath, source, "utf-8");
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [
+        keybindPatch({
+          operations: [
+            {
+              op: "set",
+              path: [SNAPPY_KEY],
+              value: "key.keyboard.unknown",
+            },
+            { op: "set", path: [FIGURA_KEY], value: "key.keyboard.f6" },
+          ],
+        }),
+      ],
+      prevState: emptyState(),
+    });
+    expect(res.deferredCount).toBe(1);
+    expect(res.appliedCount).toBe(0);
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(source);
+  });
+
+  test("two operations on the same absent key append one line, not two", async () => {
+    fs.writeFileSync(optionsPath, `${VERSION}\n`, "utf-8");
+    await reconcileConfigPatches({
+      gameDir,
+      patches: [
+        keybindPatch({
+          operations: [
+            {
+              op: "set",
+              path: [SNAPPY_KEY],
+              value: "key.keyboard.unknown",
+            },
+            {
+              op: "set",
+              path: [SNAPPY_KEY],
+              value: "key.keyboard.unknown",
+            },
+          ],
+        }),
+      ],
+      prevState: emptyState(),
+    });
+    expect(fs.readFileSync(optionsPath, "utf-8")).toBe(
+      `${VERSION}\n${APPENDED_SNAPPY}\n`,
     );
   });
 });

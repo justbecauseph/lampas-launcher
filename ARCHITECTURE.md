@@ -83,11 +83,14 @@ The launcher handles this as follows:
 ### File ownership
 
 - **`MANAGED`:** Lampas owns the whole file. It is synchronized and verified, and removed when the pack drops it.
-- **`PRESERVE`:** the player or the mod owns the file. Lampas only seeds it when missing.
+- **`PRESERVE`:** the player or the mod owns the file. Lampas places the pack's copy only when nothing exists at the path, including a symlink or dangling symlink. An existing entry is never replaced, during sync or Repair.
+- **`PRESERVE` with a config patch:** allowed on non-protected paths such as `config/*.json`. Sync places the seed when it is missing, then the patch applies to it. `MANAGED`, `OPTIONAL` and `GENERATED` files cannot share a path with a config patch.
 - **Config patch, `enforce`:** the player owns the file; Lampas keeps the declared properties set and leaves everything else, comments and formatting intact.
 - **Config patch, `once`:** Lampas sets recommended values once, then leaves them alone.
+- **Config patch `modId`:** a patch that names a client mod is deferred, with no file change and no `once` record, while that mod is disabled. Its `modId` must match an entry in the manifest's `mods`.
+- **Keybind patch on `options.txt`:** rewrites the value of every existing line for its key. A key with no line is appended at the end of the file only when `options.txt` has a `version:<int>` line. Without that line, or when a key's line cannot be parsed, the patch defers and the file is left unchanged.
 - **Pack seeds** (`options.txt`, `servers.dat`) are placed only when the player has none, and are never recorded as managed.
-- **Player data** is never synchronized over: `saves/`, `screenshots/`, `logs/`, `crash-reports/`, `options.txt`, `servers.dat`, `usercache.json`, `hotbar.nbt` and `realms_persistence.json` (`PROTECTED_PLAYER_DATA` in `src/path-policy.ts`). Keybind patches change only the declared key lines in `options.txt`, once.
+- **Player data** is never synchronized over: `saves/`, `screenshots/`, `logs/`, `crash-reports/`, `options.txt`, `servers.dat`, `usercache.json`, `hotbar.nbt` and `realms_persistence.json` (`PROTECTED_PLAYER_DATA` in `src/path-policy.ts`). Keybind patches change only the declared key lines in `options.txt`, once, and append missing ones as described above.
 
 ## Fabric runtime
 

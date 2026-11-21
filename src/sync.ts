@@ -533,13 +533,14 @@ export class LauncherSync {
     }
 
     const disabledClientMods = new Set(config.disabledClientMods || []);
-    const disabledFilenames = new Set(
-      (manifest.mods || [])
-        .filter(
-          (mod: any) => mod.side === "client" && disabledClientMods.has(mod.id),
-        )
-        .map((mod: any) => mod.filename),
+    const disabledMods: any[] = (manifest.mods || []).filter(
+      (mod: any) => mod.side === "client" && disabledClientMods.has(mod.id),
     );
+    const disabledFilenames = new Set(disabledMods.map((mod) => mod.filename));
+    // Config patches that name one of these mods are deferred in Step 9. The
+    // raw config list is not used, so a stale id for an enabled or required mod
+    // does not defer its patch.
+    const disabledModIds = new Set<string>(disabledMods.map((mod) => mod.id));
     const manifestFiles: any[] = (manifest.files || []).filter(
       (file: any) => !disabledFilenames.has(path.basename(file.path)),
     );
@@ -608,17 +609,14 @@ export class LauncherSync {
         const localPath = path.join(gameDir, file.path);
         const policy = file.policy || "MANAGED";
 
-        // A pack seed is never fetched when any entry exists at its path, including
-        // a dangling symlink. lstat does not follow the link.
-        if (
-          isPreservedSeedFile(file.path, policy) &&
-          (await seedEntryExists(localPath))
-        ) {
+        // A PRESERVE file is never fetched when any entry exists at its path,
+        // including a dangling symlink. lstat does not follow the link.
+        if (policy === "PRESERVE" && (await seedEntryExists(localPath))) {
           checkResults[index] = { file, needDownload: false };
           return;
         }
 
-        if (policy === "PRESERVE" || isPathProtected(file.path)) {
+        if (isPathProtected(file.path)) {
           if (fs.existsSync(localPath)) {
             checkResults[index] = { file, needDownload: false };
             return;
@@ -930,27 +928,30 @@ export class LauncherSync {
           expectedCategory: "RESERVED_INTERNAL",
         });
         const destPath = resolveAndContainPath(gameDir, file.path);
-        // A pack seed (options.txt or servers.dat) is placed only where the player has none.
-        const isSeedFile = isPreservedSeedFile(file.path, file.policy);
+        // A PRESERVE file is placed only where the player has no entry. Once
+        // placed, the player owns it, so it is never replaced.
+        const isPreserved = file.policy === "PRESERVE";
         // lstat first: any existing entry (file, directory, symlink, dangling
         // symlink) belongs to the player. It is kept, never followed or replaced.
-        if (isSeedFile && (await seedEntryExists(destPath))) {
+        if (isPreserved && (await seedEntryExists(destPath))) {
           LauncherLogger.info(
             `  [Kept] ${file.path} already exists; the player's file is not overwritten`,
           );
           continue;
         }
+        // Protected seeds (options.txt, servers.dat) must sit in the player-data
+        // category. Other PRESERVE files and MANAGED files get the ownership check.
         await checkPhysicalAncestry(
           gameDir,
           destPath,
-          isSeedFile
+          isPreservedSeedFile(file.path, file.policy)
             ? {
                 expectedCategory: "PROTECTED_PLAYER_DATA",
                 disallowSymlinks: true,
               }
             : { enforceOwnership: true, disallowSymlinks: true },
         );
-        if (isSeedFile) {
+        if (isPreserved) {
           // Exclusive create: a player file that appears after the metadata check
           // is kept, never replaced.
           const placement = await placeSeedFileIfAbsent(cachePath, destPath);
@@ -1061,6 +1062,7 @@ export class LauncherSync {
         gameDir,
         patches: configPatches,
         prevState,
+        disabledModIds,
       });
       updatedAppliedPatches = patchResult.appliedState;
     }

@@ -36,6 +36,25 @@ function groupLogicalLines(lines: string[]): string[][] {
   return groups;
 }
 
+// Chooses the separator for a key appended to the file: `=`, `: ` or `:`. It
+// is taken from the last key/value line, so a `:` file stays a `:` file. A file
+// with no key/value line gets `=`.
+function appendDelimiter(groups: string[][]): string {
+  let delimiter = "=";
+  for (const group of groups) {
+    const line = group[0];
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || trimmed.startsWith("!") || trimmed === "")
+      continue;
+    const match = line.match(/^([ \t]*)([^=: \t]+)([ \t]*[=:][ \t]*)(.*)$/);
+    if (!match) continue;
+    const separator = match[3];
+    if (separator.includes("=")) delimiter = "=";
+    else delimiter = /[ \t]$/.test(separator) ? ": " : ":";
+  }
+  return delimiter;
+}
+
 export class PropertiesConfigAdapter implements ConfigPatchAdapter {
   readonly canCreate = true;
 
@@ -114,7 +133,7 @@ export class PropertiesConfigAdapter implements ConfigPatchAdapter {
           ) {
             newLines.push("");
           }
-          newLines.push(`${key}=${targetVal}`);
+          newLines.push(`${key}${appendDelimiter(groups)}${targetVal}`);
           changed = true;
           details.push(`${key}: (unset) → ${targetVal}`);
         }

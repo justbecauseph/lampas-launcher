@@ -530,11 +530,28 @@ function validateConfigPatch(value: unknown, index: number): ConfigPatch {
   const patch = record(value, context);
   keys(
     patch,
-    ["id", "revision", "path", "adapter", "mode", "missingFile", "operations"],
+    [
+      "id",
+      "revision",
+      "path",
+      "adapter",
+      "mode",
+      "missingFile",
+      "modId",
+      "operations",
+    ],
     context,
   );
   const id = stringValue(patch.id, `${context}.id`, MAX_ID);
   const revision = integer(patch.revision, `${context}.revision`, 1);
+  // stringValue rejects control characters and DEL. Surrounding whitespace is
+  // rejected here so that a modId matches its manifest.mods entry exactly.
+  let modId: string | undefined;
+  if (patch.modId !== undefined) {
+    modId = stringValue(patch.modId, `${context}.modId`, MAX_ID);
+    if (modId !== modId.trim())
+      fail(`${context}.modId must not have leading or trailing whitespace.`);
+  }
   const patchPath = canonicalizeRelativePath(
     stringValue(patch.path, `${context}.path`, 1024),
   );
@@ -610,6 +627,7 @@ function validateConfigPatch(value: unknown, index: number): ConfigPatch {
     adapter,
     mode: patch.mode as ConfigPatch["mode"],
     missingFile: patch.missingFile as ConfigPatch["missingFile"],
+    ...(modId === undefined ? {} : { modId }),
     operations: operations as ConfigPatch["operations"],
   };
 }
@@ -731,6 +749,7 @@ export function validateClientManifest(
       ? []
       : boundedArray(manifest.mods, "client manifest.mods");
   mods.forEach(validateMod);
+  const modIds = new Set(mods.map((mod) => String((mod as JsonRecord).id)));
   const fileSizes = files.map((item, index) => validateFile(item, index));
   const totalFileBytes = fileSizes.reduce((sum, size) => sum + size, 0);
   if (totalFileBytes > MAX_TOTAL_FILE_BYTES)
@@ -750,6 +769,12 @@ export function validateClientManifest(
           `client manifest.configPatches contains duplicate id '${parsed.id}'.`,
         );
       ids.add(parsed.id);
+      // A patch with a modId belongs to a listed mod. An absent manifest.mods
+      // lists none, so every modId is rejected in that case.
+      if (parsed.modId !== undefined && !modIds.has(parsed.modId))
+        fail(
+          `client manifest.configPatches[${index}].modId '${parsed.modId}' does not match any entry in manifest.mods.`,
+        );
     }
   }
   if (manifest.resourcePack !== undefined)

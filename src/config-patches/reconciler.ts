@@ -11,6 +11,11 @@ export interface ReconcileOptions {
   gameDir: string;
   patches: ConfigPatch[];
   prevState: InstallationState;
+  /**
+   * Mod ids whose client mod is disabled. A patch whose modId is in this set is
+   * deferred without any file change or applied-state record.
+   */
+  disabledModIds?: ReadonlySet<string>;
 }
 
 export interface ReconcileResult {
@@ -86,9 +91,15 @@ async function applyOptionsKeybindPatch(
   }
 
   const plan = planKeybindRewrite(source, updates);
-  if (plan.missingKey !== undefined) {
+  if (plan.malformedKey !== undefined) {
+    LauncherLogger.warn(
+      `[Config Patch] ↪ ${patch.id} deferred; the ${plan.malformedKey} line in options.txt could not be parsed; file was left unchanged`,
+    );
+    return "deferred";
+  }
+  if (plan.missingVersionForAppend !== undefined) {
     LauncherLogger.info(
-      `[Config Patch] ↪ ${patch.id} deferred; ${plan.missingKey} not in options.txt yet`,
+      `[Config Patch] ↪ ${patch.id} deferred; ${plan.missingVersionForAppend} is not in options.txt and options.txt has no version line to append it to yet`,
     );
     return "deferred";
   }
@@ -121,8 +132,15 @@ async function applyOptionsKeybindPatch(
   try {
     const written = await fs.promises.readFile(targetFullPath, "utf-8");
     const check = planKeybindRewrite(written, updates);
-    if (check.missingKey !== undefined) {
-      throw new Error(`no line for '${check.missingKey}' after the write`);
+    if (check.malformedKey !== undefined) {
+      throw new Error(
+        `line for '${check.malformedKey}' is malformed after the write`,
+      );
+    }
+    if (check.missingVersionForAppend !== undefined) {
+      throw new Error(
+        `no version line to hold '${check.missingVersionForAppend}' after the write`,
+      );
     }
     if (check.changed) {
       throw new Error("keybind value was not rewritten");
@@ -146,7 +164,7 @@ async function applyOptionsKeybindPatch(
 export async function reconcileConfigPatches(
   options: ReconcileOptions,
 ): Promise<ReconcileResult> {
-  const { gameDir, patches, prevState } = options;
+  const { gameDir, patches, prevState, disabledModIds } = options;
   const appliedState: Record<string, AppliedConfigPatchState> = {
     ...prevState.appliedConfigPatches,
   };
@@ -163,6 +181,17 @@ export async function reconcileConfigPatches(
       throw new Error(
         `[Config Patch] ✗ ${patch.id}: unsafe target path '${patch.path}'`,
       );
+    }
+
+    // A patch owned by a disabled client mod waits until the mod is enabled. It
+    // is checked before the once state, the ancestry check and the file check,
+    // so it never touches the file and never records applied state.
+    if (patch.modId !== undefined && disabledModIds?.has(patch.modId)) {
+      LauncherLogger.info(
+        `[Config Patch] ↪ ${patch.id} deferred; mod '${patch.modId}' is disabled`,
+      );
+      deferredCount++;
+      continue;
     }
 
     // Handle 'once' patches

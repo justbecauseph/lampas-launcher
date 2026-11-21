@@ -209,6 +209,61 @@ hypixelOnlyChatTabs=true
     expect(crlfReApply.changed).toBe(false);
   });
 
+  // The appended key is checked as a line, so these tests cover the delimiter
+  // without depending on the blank-line layout that append has always produced.
+  test("Properties: an appended key uses ':' when the file's key lines use ':'", () => {
+    const fixture = "# header\nname:old\nother:2\n";
+    const res = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["added"], value: "true" },
+    ]);
+    expect(res.output.split("\n")).toContain("added:true");
+    expect(res.output).not.toContain("added=");
+    expect(res.output).toContain("name:old\nother:2\n");
+    expect(res.details).toEqual(["added: (unset) → true"]);
+  });
+
+  test("Properties: an appended key uses ': ' when the file's key lines use ': '", () => {
+    const fixture = "name=old\nother: 2\n";
+    const res = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["added"], value: "true" },
+    ]);
+    expect(res.output.split("\n")).toContain("added: true");
+  });
+
+  test("Properties: ':' delimiter detection keeps CRLF endings", () => {
+    const fixture = "name:old\r\nother:2\r\n";
+    const res = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["added"], value: "true" },
+    ]);
+    expect(res.output.split("\r\n")).toContain("added:true");
+    expect(/(?<!\r)\n/.test(res.output)).toBe(false);
+  });
+
+  test("Properties: the delimiter comes from the last key line, not the first", () => {
+    const fixture = "a=1\nb: 2\n";
+    const res = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["added"], value: "true" },
+    ]);
+    expect(res.output.split("\n")).toContain("added: true");
+  });
+
+  test("Properties: a file whose key lines use '=' appends 'key=value' with the unchanged layout", () => {
+    // Pinned to the output before delimiter detection was added.
+    const fixture = "key=1\nother=2\n";
+    const res = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["added"], value: "true" },
+    ]);
+    expect(res.output).toBe("key=1\nother=2\n\nadded=true");
+  });
+
+  test("Properties: a file with only comments appends with '='", () => {
+    const fixture = "# only a comment\n";
+    const res = propertiesAdapter.apply(fixture, [
+      { op: "set", path: ["added"], value: "true" },
+    ]);
+    expect(res.output.split("\n")).toContain("added=true");
+  });
+
   test("INI: preserves section headers, comments, and spacing", () => {
     const iniFixture = `; Global INI settings
 app_name = Lampas
@@ -464,5 +519,85 @@ hypixelOnlyChatTabs_comment=true_not_matched
     expect(fs.readFileSync(propPath, "utf-8")).toContain("setting=false");
     expect(fs.readFileSync(iniPath, "utf-8")).toContain("setting = false");
     expect(fs.readFileSync(textPath, "utf-8")).toContain("setting: false");
+  });
+});
+
+describe("reconcileConfigPatches: a patch whose modId is disabled", () => {
+  let gameDir: string;
+  const configPath = () => path.join(gameDir, "config/optional.json");
+
+  const stateWith = (
+    appliedConfigPatches?: InstallationState["appliedConfigPatches"],
+  ): InstallationState => ({
+    pack: "Lampas 2",
+    version: "2.0.0",
+    installedAt: "2026-01-01T00:00:00.000Z",
+    files: {},
+    appliedConfigPatches,
+  });
+
+  const optionalPatch = (
+    overrides: Partial<ConfigPatch> = {},
+  ): ConfigPatch => ({
+    id: "optional-enable",
+    revision: 2,
+    path: "config/optional.json",
+    adapter: "json",
+    mode: "once",
+    missingFile: "create",
+    modId: "optional-mod",
+    operations: [{ op: "set", path: ["enabled"], value: true }],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    gameDir = fs.mkdtempSync(path.join(os.tmpdir(), "lampas-disabled-mod-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(gameDir, { recursive: true, force: true });
+  });
+
+  test("defers a missing file without creating it and records no applied state", async () => {
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [optionalPatch()],
+      prevState: stateWith(),
+      disabledModIds: new Set(["optional-mod"]),
+    });
+    expect(res.deferredCount).toBe(1);
+    expect(res.appliedCount).toBe(0);
+    expect(fs.existsSync(configPath())).toBe(false);
+    expect(res.appliedState["optional-enable"]).toBeUndefined();
+  });
+
+  test("leaves an earlier applied state entry as it was, even when the revision is newer", async () => {
+    fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+    fs.writeFileSync(configPath(), '{"enabled":false}\n', "utf-8");
+    const prior = { revision: 1, appliedAt: "2026-01-01T00:00:00.000Z" };
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [optionalPatch({ missingFile: "defer" })],
+      prevState: stateWith({ "optional-enable": prior }),
+      disabledModIds: new Set(["optional-mod"]),
+    });
+    expect(res.deferredCount).toBe(1);
+    expect(res.appliedState["optional-enable"]).toEqual(prior);
+    expect(fs.readFileSync(configPath(), "utf-8")).toBe('{"enabled":false}\n');
+  });
+
+  test("applies a patch whose modId is not in the disabled set", async () => {
+    const res = await reconcileConfigPatches({
+      gameDir,
+      patches: [optionalPatch()],
+      prevState: stateWith(),
+      disabledModIds: new Set(["some-other-mod"]),
+    });
+    expect(res.appliedCount).toBe(1);
+    expect(res.deferredCount).toBe(0);
+    expect(JSON.parse(fs.readFileSync(configPath(), "utf-8"))).toEqual({
+      enabled: true,
+    });
+    expect(res.appliedState["optional-enable"]).toMatchObject({ revision: 2 });
   });
 });

@@ -32,6 +32,8 @@ const { ConfigManager, PortalPolicy } = await import("../src/config");
 const { LauncherSync } = await import("../src/sync");
 const { validateManifestMetadata } = await import("../src/path-policy");
 const { placeSeedFileIfAbsent } = await import("../src/seed-file");
+const { MinecraftBootstrap } = await import("../src/minecraft-bootstrap");
+const { JavaRuntimeManager } = await import("../src/java-runtime");
 
 const previousRetryBaseMs = process.env.LAMPAS_TRANSFER_RETRY_BASE_MS;
 
@@ -416,13 +418,24 @@ describe("validateManifestMetadata: default options.txt with keybind patches", (
     ).toThrow(/managed both as a whole file and by config patch/);
   });
 
-  test("rejects a PRESERVE config file that a patch also targets", () => {
+  test("accepts a PRESERVE config file that a patch also targets on a non-protected path", () => {
     expect(() =>
       validateManifestMetadata({
         files: [manifestEntry("config/chat.json", "PRESERVE")],
         configPatches: [jsonPatch("config/chat.json")],
       }),
-    ).toThrow(/managed both as a whole file and by config patch/);
+    ).not.toThrow();
+  });
+
+  test("rejects an OPTIONAL or GENERATED config file that a patch also targets", () => {
+    for (const policy of ["OPTIONAL", "GENERATED"]) {
+      expect(() =>
+        validateManifestMetadata({
+          files: [manifestEntry("config/chat.json", policy)],
+          configPatches: [jsonPatch("config/chat.json")],
+        }),
+      ).toThrow(/managed both as a whole file and by config patch/);
+    }
   });
 
   test("rejects a MANAGED options.txt shipped with a keybind patch", () => {
@@ -1086,6 +1099,266 @@ describe("sync keeps an existing symlink or directory at a seed path", () => {
       const result = await LauncherSync.syncClient(() => {});
       expect(result.success).toBe(true);
       expect(fs.statSync(serversPath).isDirectory()).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
+// A PRESERVE config file ships with a configPatch on it. Sync places the seed
+// only where the player has no entry, then the patch applies to whatever is there.
+const CHAT_PATH = "config/chat.json";
+const CHAT_SEED = Buffer.from(
+  '{"volume":0.5,"seedOnly":true,"enabled":false}\n',
+  "utf-8",
+);
+
+function chatPatch(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "chat-enable",
+    revision: 1,
+    path: CHAT_PATH,
+    adapter: "json",
+    mode: "once",
+    missingFile: "defer",
+    operations: [{ op: "set", path: ["enabled"], value: true }],
+    ...overrides,
+  };
+}
+
+function readJson(filePath: string): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+}
+
+function readInstallationState(): any {
+  return JSON.parse(
+    fs.readFileSync(
+      path.join(gameDir, ".lampas", "installation.json"),
+      "utf-8",
+    ),
+  );
+}
+
+describe("sync seeds a PRESERVE config file and applies a configPatch to it", () => {
+  test("fresh install: the seed is placed when the file is absent, then the patch changes its key", async () => {
+    const infoSpy = spyOn(LauncherLogger, "info");
+    const server = serveRelease(
+      [{ path: CHAT_PATH, policy: "PRESERVE", content: CHAT_SEED }],
+      [chatPatch()],
+    );
+    try {
+      const result = await LauncherSync.syncClient(() => {});
+      expect(result.success).toBe(true);
+      expect(readJson(path.join(gameDir, CHAT_PATH))).toEqual({
+        volume: 0.5,
+        seedOnly: true,
+        enabled: true,
+      });
+
+      const messages = infoSpy.mock.calls.map(([msg]) => String(msg));
+      const placed = messages.findIndex((msg) =>
+        msg.includes("[Placed] config/chat.json"),
+      );
+      const applied = messages.findIndex((msg) =>
+        msg.includes("✓ chat-enable"),
+      );
+      expect(placed).toBeGreaterThanOrEqual(0);
+      expect(applied).toBeGreaterThan(placed);
+
+      expect(
+        readInstallationState().appliedConfigPatches["chat-enable"],
+      ).toMatchObject({ revision: 1 });
+    } finally {
+      infoSpy.mockRestore();
+      server.stop(true);
+    }
+  });
+
+  test("existing player file: the seed is not placed, the patch changes only its key, and the player's other keys stay", async () => {
+    const configPath = path.join(gameDir, CHAT_PATH);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      '{"volume":0.9,"playerOnly":"keep","enabled":false}\n',
+      "utf-8",
+    );
+    const infoSpy = spyOn(LauncherLogger, "info");
+    const server = serveRelease(
+      [{ path: CHAT_PATH, policy: "PRESERVE", content: CHAT_SEED }],
+      [chatPatch({ mode: "enforce" })],
+    );
+    try {
+      const result = await LauncherSync.syncClient(() => {});
+      expect(result.success).toBe(true);
+      expect(readJson(configPath)).toEqual({
+        volume: 0.9,
+        playerOnly: "keep",
+        enabled: true,
+      });
+
+      const messages = infoSpy.mock.calls.map(([msg]) => String(msg));
+      expect(
+        messages.some((msg) => msg.includes("[Placed] config/chat.json")),
+      ).toBe(false);
+      expect(messages.some((msg) => msg.includes("0 to download"))).toBe(true);
+    } finally {
+      infoSpy.mockRestore();
+      server.stop(true);
+    }
+  });
+
+  test("Repair keeps an existing PRESERVE config file and does not replace it with the seed", async () => {
+    const configPath = path.join(gameDir, CHAT_PATH);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      '{"volume":0.9,"playerOnly":"keep","enabled":false}\n',
+      "utf-8",
+    );
+    // Repair also runs the Minecraft bootstrap and Java steps, which are stubbed.
+    const bootstrapSpy = spyOn(
+      MinecraftBootstrap,
+      "prepareGameEnvironment",
+    ).mockImplementation((async () => ({
+      classpath: [],
+      mainClass: "net.fabricmc.loader.impl.launch.knot.KnotClient",
+      assetIndex: "26.2",
+    })) as any);
+    const javaSpy = spyOn(
+      JavaRuntimeManager,
+      "ensureJava25",
+    ).mockImplementation((async () => "C:\\Java25\\bin\\java.exe") as any);
+    const server = serveRelease(
+      [{ path: CHAT_PATH, policy: "PRESERVE", content: CHAT_SEED }],
+      [chatPatch()],
+    );
+    try {
+      const result = await LauncherSync.repairInstallation(() => {});
+      expect(result.success).toBe(true);
+      expect(readJson(configPath)).toEqual({
+        volume: 0.9,
+        playerOnly: "keep",
+        enabled: true,
+      });
+    } finally {
+      bootstrapSpy.mockRestore();
+      javaSpy.mockRestore();
+      server.stop(true);
+    }
+  });
+
+  (SYMLINKS_SUPPORTED ? test : test.skip)(
+    "a dangling symlink at a PRESERVE config path is kept and not replaced",
+    async () => {
+      const configPath = path.join(gameDir, CHAT_PATH);
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      const missing = path.join(testRoot, `missing-chat-${Date.now()}.json`);
+      fs.symlinkSync(missing, configPath);
+      const server = serveRelease([
+        { path: CHAT_PATH, policy: "PRESERVE", content: CHAT_SEED },
+      ]);
+      try {
+        const result = await LauncherSync.syncClient(() => {});
+        expect(result.success).toBe(true);
+        expect(fs.lstatSync(configPath).isSymbolicLink()).toBe(true);
+        expect(fs.existsSync(missing)).toBe(false);
+      } finally {
+        server.stop(true);
+      }
+    },
+  );
+});
+
+describe("sync gates a configPatch by its modId", () => {
+  const OPTIONAL_PATH = "config/optional.json";
+  const OPTIONAL_CONFIG = '{"enabled":false}\n';
+  const OPTIONAL_MOD = {
+    id: "optional-mod",
+    name: "Optional Mod",
+    side: "client",
+    filename: "optional-mod.jar",
+    size: 1,
+  };
+
+  function optionalPatch(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "optional-enable",
+      revision: 1,
+      path: OPTIONAL_PATH,
+      adapter: "json",
+      mode: "once",
+      missingFile: "defer",
+      modId: "optional-mod",
+      operations: [{ op: "set", path: ["enabled"], value: true }],
+      ...overrides,
+    };
+  }
+
+  test("a disabled optional client mod defers its patch with no file change and no applied state, then applies after re-enable", async () => {
+    const configPath = path.join(gameDir, OPTIONAL_PATH);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, OPTIONAL_CONFIG, "utf-8");
+    ConfigManager.set({ disabledClientMods: ["optional-mod"] });
+    const server = serveRelease([], [optionalPatch()], {
+      manifest: { mods: [OPTIONAL_MOD] },
+    });
+    try {
+      const disabled = await LauncherSync.syncClient(() => {});
+      expect(disabled.success).toBe(true);
+      expect(fs.readFileSync(configPath, "utf-8")).toBe(OPTIONAL_CONFIG);
+      expect(
+        readInstallationState().appliedConfigPatches?.["optional-enable"],
+      ).toBeUndefined();
+
+      ConfigManager.set({ disabledClientMods: [] });
+      const enabled = await LauncherSync.syncClient(() => {});
+      expect(enabled.success).toBe(true);
+      expect(readJson(configPath)).toEqual({ enabled: true });
+      expect(
+        readInstallationState().appliedConfigPatches["optional-enable"],
+      ).toMatchObject({ revision: 1 });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a patch whose mod is listed in disabledClientMods but is not client-only still applies", async () => {
+    const sharedPath = "config/shared.json";
+    fs.mkdirSync(path.join(gameDir, "config"), { recursive: true });
+    fs.writeFileSync(path.join(gameDir, sharedPath), OPTIONAL_CONFIG, "utf-8");
+    ConfigManager.set({ disabledClientMods: ["shared-mod"] });
+    const server = serveRelease(
+      [],
+      [
+        optionalPatch({
+          id: "shared-enable",
+          path: sharedPath,
+          modId: "shared-mod",
+        }),
+      ],
+      {
+        manifest: {
+          mods: [
+            {
+              id: "shared-mod",
+              name: "Shared Mod",
+              side: "both",
+              filename: "shared-mod.jar",
+              size: 1,
+            },
+          ],
+        },
+      },
+    );
+    try {
+      const result = await LauncherSync.syncClient(() => {});
+      expect(result.success).toBe(true);
+      expect(readJson(path.join(gameDir, sharedPath))).toEqual({
+        enabled: true,
+      });
+      expect(
+        readInstallationState().appliedConfigPatches["shared-enable"],
+      ).toMatchObject({ revision: 1 });
     } finally {
       server.stop(true);
     }

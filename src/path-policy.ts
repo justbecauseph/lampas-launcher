@@ -296,7 +296,8 @@ const OPTIONS_KEYBIND_VALUE_PATTERN =
  * must be exactly `options.txt` in lowercase. An enforce-mode keybind patch would
  * revert the player's rebind on every sync, so it gets no exception.
  *
- * The reconciler rewrites only lines that already exist (see keybind-lines.ts).
+ * The reconciler rewrites existing lines and appends a missing key only when
+ * options.txt has a `version:` line (see keybind-lines.ts).
  *
  * Accepts raw manifest objects, which may name the target `file` instead of
  * `path`, the same way validateManifestMetadata does. Never throws.
@@ -927,10 +928,14 @@ export function validateManifestMetadata(
         );
       }
 
-      // Check collision between whole-file management and config patches. The
-      // one exception: a PRESERVE seed options.txt may ship alongside keybind
-      // patches on it, which apply to existing player files. isOptionsKeybindPatch
-      // accepts only options.txt, so servers.dat has no exception.
+      // Check collision between whole-file management and config patches. Two
+      // exceptions, both for PRESERVE files, which the player owns once placed:
+      // - A PRESERVE seed options.txt may ship alongside keybind patches on it.
+      //   isOptionsKeybindPatch accepts only options.txt.
+      // - A PRESERVE file on a non-protected path may ship alongside any config
+      //   patch. Sync seeds it only when absent, then the patch applies to it.
+      // MANAGED, OPTIONAL and GENERATED files never accept a config patch.
+      // Protected paths were rejected above, so servers.dat has no exception.
       const patchKey = normalizePathKey(canonicalPatchPath);
       const wholeFile = destinationMap.get(patchKey);
       if (
@@ -938,6 +943,10 @@ export function validateManifestMetadata(
         !(
           isPreservedSeedFile(wholeFile.path, wholeFile.policy) &&
           isOptionsKeybindPatch(patch)
+        ) &&
+        !(
+          wholeFile.policy === "PRESERVE" &&
+          !isPathProtected(canonicalPatchPath)
         )
       ) {
         throw new PathContainmentError(
